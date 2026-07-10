@@ -1,0 +1,75 @@
+{
+  "schema_version": "1.0",
+  "tenant": {
+    "slug": "template",
+    "name": "通用企业数智名片模板",
+    "type": "platform_demo"
+  },
+  "company": {
+    "slug": "template",
+    "name": "通用企业样板",
+    "industry": "通用"
+  },
+  "card": {
+    "slug": "template",
+    "status": "published"
+  },
+  "knowledge_version": "2026.07-template-v1",
+  "documents": [
+    {
+      "external_id": "faq-materials",
+      "source_type": "faq",
+      "title": "制作企业数智名片需要哪些资料？",
+      "visibility": "public",
+      "content": "建议准备企业主体与品牌资料、业务与产品说明、可公开的案例和数据、官方联系渠道，以及常见问题。资质、客户名称、业绩数字和人物素材需要同时提供可核验来源与使用授权。",
+      "metadata": {
+        "source_label": "通用企业资料采集模板 v1.0",
+        "tags": ["资料", "接入", "授权"]
+      }
+    },
+    {
+      "external_id": "faq-adaptation",
+      "source_type": "faq",
+      "title": "这套模板能适配任何企业吗？",
+      "visibility": "public",
+      "content": "大多数企业可以复用这套内容结构，但不能直接复制示例文案。每家企业都需要重新整理品牌、业务、证据、联系入口和问答边界。医疗、金融、法律、教育等行业还需要增加相应的合规审核。",
+      "metadata": {
+        "source_label": "通用企业资料采集模板 v1.0",
+        "tags": ["通用", "行业", "合规"]
+      }
+    },
+    {
+      "external_id": "faq-missing",
+      "source_type": "faq",
+      "title": "企业资料不完整时怎么办？",
+      "visibility": "public",
+      "content": "可以先生成内部预览，但缺失内容必须明确标记为待补充。系统不会自动编造联系方式、资质、客户、案例、价格或经营数据，相关区域应在审核完成前隐藏或保留占位提示。",
+      "metadata": {
+        "source_label": "通用企业资料采集模板 v1.0",
+        "tags": ["资料缺口", "审核", "防编造"]
+      }
+    },
+    {
+      "external_id": "faq-safety",
+      "source_type": "faq",
+      "title": "发布前需要做哪些安全审核？",
+      "visibility": "public",
+      "content": "至少需要核对企业主体、品牌与素材授权、数据口径、案例公开权限、联系人授权、隐私信息和行业限制。知识助手还应配置禁答边界，避免输出未确认事实、敏感信息或结果承诺。",
+      "metadata": {
+        "source_label": "通用企业资料采集模板 v1.0",
+        "tags": ["安全", "审核", "隐私"]
+      }
+    },
+    {
+      "external_id": "faq-onboarding",
+      "source_type": "faq",
+      "title": "一家新企业如何接入？",
+      "visibility": "public",
+      "content": "新企业接入通常包括资料收集、事实整理、页面与知识库配置、企业审核、内部预览和正式发布。后续资料发生变化时，应通过新版本更新并保留审核记录。",
+      "metadata": {
+        "source_label": "通用企业资料采集模板 v1.0",
+        "tags": ["接入", "发布", "版本"]
+      }
+    }
+  ]
+}

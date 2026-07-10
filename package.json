@@ -1,0 +1,26 @@
+{
+  "name": "cf-ai-card",
+  "version": "0.1.0",
+  "private": true,
+  "description": "创非凡数智名片 monorepo bootstrap",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=24 <26"
+  },
+  "scripts": {
+    "local:start": "powershell -ExecutionPolicy Bypass -File tools/local-runtime.ps1 start",
+    "local:stop": "powershell -ExecutionPolicy Bypass -File tools/local-runtime.ps1 stop",
+    "local:status": "powershell -ExecutionPolicy Bypass -File tools/local-runtime.ps1 status",
+    "api:dev": "python -m uvicorn app.main:app --app-dir services/api --reload --host 127.0.0.1 --port 8000",
+    "api:test": "python -m pytest services/api/tests",
+    "docs:build": "node tools/build_dev_baseline_docx.js",
+    "contracts:validate": "node tools/validate_openapi.js",
+    "web:dev": "corepack pnpm --filter @cf/card-web dev",
+    "web:build": "corepack pnpm --filter @cf/card-web build",
+    "web:test": "corepack pnpm --filter @cf/card-web test",
+    "check": "node tools/validate_openapi.js && corepack pnpm --filter @cf/card-web test && corepack pnpm --filter @cf/card-web build"
+  },
+  "devDependencies": {
+    "docx": "9.6.1"
+  }
+}

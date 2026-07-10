@@ -1,0 +1,90 @@
+"""Public integration surface for the AI/RAG subsystem."""
+
+from .errors import (
+    AIErrorCategory,
+    AIInputError,
+    AIProviderError,
+    AIRetrievalError,
+    AIServiceError,
+)
+from .orchestrator import RAGOrchestrator, RAGOrchestratorConfig
+from .policy import (
+    EvidenceGate,
+    EvidenceGateConfig,
+    InputSecurityConfig,
+    InputSecurityPolicy,
+    PolicyFlag,
+)
+from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry, PromptTemplate
+from .providers import (
+    ChatProviderConfig,
+    EmbeddingProviderConfig,
+    HttpxJsonTransport,
+    OpenAICompatibleChatProvider,
+    OpenAICompatibleEmbeddingProvider,
+)
+from .retrieval import (
+    HybridRetrievalConfig,
+    KnowledgeSqlSchema,
+    PostgresHybridRetrievalRepository,
+    SQLAlchemySessionExecutor,
+)
+from .schemas import (
+    AIAnswer,
+    ChatCompletion,
+    ChatMessage,
+    Citation,
+    EmbeddingBatch,
+    ProviderCredentials,
+    RAGRequest,
+    Refusal,
+    RefusalCode,
+    RetrievalQuery,
+    RetrievedEvidence,
+    StructuredModelAnswer,
+    StructuredOutputMode,
+    TokenUsage,
+    TraceMetadata,
+)
+
+__all__ = [
+    "AIAnswer",
+    "AIErrorCategory",
+    "AIInputError",
+    "AIProviderError",
+    "AIRetrievalError",
+    "AIServiceError",
+    "ChatCompletion",
+    "ChatMessage",
+    "ChatProviderConfig",
+    "Citation",
+    "DEFAULT_PROMPT_VERSION",
+    "EmbeddingBatch",
+    "EmbeddingProviderConfig",
+    "EvidenceGate",
+    "EvidenceGateConfig",
+    "HttpxJsonTransport",
+    "HybridRetrievalConfig",
+    "InputSecurityConfig",
+    "InputSecurityPolicy",
+    "KnowledgeSqlSchema",
+    "OpenAICompatibleChatProvider",
+    "OpenAICompatibleEmbeddingProvider",
+    "PolicyFlag",
+    "PostgresHybridRetrievalRepository",
+    "PromptRegistry",
+    "PromptTemplate",
+    "ProviderCredentials",
+    "RAGOrchestrator",
+    "RAGOrchestratorConfig",
+    "RAGRequest",
+    "Refusal",
+    "RefusalCode",
+    "RetrievalQuery",
+    "RetrievedEvidence",
+    "SQLAlchemySessionExecutor",
+    "StructuredModelAnswer",
+    "StructuredOutputMode",
+    "TokenUsage",
+    "TraceMetadata",
+]

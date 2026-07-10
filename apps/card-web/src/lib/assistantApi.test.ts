@@ -1,0 +1,263 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  getAssistantSessionStorageKey,
+  parseAssistantEventStream,
+  streamAssistantMessage,
+  type AssistantStreamEvent,
+} from "./assistantApi";
+
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+
+  get length() {
+    return this.values.size;
+  }
+
+  clear() {
+    this.values.clear();
+  }
+
+  getItem(key: string) {
+    return this.values.get(key) ?? null;
+  }
+
+  key(index: number) {
+    return [...this.values.keys()][index] ?? null;
+  }
+
+  removeItem(key: string) {
+    this.values.delete(key);
+  }
+
+  setItem(key: string, value: string) {
+    this.values.set(key, value);
+  }
+}
+
+function chunkedStream(text: string) {
+  const bytes = new TextEncoder().encode(text);
+  const chunkSizes = [1, 2, 7, 3, 11, 4, 5];
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      let offset = 0;
+      let chunkIndex = 0;
+      while (offset < bytes.length) {
+        const end = Math.min(
+          offset + chunkSizes[chunkIndex % chunkSizes.length],
+          bytes.length,
+        );
+        controller.enqueue(bytes.slice(offset, end));
+        offset = end;
+        chunkIndex += 1;
+      }
+      controller.close();
+    },
+  });
+}
+
+function streamResponse(events: string) {
+  return new Response(chunkedStream(events), {
+    status: 200,
+    headers: { "Content-Type": "text/event-stream" },
+  });
+}
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function completedStream(answer = "可以") {
+  return [
+    'event: message.started\ndata: {"message_id":"message-1","request_id":"request-1"}\n\n',
+    `event: message.delta\ndata: ${JSON.stringify({ text: answer })}\n\n`,
+    'event: message.completed\ndata: {"message_id":"message-1","finish_reason":"stop","lead_prompt":false}\n\n',
+  ].join("");
+}
+
+describe("assistant API", () => {
+  beforeEach(() => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1/");
+    vi.stubGlobal("sessionStorage", new MemoryStorage());
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("parses CRLF SSE frames and UTF-8 data split across arbitrary chunks", async () => {
+    const rawEvents = [
+      ": heartbeat\r\n\r\n",
+      'event: message.started\r\ndata: {"message_id":"message-1","request_id":"request-1"}\r\n\r\n',
+      'event: message.delta\r\ndata: {"text":""}\r\n\r\n',
+      'event: message.delta\r\ndata: {"text":"你好"}\r\n\r\n',
+      'event: message.citation\r\ndata: {"citation_id":"source-1","label":"产品手册","source_type":"document","url":"https://example.test/one"}\r\n\r\n',
+      'event: message.citation\r\ndata: {"citation_id":"source-2","label":"服务说明","source_type":"faq"}\r\n\r\n',
+      'event: message.completed\r\ndata: {"message_id":"message-1","finish_reason":"stop","lead_prompt":true}\r\n\r\n',
+    ].join("");
+    const received: AssistantStreamEvent[] = [];
+
+    await parseAssistantEventStream(chunkedStream(rawEvents), (event) => {
+      received.push(event);
+    });
+
+    expect(received.map((event) => event.type)).toEqual([
+      "started",
+      "delta",
+      "delta",
+      "citation",
+      "citation",
+      "completed",
+    ]);
+    expect(
+      received
+        .filter((event) => event.type === "delta")
+        .map((event) => event.text)
+        .join(""),
+    ).toBe("你好");
+    expect(
+      received
+        .filter((event) => event.type === "citation")
+        .map((event) => event.citation.label),
+    ).toEqual(["产品手册", "服务说明"]);
+  });
+
+  it("runs the full public visit-to-stream flow and reuses the tenant session", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            policy_versions: {
+              privacy: "privacy-v3",
+              chat_notice: "chat-v5",
+              lead_consent: "lead-v2",
+            },
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            visit_id: "visit-1",
+            visitor_session_token: "visitor-token",
+            expires_at: "2099-01-01T00:00:00Z",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: { recorded: true } }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            id: "conversation-1",
+            status: "active",
+            created_at: "2026-07-10T00:00:00Z",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(streamResponse(completedStream("第一条回答")));
+    vi.stubGlobal("fetch", fetchMock);
+    const firstEvents: AssistantStreamEvent[] = [];
+
+    await streamAssistantMessage({
+      cardSlug: "tenant-a",
+      content: "你们提供什么服务？",
+      idempotencyKey: "00000000-0000-4000-8000-000000000099",
+      onEvent: (event) => firstEvents.push(event),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.example.test/api/v1/public/cards/tenant-a",
+      "https://api.example.test/api/v1/public/cards/tenant-a/visits",
+      "https://api.example.test/api/v1/public/cards/tenant-a/consents",
+      "https://api.example.test/api/v1/public/cards/tenant-a/conversations",
+      "https://api.example.test/api/v1/public/conversations/conversation-1/messages:stream",
+    ]);
+
+    const visitInit = fetchMock.mock.calls[1][1]!;
+    expect(JSON.parse(String(visitInit.body))).toEqual({
+      source: "card_web",
+      privacy_notice_version: "privacy-v3",
+    });
+    expect((visitInit.headers as Record<string, string>)["Idempotency-Key"]).toMatch(
+      /^[0-9a-f-]{36}$/i,
+    );
+
+    const consentInit = fetchMock.mock.calls[2][1]!;
+    expect(consentInit.headers).toMatchObject({
+      Authorization: "Bearer visitor-token",
+    });
+    expect(JSON.parse(String(consentInit.body))).toEqual({
+      scope: "chat_notice",
+      policy_version: "chat-v5",
+      granted: true,
+    });
+
+    const streamInit = fetchMock.mock.calls[4][1]!;
+    expect(streamInit.headers).toMatchObject({
+      Accept: "text/event-stream",
+      Authorization: "Bearer visitor-token",
+      "Idempotency-Key": "00000000-0000-4000-8000-000000000099",
+    });
+    expect(JSON.parse(String(streamInit.body))).toEqual({
+      content: "你们提供什么服务？",
+    });
+    expect(firstEvents.some((event) => event.type === "completed")).toBe(true);
+
+    expect(
+      JSON.parse(
+        sessionStorage.getItem(getAssistantSessionStorageKey("tenant-a")) ?? "{}",
+      ),
+    ).toMatchObject({
+      token: "visitor-token",
+      conversationId: "conversation-1",
+      privacyVersion: "privacy-v3",
+      chatNoticeVersion: "chat-v5",
+    });
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValueOnce(streamResponse(completedStream("第二条回答")));
+
+    await streamAssistantMessage({
+      cardSlug: "tenant-a",
+      content: "第二个问题",
+      onEvent: () => undefined,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "https://api.example.test/api/v1/public/conversations/conversation-1/messages:stream",
+    );
+  });
+
+  it("surfaces retryable message.error frames after notifying the consumer", async () => {
+    const events: AssistantStreamEvent[] = [];
+    const promise = parseAssistantEventStream(
+      chunkedStream(
+        'event: message.error\ndata: {"code":"MODEL_BUSY","retryable":true,"request_id":"request-9"}\n\n',
+      ),
+      (event) => events.push(event),
+    );
+
+    await expect(promise).rejects.toMatchObject({
+      code: "MODEL_BUSY",
+      retryable: true,
+      requestId: "request-9",
+    });
+    expect(events).toEqual([
+      {
+        type: "error",
+        code: "MODEL_BUSY",
+        retryable: true,
+        requestId: "request-9",
+      },
+    ]);
+  });
+});

@@ -1,0 +1,136 @@
+name: cf-ai-card-local
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cf_ai_card}
+      POSTGRES_USER: ${POSTGRES_USER:-cf_ai_card}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/001_extensions.sql:/docker-entrypoint-initdb.d/001_extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:-change-me-local-only}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: "no"
+    environment: &api-environment
+      APP_ENV: local
+      APP_NAME: cf-ai-card
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cf_ai_card}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+      REDIS_URL: redis://redis:6379/0
+      JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-replace-with-at-least-32-random-bytes}
+      CORS_ALLOWED_ORIGINS: '${CORS_ALLOWED_ORIGINS:-["http://127.0.0.1:4173","http://localhost:4173"]}'
+      LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-v4-flash}
+      LLM_THINKING: ${LLM_THINKING:-disabled}
+      LLM_REASONING_EFFORT: ${LLM_REASONING_EFFORT:-high}
+      LLM_MAX_RETRIES: ${LLM_MAX_RETRIES:-2}
+      LLM_INPUT_PRICE_CNY_PER_MILLION: ${LLM_INPUT_PRICE_CNY_PER_MILLION:-0}
+      LLM_OUTPUT_PRICE_CNY_PER_MILLION: ${LLM_OUTPUT_PRICE_CNY_PER_MILLION:-0}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      MODEL_DAILY_BUDGET_CNY: ${MODEL_DAILY_BUDGET_CNY:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]
+
+  seed:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: "no"
+    environment:
+      <<: *api-environment
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-cf_ai_card_app}:${APP_DB_PASSWORD:-change-me-app-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command:
+      [
+        "python",
+        "-m",
+        "app.cli.seed_content",
+        "/seed-data/template.knowledge.json",
+        "/seed-data/tuotu.knowledge.json",
+      ]
+
+  api:
+    build:
+      context: ..
+      dockerfile: services/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-cf_ai_card_app}:${APP_DB_PASSWORD:-change-me-app-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+    ports:
+      - "8000:8000"
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

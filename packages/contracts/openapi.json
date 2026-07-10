@@ -1,0 +1,689 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "创非凡数智名片 API",
+    "version": "0.1.0",
+    "description": "V1.0 MVP 开发契约基线。公开端点的企业作用域必须由 card slug 或访客会话在服务端推导。"
+  },
+  "servers": [
+    { "url": "http://localhost:8000/api/v1", "description": "Local" }
+  ],
+  "tags": [
+    { "name": "Health" },
+    { "name": "Public Cards" },
+    { "name": "Public Conversation" },
+    { "name": "Auth" },
+    { "name": "Admin Company" },
+    { "name": "Admin Knowledge" }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "Process is alive",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": ["Health"],
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "Required dependencies are ready",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthResponse" } } }
+          },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/public/cards/{slug}": {
+      "get": {
+        "tags": ["Public Cards"],
+        "operationId": "getPublicCard",
+        "parameters": [
+          { "$ref": "#/components/parameters/CardSlug" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published card",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PublicCardEnvelope" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/public/cards/{slug}/visits": {
+      "post": {
+        "tags": ["Public Cards"],
+        "operationId": "createVisit",
+        "parameters": [
+          { "$ref": "#/components/parameters/CardSlug" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateVisitRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Visit created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateVisitEnvelope" } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/public/cards/{slug}/consents": {
+      "post": {
+        "tags": ["Public Cards"],
+        "operationId": "recordConsent",
+        "security": [{ "VisitorSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CardSlug" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConsentRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Consent evidence recorded",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConsentEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/public/cards/{slug}/conversations": {
+      "post": {
+        "tags": ["Public Conversation"],
+        "operationId": "createConversation",
+        "security": [{ "VisitorSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CardSlug" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateConversationRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Conversation created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ConversationEnvelope" } } }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/public/conversations/{conversation_id}/messages:stream": {
+      "post": {
+        "tags": ["Public Conversation"],
+        "operationId": "streamConversationMessage",
+        "security": [{ "VisitorSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/ConversationId" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateMessageRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE events: message.started, message.delta, message.citation, message.completed, message.error",
+            "headers": {
+              "X-Request-Id": { "schema": { "type": "string" } }
+            },
+            "content": {
+              "text/event-stream": {
+                "schema": { "type": "string", "description": "UTF-8 Server-Sent Events stream" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/public/cards/{slug}/leads": {
+      "post": {
+        "tags": ["Public Cards"],
+        "operationId": "createLead",
+        "security": [{ "VisitorSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CardSlug" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateLeadRequest" } } }
+        },
+        "responses": {
+          "201": {
+            "description": "Lead created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LeadEnvelope" } } }
+          },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "tags": ["Auth"],
+        "operationId": "login",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LoginRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "429": { "$ref": "#/components/responses/RateLimited" }
+        }
+      }
+    },
+    "/auth/me": {
+      "get": {
+        "tags": ["Auth"],
+        "operationId": "getCurrentUser",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Current user and memberships",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CurrentUserEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/admin/company/profile": {
+      "get": {
+        "tags": ["Admin Company"],
+        "operationId": "getCompanyProfile",
+        "security": [{ "BearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "Company profile in current membership scope",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompanyProfileEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "put": {
+        "tags": ["Admin Company"],
+        "operationId": "updateCompanyProfile",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [{ "$ref": "#/components/parameters/IfMatch" }],
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/UpdateCompanyProfileRequest" } } }
+        },
+        "responses": {
+          "200": {
+            "description": "Company profile updated",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CompanyProfileEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": { "$ref": "#/components/responses/Conflict" }
+        }
+      }
+    },
+    "/admin/knowledge/gaps": {
+      "get": {
+        "tags": ["Admin Knowledge"],
+        "operationId": "listKnowledgeGaps",
+        "security": [{ "BearerAuth": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/Cursor" },
+          { "$ref": "#/components/parameters/Limit" },
+          { "name": "status", "in": "query", "schema": { "$ref": "#/components/schemas/KnowledgeGapStatus" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Knowledge gaps in current company scope",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/KnowledgeGapListEnvelope" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": { "type": "http", "scheme": "bearer", "bearerFormat": "JWT" },
+      "VisitorSession": { "type": "http", "scheme": "bearer", "bearerFormat": "visitor-session" }
+    },
+    "parameters": {
+      "CardSlug": {
+        "name": "slug",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 64, "pattern": "^[A-Za-z0-9_-]+$" }
+      },
+      "ConversationId": {
+        "name": "conversation_id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "format": "uuid" }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "minLength": 16, "maxLength": 128 }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": { "type": "string", "description": "Current resource version/ETag" }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "string" }
+      },
+      "Limit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Authentication required or expired",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "Forbidden": {
+        "description": "Permission or consent required",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "NotFound": {
+        "description": "Resource not found or not visible in current scope",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "Conflict": {
+        "description": "Version or idempotency conflict",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "RateLimited": {
+        "description": "Rate or budget limit exceeded",
+        "headers": { "Retry-After": { "schema": { "type": "integer" } } },
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      },
+      "ServiceUnavailable": {
+        "description": "Required dependency is temporarily unavailable",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": { "type": "string", "enum": ["ok", "degraded"] },
+          "checks": { "type": "object", "additionalProperties": { "type": "string" } }
+        },
+        "additionalProperties": false
+      },
+      "ErrorEnvelope": {
+        "type": "object",
+        "required": ["error"],
+        "properties": { "error": { "$ref": "#/components/schemas/ApiError" } },
+        "additionalProperties": false
+      },
+      "ApiError": {
+        "type": "object",
+        "required": ["code", "message", "request_id"],
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" },
+          "details": { "type": "object", "additionalProperties": true },
+          "request_id": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "PublicCardEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": { "data": { "$ref": "#/components/schemas/PublicCard" } },
+        "additionalProperties": false
+      },
+      "PublicCard": {
+        "type": "object",
+        "required": ["id", "slug", "display_name", "title", "company", "ai_assistant", "policy_versions"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "slug": { "type": "string" },
+          "display_name": { "type": "string" },
+          "title": { "type": "string" },
+          "avatar_url": { "type": ["string", "null"], "format": "uri" },
+          "contact_fields": { "type": "array", "items": { "$ref": "#/components/schemas/PublicContactField" } },
+          "company": { "$ref": "#/components/schemas/PublicCompany" },
+          "featured_products": { "type": "array", "items": { "$ref": "#/components/schemas/PublicContentSummary" } },
+          "featured_cases": { "type": "array", "items": { "$ref": "#/components/schemas/PublicContentSummary" } },
+          "ai_assistant": { "$ref": "#/components/schemas/AiAssistantPublicConfig" },
+          "policy_versions": { "$ref": "#/components/schemas/PolicyVersions" }
+        },
+        "additionalProperties": false
+      },
+      "PublicContactField": {
+        "type": "object",
+        "required": ["type", "label", "value"],
+        "properties": {
+          "type": { "type": "string", "enum": ["phone", "email", "wechat", "website", "social"] },
+          "label": { "type": "string" },
+          "value": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "PublicCompany": {
+        "type": "object",
+        "required": ["id", "name", "summary"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "summary": { "type": "string" },
+          "industry": { "type": ["string", "null"] },
+          "logo_url": { "type": ["string", "null"], "format": "uri" }
+        },
+        "additionalProperties": false
+      },
+      "PublicContentSummary": {
+        "type": "object",
+        "required": ["id", "title", "summary"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string" },
+          "summary": { "type": "string" },
+          "image_url": { "type": ["string", "null"], "format": "uri" }
+        },
+        "additionalProperties": false
+      },
+      "AiAssistantPublicConfig": {
+        "type": "object",
+        "required": ["available", "display_name", "disclosure", "welcome_message", "suggested_questions"],
+        "properties": {
+          "available": { "type": "boolean" },
+          "display_name": { "type": "string" },
+          "disclosure": { "type": "string" },
+          "welcome_message": { "type": "string" },
+          "suggested_questions": { "type": "array", "maxItems": 6, "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      },
+      "PolicyVersions": {
+        "type": "object",
+        "required": ["privacy", "chat_notice", "lead_consent"],
+        "properties": {
+          "privacy": { "type": "string" },
+          "chat_notice": { "type": "string" },
+          "lead_consent": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "CreateVisitRequest": {
+        "type": "object",
+        "required": ["source", "privacy_notice_version"],
+        "properties": {
+          "source": { "type": "string", "maxLength": 64 },
+          "campaign": { "type": ["string", "null"], "maxLength": 128 },
+          "privacy_notice_version": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "CreateVisitEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": { "data": { "$ref": "#/components/schemas/VisitSession" } },
+        "additionalProperties": false
+      },
+      "VisitSession": {
+        "type": "object",
+        "required": ["visit_id", "visitor_session_token", "expires_at"],
+        "properties": {
+          "visit_id": { "type": "string", "format": "uuid" },
+          "visitor_session_token": { "type": "string" },
+          "expires_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "ConsentRequest": {
+        "type": "object",
+        "required": ["scope", "policy_version", "granted"],
+        "properties": {
+          "scope": { "type": "string", "enum": ["chat_notice", "lead_contact"] },
+          "policy_version": { "type": "string" },
+          "granted": { "type": "boolean", "const": true }
+        },
+        "additionalProperties": false
+      },
+      "ConsentEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["consent_id", "recorded_at"],
+            "properties": {
+              "consent_id": { "type": "string", "format": "uuid" },
+              "recorded_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "CreateConversationRequest": {
+        "type": "object",
+        "required": ["chat_notice_version"],
+        "properties": { "chat_notice_version": { "type": "string" } },
+        "additionalProperties": false
+      },
+      "ConversationEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": { "data": { "$ref": "#/components/schemas/Conversation" } },
+        "additionalProperties": false
+      },
+      "Conversation": {
+        "type": "object",
+        "required": ["id", "status", "created_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "status": { "type": "string", "enum": ["active", "closed", "expired", "blocked"] },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "CreateMessageRequest": {
+        "type": "object",
+        "required": ["content"],
+        "properties": { "content": { "type": "string", "minLength": 1, "maxLength": 2000 } },
+        "additionalProperties": false
+      },
+      "CreateLeadRequest": {
+        "type": "object",
+        "required": ["name", "contact_type", "contact", "demand", "consent_id"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "contact_type": { "type": "string", "enum": ["mobile", "wechat", "email"] },
+          "contact": { "type": "string", "minLength": 3, "maxLength": 200 },
+          "company_name": { "type": ["string", "null"], "maxLength": 200 },
+          "demand": { "type": "string", "minLength": 1, "maxLength": 2000 },
+          "conversation_id": { "type": ["string", "null"], "format": "uuid" },
+          "consent_id": { "type": "string", "format": "uuid" }
+        },
+        "additionalProperties": false
+      },
+      "LeadEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["id", "status", "created_at"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "status": { "type": "string", "enum": ["new"] },
+              "created_at": { "type": "string", "format": "date-time" }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": ["account", "credential"],
+        "properties": {
+          "account": { "type": "string", "minLength": 3, "maxLength": 200 },
+          "credential": { "type": "string", "minLength": 6, "maxLength": 200 },
+          "method": { "type": "string", "enum": ["password", "sms_code"], "default": "password" }
+        },
+        "additionalProperties": false
+      },
+      "AuthEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["access_token", "token_type", "expires_in"],
+            "properties": {
+              "access_token": { "type": "string" },
+              "token_type": { "type": "string", "const": "Bearer" },
+              "expires_in": { "type": "integer", "minimum": 60 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "CurrentUserEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": ["id", "display_name", "memberships"],
+            "properties": {
+              "id": { "type": "string", "format": "uuid" },
+              "display_name": { "type": "string" },
+              "memberships": { "type": "array", "items": { "$ref": "#/components/schemas/Membership" } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "Membership": {
+        "type": "object",
+        "required": ["tenant_id", "role", "permissions"],
+        "properties": {
+          "tenant_id": { "type": "string", "format": "uuid" },
+          "company_id": { "type": ["string", "null"], "format": "uuid" },
+          "role": { "type": "string", "enum": ["platform_admin", "company_admin", "card_owner"] },
+          "permissions": { "type": "array", "items": { "type": "string" } }
+        },
+        "additionalProperties": false
+      },
+      "CompanyProfileEnvelope": {
+        "type": "object",
+        "required": ["data"],
+        "properties": { "data": { "$ref": "#/components/schemas/CompanyProfile" } },
+        "additionalProperties": false
+      },
+      "CompanyProfile": {
+        "type": "object",
+        "required": ["id", "name", "summary", "status", "version"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "summary": { "type": "string", "maxLength": 5000 },
+          "industry": { "type": ["string", "null"], "maxLength": 100 },
+          "region": { "type": ["string", "null"], "maxLength": 100 },
+          "website": { "type": ["string", "null"], "format": "uri" },
+          "status": { "type": "string", "enum": ["draft", "active", "inactive"] },
+          "version": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      },
+      "UpdateCompanyProfileRequest": {
+        "type": "object",
+        "required": ["name", "summary"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "summary": { "type": "string", "maxLength": 5000 },
+          "industry": { "type": ["string", "null"], "maxLength": 100 },
+          "region": { "type": ["string", "null"], "maxLength": 100 },
+          "website": { "type": ["string", "null"], "format": "uri" }
+        },
+        "additionalProperties": false
+      },
+      "KnowledgeGapStatus": {
+        "type": "string",
+        "enum": ["pending", "drafted", "approved", "indexing", "indexed", "rejected", "failed"]
+      },
+      "KnowledgeGapListEnvelope": {
+        "type": "object",
+        "required": ["data", "meta"],
+        "properties": {
+          "data": { "type": "array", "items": { "$ref": "#/components/schemas/KnowledgeGap" } },
+          "meta": { "$ref": "#/components/schemas/CursorMeta" }
+        },
+        "additionalProperties": false
+      },
+      "KnowledgeGap": {
+        "type": "object",
+        "required": ["id", "question", "reason", "status", "occurrence_count", "created_at"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "question": { "type": "string" },
+          "reason": { "type": "string", "enum": ["no_context", "low_confidence", "business_refusal", "owner_feedback"] },
+          "status": { "$ref": "#/components/schemas/KnowledgeGapStatus" },
+          "suggested_answer": { "type": ["string", "null"] },
+          "occurrence_count": { "type": "integer", "minimum": 1 },
+          "created_at": { "type": "string", "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "CursorMeta": {
+        "type": "object",
+        "required": ["has_more"],
+        "properties": {
+          "next_cursor": { "type": ["string", "null"] },
+          "has_more": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
