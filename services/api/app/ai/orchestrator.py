@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +18,7 @@ from .schemas import (
     ChatCompletion,
     ChatMessage,
     Citation,
+    ForbiddenTopicPolicy,
     ProviderCredentials,
     RAGRequest,
     Refusal,
@@ -163,6 +165,20 @@ class RAGOrchestrator:
         if policy.blocked:
             trace.error_category = AIErrorCategory.SAFETY.value
             return _refused(policy.refusal, trace)
+
+        forbidden = _match_forbidden_topic(normalized, request.forbidden_topics)
+        if forbidden is not None:
+            trace.policy_flags += ("forbidden_topic",)
+            trace.error_category = AIErrorCategory.SAFETY.value
+            trace.extra.update(
+                {
+                    "forbidden_rule_id": forbidden.rule_id,
+                    "forbidden_rule_version": forbidden.version,
+                    "forbidden_action": forbidden.action,
+                    "needs_human_review": forbidden.action == "handoff",
+                }
+            )
+            return _refused(_forbidden_refusal(forbidden), trace)
 
         embedding: tuple[float, ...] | None = None
         if self._embedding_provider is not None and embedding_credentials is not None:
@@ -326,6 +342,55 @@ def _refused(refusal: Refusal | None, trace: _TraceState) -> AIAnswer:
         citations=(),
         refusal=safe_refusal,
         trace=trace.finish(()),
+    )
+
+
+def _match_forbidden_topic(
+    text: str,
+    rules: Sequence[ForbiddenTopicPolicy],
+) -> ForbiddenTopicPolicy | None:
+    normalized = " ".join(text.casefold().split())
+    best: tuple[int, int, ForbiddenTopicPolicy] | None = None
+    for rule in rules:
+        matched_lengths = [
+            len(candidate)
+            for term in (rule.topic, *rule.match_terms)
+            if (candidate := " ".join(term.casefold().split()))
+            and _rule_term_matches(normalized, candidate)
+        ]
+        if not matched_lengths:
+            continue
+        candidate_rule = (max(matched_lengths), rule.version, rule)
+        if best is None or candidate_rule[:2] > best[:2]:
+            best = candidate_rule
+    return best[2] if best else None
+
+
+def _rule_term_matches(text: str, term: str) -> bool:
+    simple_ascii = term.isascii() and all(
+        character.isalnum() or character in {"-", "_", " "} for character in term
+    )
+    if simple_ascii:
+        return re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text) is not None
+    return term in text
+
+
+def _forbidden_refusal(rule: ForbiddenTopicPolicy) -> Refusal:
+    if rule.action == "safe_template":
+        return Refusal(
+            code=RefusalCode.FORBIDDEN_TOPIC,
+            reason=rule.safe_response or "该话题暂不在企业授权答复范围内。",
+        )
+    if rule.action == "handoff":
+        return Refusal(
+            code=RefusalCode.FORBIDDEN_TOPIC,
+            reason="该问题需要由企业工作人员进一步确认。",
+            safe_alternative=rule.safe_response or "您可以留下联系方式，我们会安排人工跟进。",
+        )
+    return Refusal(
+        code=RefusalCode.FORBIDDEN_TOPIC,
+        reason="该话题不在企业授权答复范围内。",
+        safe_alternative=rule.safe_response or "可以继续咨询已发布的企业、产品或服务信息。",
     )
 
 

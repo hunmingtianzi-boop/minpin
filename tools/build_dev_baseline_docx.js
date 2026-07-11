@@ -36,6 +36,14 @@ const INPUTS = [
   "docs/08-决策与待确认.md",
   "docs/09-需求追踪矩阵.md",
   "docs/10-样板企业资料采集模板.md",
+  "docs/11-拓浙AI生态样板企业资料包.md",
+  "docs/12-通用数智名片引擎与企业初始化.md",
+  "docs/13-企业内容包模板使用说明.md",
+  "docs/14-数据库与AI问答生产实现.md",
+  "docs/15-企业管理后台与知识发布.md",
+  "docs/16-异步Worker与Outbox运行手册.md",
+  "docs/17-监控备份与恢复运行手册.md",
+  "docs/18-性能压测与SLA验收.md",
 ];
 
 const COLORS = {

@@ -10,6 +10,7 @@ from app.ai import (
     ChatCompletion,
     ChatMessage,
     EmbeddingBatch,
+    ForbiddenTopicPolicy,
     ProviderCredentials,
     RAGOrchestrator,
     RAGRequest,
@@ -171,6 +172,72 @@ async def test_prompt_injection_is_refused_before_embedding_or_retrieval() -> No
     assert embedding.calls == 0
     assert repository.calls == []
     assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_company_forbidden_topic_uses_the_reviewed_safe_template_before_ai() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused", cited_evidence_ids=["x"]))
+    embedding = FakeEmbeddingProvider()
+    repository = FakeRepository([_evidence()])
+    orchestrator = RAGOrchestrator(chat, repository, embedding_provider=embedding)
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="请评价竞争对手并贬低他们",
+            forbidden_topics=(
+                ForbiddenTopicPolicy(
+                    rule_id="rule-9",
+                    topic="竞争对手贬损",
+                    match_terms=("贬低他们",),
+                    action="safe_template",
+                    safe_response="我们只介绍自身已公开能力，不评价其他企业。",
+                    version=4,
+                ),
+            ),
+        ),
+        chat_credentials=_credentials(),
+        embedding_credentials=_credentials(),
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.code is RefusalCode.FORBIDDEN_TOPIC
+    assert result.refusal.reason == "我们只介绍自身已公开能力，不评价其他企业。"
+    assert result.trace.policy_flags == ("forbidden_topic",)
+    assert result.trace.extra["forbidden_rule_id"] == "rule-9"
+    assert embedding.calls == 0
+    assert repository.calls == []
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ascii_forbidden_term_requires_a_word_boundary() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer(answer="标准版包含智能名片功能。", cited_evidence_ids=["chunk-1"])
+    )
+    repository = FakeRepository([_evidence()])
+    orchestrator = RAGOrchestrator(chat, repository)
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="请介绍classical方案",
+            forbidden_topics=(
+                ForbiddenTopicPolicy(
+                    rule_id="rule-ai",
+                    topic="classified",
+                    match_terms=("class",),
+                    action="refuse",
+                ),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert len(chat.calls) == 1
 
 
 @pytest.mark.asyncio

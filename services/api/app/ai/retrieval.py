@@ -33,6 +33,8 @@ class KnowledgeSqlSchema:
     document_company_id: str = "company_id"
     document_current_version_id: str = "current_version_id"
     document_status: str = "status"
+    document_source_type: str = "source_type"
+    document_source_id: str = "source_id"
     version_id: str = "id"
     version_tenant_id: str = "tenant_id"
     version_company_id: str = "company_id"
@@ -77,6 +79,7 @@ class HybridRetrievalConfig:
     published_review_status: str = "approved"
     public_visibility: str = "public"
     active_document_status: str = "published"
+    embedding_model: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -88,6 +91,8 @@ class HybridRetrievalConfig:
             raise ValueError("invalid retrieval limits")
         if self.max_query_chars <= 0:
             raise ValueError("max_query_chars must be positive")
+        if self.embedding_model is not None and not self.embedding_model.strip():
+            raise ValueError("embedding_model must not be blank")
 
 
 class SQLAlchemySessionExecutor:
@@ -139,6 +144,7 @@ class PostgresHybridRetrievalRepository:
             "published_review_status": self.config.published_review_status,
             "public_visibility": self.config.public_visibility,
             "active_document_status": self.config.active_document_status,
+            "embedding_model": self.config.embedding_model,
         }
         statement = self._lexical_statement
         if query.embedding is not None:
@@ -211,7 +217,34 @@ eligible AS (
       AND d.{schema.document_current_version_id} = c.{schema.chunk_version_id}
       AND d.{schema.document_status} = :active_document_status
       AND v.{schema.version_review_status} = :published_review_status
-      AND c.{schema.chunk_visibility} = :public_visibility{active_chunk_predicate}
+      AND c.{schema.chunk_visibility} = :public_visibility
+      AND (
+        d.{schema.document_source_type} NOT IN ('product', 'case_study')
+        OR (
+          d.{schema.document_source_type} = 'product'
+          AND EXISTS (
+            SELECT 1 FROM products AS product
+            WHERE product.id::text = d.{schema.document_source_id}
+              AND product.tenant_id = CAST(:tenant_id AS uuid)
+              AND product.company_id = CAST(:company_id AS uuid)
+              AND product.status = 'published'
+              AND product.visibility = 'public'
+              AND product.deleted_at IS NULL
+          )
+        )
+        OR (
+          d.{schema.document_source_type} = 'case_study'
+          AND EXISTS (
+            SELECT 1 FROM case_studies AS case_study
+            WHERE case_study.id::text = d.{schema.document_source_id}
+              AND case_study.tenant_id = CAST(:tenant_id AS uuid)
+              AND case_study.company_id = CAST(:company_id AS uuid)
+              AND case_study.status = 'published'
+              AND case_study.visibility = 'public'
+              AND case_study.deleted_at IS NULL
+          )
+        )
+      ){active_chunk_predicate}
 )
 """.strip()
 
@@ -227,6 +260,7 @@ vector_candidates AS (
         1.0 - (e.embedding <=> CAST(:query_embedding AS vector)) AS vector_score
     FROM eligible AS e
     WHERE e.embedding IS NOT NULL
+      AND (:embedding_model IS NULL OR e.embedding_model = :embedding_model)
     ORDER BY e.embedding <=> CAST(:query_embedding AS vector), e.evidence_id
     LIMIT :candidate_limit
 ),

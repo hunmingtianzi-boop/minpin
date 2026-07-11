@@ -23,7 +23,13 @@ REQUIRED_TABLES = {
     "users",
     "memberships",
     "auth_sessions",
+    "staff_credentials",
+    "security_events",
     "cards",
+    "card_contact_fields",
+    "products",
+    "case_studies",
+    "forbidden_topics",
     "visitors",
     "visitor_profiles",
     "consent_records",
@@ -39,11 +45,17 @@ REQUIRED_TABLES = {
     "knowledge_index_jobs",
     "knowledge_gaps",
     "visit_summaries",
+    "leads",
+    "lead_followups",
+    "privacy_requests",
+    "notifications",
     "prompt_versions",
     "model_configs",
     "idempotency_keys",
     "audit_logs",
     "outbox_events",
+    "outbox_deliveries",
+    "worker_job_results",
 }
 
 COMPANY_SCOPED_TABLES = REQUIRED_TABLES - {
@@ -52,6 +64,8 @@ COMPANY_SCOPED_TABLES = REQUIRED_TABLES - {
     "users",
     "memberships",
     "auth_sessions",
+    "staff_credentials",
+    "security_events",
 }
 
 
@@ -139,6 +153,27 @@ def test_public_card_policy_is_exact_slug_scope(migration_sql: str) -> None:
     assert "status = 'published'" in public_policy
 
 
+def test_staff_login_boundary_is_unscoped_but_binds_an_exact_company(migration_sql: str) -> None:
+    credential = Base.metadata.tables["staff_credentials"]
+    assert {
+        "user_id",
+        "membership_id",
+        "tenant_id",
+        "company_id",
+        "account_normalized",
+        "password_hash",
+        "failed_attempts",
+        "locked_until",
+    } <= set(credential.columns.keys())
+    assert "create table staff_credentials" in migration_sql
+    assert "uq_staff_credentials_account" in migration_sql
+    assert "foreign key(tenant_id, company_id)" in migration_sql
+    assert "references companies (tenant_id, id)" in migration_sql
+    assert "alter table staff_credentials enable row level security" not in migration_sql
+    assert "alter table memberships force row level security" in migration_sql
+    assert "alter table auth_sessions force row level security" in migration_sql
+
+
 def test_active_document_requires_its_own_approved_version(migration_sql: str) -> None:
     assert "foreign key (tenant_id, company_id, id, current_version_id)" in migration_sql
     assert "references knowledge_versions(tenant_id, company_id, document_id, id)" in migration_sql
@@ -156,6 +191,33 @@ def test_immutable_knowledge_and_append_only_audit_guards(migration_sql: str) ->
     assert "active knowledge chunk embedding is immutable" in migration_sql
     assert "create trigger trg_audit_logs_append_only" in migration_sql
     assert "audit logs are append-only" in migration_sql
+    assert "create function app.erase_visitor_lead_followups" in migration_sql
+    assert "security definer" in migration_sql
+    assert "encryption_key_ref = 'erased'" in migration_sql
+    assert (
+        "revoke all privileges on table lead_followups, security_events from cf_ai_card_app"
+        in migration_sql
+    )
+    assert "alter default privileges in schema public" in migration_sql
+    assert "revoke all on tables from cf_ai_card_app" in migration_sql
+    assert "lead_followups to cf_ai_card_app" in migration_sql
+    assert "lead_followups" not in migration_sql.split(
+        "grant select, insert, update, delete on table", 1
+    )[1].split("to cf_ai_card_app", 1)[0]
+
+
+def test_security_events_are_unscoped_and_write_only_for_runtime(migration_sql: str) -> None:
+    security_event = Base.metadata.tables["security_events"]
+    assert {"event_type", "outcome", "account_hash", "request_ip_hash"} <= set(
+        security_event.columns.keys()
+    )
+    assert "alter table security_events enable row level security" not in migration_sql
+    assert "grant insert on table security_events to cf_ai_card_app" in migration_sql
+
+
+def test_published_catalog_records_require_a_publish_timestamp(migration_sql: str) -> None:
+    assert "ck_products_published_requires_timestamp" in migration_sql
+    assert "ck_case_studies_published_requires_timestamp" in migration_sql
 
 
 def test_reliability_tables_have_deduplication_contracts(migration_sql: str) -> None:
@@ -163,3 +225,35 @@ def test_reliability_tables_have_deduplication_contracts(migration_sql: str) -> 
     assert "uq_outbox_events_deduplication_key" in migration_sql
     assert "ck_outbox_events_published_state" in migration_sql
     assert "entry_hash varchar(64) not null" in migration_sql
+    assert "ck_outbox_events_processing_lease" in migration_sql
+    assert "uq_outbox_deliveries_event_handler" in migration_sql
+    assert "uq_worker_job_results_event" in migration_sql
+    assert "create function app.claim_outbox_events" in migration_sql
+    assert "security definer" in migration_sql
+    assert "for update skip locked" in migration_sql
+    assert "cf_ai_card_worker" in migration_sql
+
+
+def test_ai_runs_support_auditable_non_message_workflows(migration_sql: str) -> None:
+    ai_run = Base.metadata.tables["ai_runs"]
+    assert {"purpose", "resource_type", "resource_id"} <= set(ai_run.columns.keys())
+    assert ai_run.c.message_id.nullable
+    assert "alter table ai_runs add column purpose" in migration_sql
+    assert "ck_ai_runs_source_reference_required" in migration_sql
+    assert "create index ix_ai_runs_resource" in migration_sql
+
+
+def test_platform_onboarding_has_a_narrow_authenticated_rls_path(
+    migration_sql: str,
+) -> None:
+    tenant = Base.metadata.tables["tenants"]
+    assert {"slug", "name", "type", "status"} <= set(tenant.columns.keys())
+    assert "ck_tenants_slug_format" in migration_sql
+    assert "uq_tenants_slug" in migration_sql
+    assert "create function app.platform_actor_allowed() returns boolean" in migration_sql
+    assert "security definer" in migration_sql
+    assert "set search_path = pg_catalog, public, app" in migration_sql
+    assert "auth.id = nullif(current_setting('app.session_id', true), '')::uuid" in migration_sql
+    assert "membership.role = 'platform_admin'" in migration_sql
+    for table_name in ("tenants", "companies", "users", "memberships", "cards"):
+        assert f"create policy {table_name}_platform_insert" in migration_sql

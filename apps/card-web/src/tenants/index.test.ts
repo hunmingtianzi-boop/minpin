@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  getTenant,
+  loadTenant,
+  registeredTenantSlugs,
   resolveTenantSlug,
-  templateTenant,
-  tenantRegistry,
-  tuotuTenant,
 } from ".";
+import { templateTenant } from "./template/tenant";
+import { tuotuTenant } from "./tuotu/tenant";
 
 describe("tenant registry", () => {
   afterEach(() => {
@@ -28,17 +28,18 @@ describe("tenant registry", () => {
     expect(slug).toBe("tuotu");
   });
 
-  it("does not substitute another brand when a tenant is not registered", () => {
-    expect(getTenant("missing")).toBeUndefined();
-    expect(getTenant("tuo!tu")).toBeUndefined();
-    expect(getTenant("TUOTU")).toBeUndefined();
-    expect(resolveTenantSlug({ pathname: "/c/missing", search: "" })).toBeUndefined();
-    expect(getTenant("tuotu")).toBe(tuotuTenant);
+  it("does not substitute another brand when a tenant is not registered", async () => {
+    await expect(loadTenant("missing")).resolves.toBeUndefined();
+    await expect(loadTenant("tuo!tu")).resolves.toBeUndefined();
+    await expect(loadTenant("TUOTU")).resolves.toBeUndefined();
+    expect(resolveTenantSlug({ pathname: "/c/missing", search: "" })).toBe("missing");
+    expect(resolveTenantSlug({ pathname: "/c/tuo!tu", search: "" })).toBeUndefined();
+    await expect(loadTenant("tuotu")).resolves.toBe(tuotuTenant);
   });
 
-  it("registers the runnable generic template tenant", () => {
-    expect(tenantRegistry.template).toBe(templateTenant);
-    expect(getTenant("template")).toBe(templateTenant);
+  it("registers the runnable generic template tenant", async () => {
+    expect(registeredTenantSlugs).toEqual(["template", "tuotu"]);
+    await expect(loadTenant("template")).resolves.toBe(templateTenant);
     expect(resolveTenantSlug({ pathname: "/c/template", search: "" })).toBe(
       "template",
     );
@@ -50,15 +51,15 @@ describe("tenant registry", () => {
     expect(resolveTenantSlug({ pathname: "/", search: "" })).toBe("template");
   });
 
-  it("does not fall back when an unknown tenant is requested explicitly", () => {
+  it("keeps a safe unknown slug for database lookup without static fallback", () => {
     vi.stubEnv("VITE_DEFAULT_TENANT", "");
 
     expect(
       resolveTenantSlug({ pathname: "/", search: "?tenant=missing" }),
-    ).toBeUndefined();
+    ).toBe("missing");
     expect(
       resolveTenantSlug({ pathname: "/c/missing", search: "" }),
-    ).toBeUndefined();
+    ).toBe("missing");
   });
 
   it("honors a configured default without affecting explicit Tuotu routes", () => {

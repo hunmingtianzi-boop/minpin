@@ -1,0 +1,8 @@
+# Reviewed development lock for the Worker package on Python 3.12/3.13.
+-r requirements-prod.lock
+iniconfig==2.3.0
+pluggy==1.6.0
+Pygments==2.20.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.15.21

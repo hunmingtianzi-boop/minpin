@@ -4,7 +4,7 @@
 
 当前实现以通用渲染器为产品主体。企业信息通过独立内容包接入，运行时根据 tenant 选择企业实例。根地址和 `/c/template` 展示无真实企业品牌的通用模板，拓浙 AI 生态只是首个企业 seed，tenant key 为 `tuotu`。
 
-后端首个纵向切片已经落地：PostgreSQL/pgvector 多租户模型、强制 RLS、知识版本、DeepSeek V4 Provider、混合检索、证据门控、可追溯引用、访客会话与 SSE 问答。管理后台、文件解析 Worker、完整留资/纪要和线上评测运营仍按后续阶段开发。视频数字人、知识图谱和完整 CRM 不纳入 MVP。
+核心纵向切片已经落地：PostgreSQL/pgvector 多租户模型、强制 RLS、员工认证、企业管理后台、知识草稿与原子发布、DeepSeek V4 Provider、混合检索、证据门控、可追溯引用、访客会话与 SSE 问答。文件解析 Worker、完整留资/纪要和线上评测运营仍按后续阶段开发。视频数字人、知识图谱和完整 CRM 不纳入 MVP。
 
 ## 本地体验
 
@@ -49,7 +49,13 @@ pnpm local:status
 pnpm local:stop
 ```
 
-`local:start` 会检查本机 PostgreSQL/pgvector 与 Redis，启动本地多语种 E5 向量服务，执行幂等迁移、两套知识种子和写时复制向量重建，再启动 API 与 H5。首次缺少模型时会下载约 2 GB；后续复用 `%LOCALAPPDATA%\cf-ai-card-runtime\models`。五个服务都只监听 `127.0.0.1`，运行日志位于 `%LOCALAPPDATA%\cf-ai-card-runtime`。
+`local:start` 会检查本机 PostgreSQL/pgvector 与 Redis，启动本地多语种 E5 向量服务，执行幂等迁移、初始资料导入和写时复制向量重建，再启动 API、访客 H5 与管理后台。首次缺少模型时会下载约 2 GB；后续复用 `%LOCALAPPDATA%\cf-ai-card-runtime\models`。六个服务都只监听 `127.0.0.1`，运行日志位于 `%LOCALAPPDATA%\cf-ai-card-runtime`。
+
+- 访客端：`http://127.0.0.1:4173/c/tuotu`
+- 企业管理后台：`http://127.0.0.1:4174/`
+- API 文档：`http://127.0.0.1:8000/docs`
+
+本地管理员由 `.env.local` 中的 `ADMIN_BOOTSTRAP_TENANT_SLUG`、`ADMIN_BOOTSTRAP_ACCOUNT` 和 `ADMIN_BOOTSTRAP_PASSWORD` 首次创建。密码不得写入仓库，生产环境必须改为密钥系统注入并在首次登录后轮换。启动时导入的数据只负责初始化，不会覆盖后台已修改的企业资料、名片配置或管理员已发布的知识版本。
 
 不使用 Docker 时可单独运行后端单元测试：
 
@@ -59,7 +65,7 @@ services/api/.venv/Scripts/python -m pip install -e "services/api[dev]"
 services/api/.venv/Scripts/python -m pytest services/api/tests
 ```
 
-前端工程位于 `apps/card-web/`，API 位于 `services/api/`。数据库与问答实现见 [数据库与 AI 问答生产实现](docs/14-数据库与AI问答生产实现.md)，通用架构见 [通用数智名片引擎与企业初始化](docs/12-通用数智名片引擎与企业初始化.md)，复制模板接入新企业见 [企业内容包模板使用说明](docs/13-企业内容包模板使用说明.md)，首个 seed 的事实源与禁答边界见 [拓浙 AI 生态 seed 内容包](docs/11-拓浙AI生态样板企业资料包.md)。
+访客端位于 `apps/card-web/`，管理端位于 `apps/admin-web/`，API 位于 `services/api/`。数据库与问答实现见 [数据库与 AI 问答生产实现](docs/14-数据库与AI问答生产实现.md)，后台实现见 [企业管理后台与知识发布](docs/15-企业管理后台与知识发布.md)，通用架构见 [通用数智名片引擎与企业初始化](docs/12-通用数智名片引擎与企业初始化.md)，复制模板接入新企业见 [企业内容包模板使用说明](docs/13-企业内容包模板使用说明.md)，首个 seed 的事实源与禁答边界见 [拓浙 AI 生态 seed 内容包](docs/11-拓浙AI生态样板企业资料包.md)。
 
 ## 产品分层
 

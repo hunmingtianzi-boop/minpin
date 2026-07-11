@@ -9,12 +9,14 @@ SENSITIVE_EVENT_KEYS = {
     "authorization",
     "content",
     "cookie",
+    "csrf_token",
     "embedding_api_key",
     "llm_api_key",
     "password",
     "prompt",
     "refresh_token",
     "token",
+    "x_csrf_token",
 }
 
 

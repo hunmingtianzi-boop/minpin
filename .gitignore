@@ -19,6 +19,7 @@ build/
 node_modules/
 .pnpm-store/
 coverage/
+*.log
 
 # IDE / OS
 .idea/

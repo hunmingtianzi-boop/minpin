@@ -13,18 +13,30 @@ import {
   List,
   Path,
   RocketLaunch,
+  ShareNetwork,
   Student,
   Target,
   UsersThree,
   X,
 } from "@phosphor-icons/react";
-import { motion, useReducedMotion } from "motion/react";
-import { type PropsWithChildren, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  Fragment,
+  type PropsWithChildren,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
-  AIAssistant,
+  DeferredAIAssistant,
   type AIAssistantHandle,
-} from "./components/AIAssistant";
+} from "./components/DeferredAIAssistant";
+import {
+  DeferredPublicExperience,
+  type PublicExperienceHandle,
+} from "./components/DeferredPublicExperience";
 import { ThemeControl } from "./components/ThemeControl";
 import type {
   BaseSection,
@@ -32,6 +44,7 @@ import type {
   EnterpriseCardConfig,
   EnterpriseCardSection,
 } from "./domain/card";
+import type { PublicCardData } from "./lib/publicCardApi";
 
 import "./styles.css";
 
@@ -56,18 +69,37 @@ function Reveal({
   className = "",
   delay = 0,
 }: PropsWithChildren<{ className?: string; delay?: number }>) {
-  const shouldReduceMotion = useReducedMotion();
+  const elementRef = useRef<HTMLDivElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    const element = elementRef.current;
+    if (!element) return undefined;
+    const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduceMotion || typeof IntersectionObserver === "undefined") {
+      setIsVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry?.isIntersecting) return;
+        setIsVisible(true);
+        observer.disconnect();
+      },
+      { rootMargin: "0px 0px -10%", threshold: 0.08 },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   return (
-    <motion.div
-      className={className}
-      initial={shouldReduceMotion ? false : { opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, amount: 0.18 }}
-      transition={{ duration: 0.56, delay, ease: [0.22, 1, 0.36, 1] }}
+    <div
+      ref={elementRef}
+      className={`${className} reveal${isVisible ? " reveal-visible" : ""}`.trim()}
+      style={{ "--reveal-delay": `${delay}s` } as CSSProperties}
     >
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -129,9 +161,11 @@ function ActionControl({
 function Header({
   tenant,
   navItems,
+  onShare,
 }: {
   tenant: EnterpriseCardConfig;
-  navItems: EnterpriseCardSection[];
+  navItems: Array<Pick<EnterpriseCardSection, "id" | "navLabel">>;
+  onShare?: () => void;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -187,6 +221,17 @@ function Header({
             lightThemeColor={tenant.theme.light.background}
             darkThemeColor={tenant.theme.dark.background}
           />
+          {onShare && (
+            <button
+              className="header-share-button"
+              type="button"
+              onClick={onShare}
+              aria-label="分享名片"
+            >
+              <ShareNetwork size={18} aria-hidden="true" />
+              <span>分享</span>
+            </button>
+          )}
           <a
             className="official-link"
             href={tenant.brand.officialAction.target}
@@ -344,7 +389,15 @@ function CardSection({
         </section>
       );
 
-    case "process":
+    case "process": {
+      const sharedSteps = section.steps.filter(
+        (step) => step.path === undefined || step.path === "shared",
+      );
+      const branchSteps = section.steps.filter(
+        (step) => step.path === "branch-a" || step.path === "branch-b",
+      );
+      const hasBranches = sharedSteps.length > 0 && branchSteps.length > 0;
+
       return (
         <section
           className="section process-section"
@@ -356,14 +409,49 @@ function CardSection({
               <SectionHeading section={section} headingId={headingId} />
             </Reveal>
 
-            <Reveal className="process-track" delay={0.08}>
-              {section.steps.map((step, index) => (
-                <article key={`${step.title}-${index}`}>
-                  <h3>{step.title}</h3>
-                  <p>{step.text}</p>
-                </article>
-              ))}
-            </Reveal>
+            {hasBranches ? (
+              <Reveal className="process-map" delay={0.08}>
+                <div className="process-shared-track">
+                  {sharedSteps.map((step, index) => (
+                    <article key={`${step.title}-${index}`}>
+                      <span className="process-step-number" aria-hidden="true">
+                        {String(index + 1).padStart(2, "0")}
+                      </span>
+                      <h3>{step.title}</h3>
+                      <p>{step.text}</p>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="process-split" aria-hidden="true">
+                  <span>两种出口</span>
+                </div>
+
+                <div className="process-branch-track">
+                  {branchSteps.map((step, index) => (
+                    <article
+                      className={`process-branch process-${step.path}`}
+                      key={`${step.title}-${index}`}
+                    >
+                      <p className="process-branch-label">
+                        {step.path === "branch-a" ? "路径 A · 人才" : "路径 B · 项目"}
+                      </p>
+                      <h3>{step.title}</h3>
+                      <p>{step.text}</p>
+                    </article>
+                  ))}
+                </div>
+              </Reveal>
+            ) : (
+              <Reveal className="process-track" delay={0.08}>
+                {section.steps.map((step, index) => (
+                  <article key={`${step.title}-${index}`}>
+                    <h3>{step.title}</h3>
+                    <p>{step.text}</p>
+                  </article>
+                ))}
+              </Reveal>
+            )}
 
             {section.audiences.length > 0 && (
               <Reveal className="audience-ledger" delay={0.1}>
@@ -385,6 +473,7 @@ function CardSection({
           </div>
         </section>
       );
+    }
 
     case "evidence":
       return (
@@ -569,14 +658,24 @@ function CardSection({
   }
 }
 
-export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
+export default function App({
+  tenant,
+  publishedCard,
+}: {
+  tenant: EnterpriseCardConfig;
+  publishedCard?: PublicCardData;
+}) {
   const assistantRef = useRef<AIAssistantHandle>(null);
-  const shouldReduceMotion = useReducedMotion();
+  const publicExperienceRef = useRef<PublicExperienceHandle>(null);
 
   const navItems = useMemo(
-    () => tenant.sections.filter((section) => section.showInNav),
-    [tenant.sections],
+    () => [
+      ...tenant.sections.filter((section) => section.showInNav),
+      ...(publishedCard ? [{ id: "catalog", navLabel: "产品案例" }] : []),
+    ],
+    [publishedCard, tenant.sections],
   );
+  const closingIndex = tenant.sections.findIndex((section) => section.type === "closing");
 
   const openAssistant = (target: string) => {
     if (target === "open") assistantRef.current?.open();
@@ -588,7 +687,11 @@ export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
       <a className="skip-link" href="#main-content">
         跳到主要内容
       </a>
-      <Header tenant={tenant} navItems={navItems} />
+      <Header
+        tenant={tenant}
+        navItems={navItems}
+        onShare={publishedCard ? () => publicExperienceRef.current?.openShare() : undefined}
+      />
 
       <main id="main-content">
         <section
@@ -607,12 +710,7 @@ export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
             />
           </div>
           <div className="hero-inner page-width">
-            <motion.div
-              className="hero-copy"
-              initial={shouldReduceMotion ? false : { opacity: 0, y: 18 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-            >
+            <div className="hero-copy hero-enter">
               <p className="hero-kicker">{tenant.hero.kicker}</p>
               <h1 id="hero-title">
                 {tenant.hero.titleLines.map((line, index) => (
@@ -634,15 +732,10 @@ export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
                   />
                 ))}
               </div>
-            </motion.div>
+            </div>
 
             {tenant.hero.metrics.length > 0 && (
-              <motion.dl
-                className="hero-metrics"
-                initial={shouldReduceMotion ? false : { opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ duration: 0.8, delay: 0.25 }}
-              >
+              <dl className="hero-metrics hero-metrics-enter">
                 {tenant.hero.metrics.map((metric) => (
                   <div key={metric.label}>
                     <dt>{metric.label}</dt>
@@ -650,19 +743,34 @@ export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
                     <small>{metric.note}</small>
                   </div>
                 ))}
-              </motion.dl>
+              </dl>
             )}
           </div>
         </section>
 
-        {tenant.sections.map((section) => (
-          <CardSection
-            key={section.id}
-            section={section}
-            tenant={tenant}
+        {tenant.sections.map((section, index) => (
+          <Fragment key={section.id}>
+            {publishedCard && index === closingIndex && (
+              <DeferredPublicExperience
+                ref={publicExperienceRef}
+                card={publishedCard}
+                onAssistant={openAssistant}
+              />
+            )}
+            <CardSection
+              section={section}
+              tenant={tenant}
+              onAssistant={openAssistant}
+            />
+          </Fragment>
+        ))}
+        {publishedCard && closingIndex < 0 && (
+          <DeferredPublicExperience
+            ref={publicExperienceRef}
+            card={publishedCard}
             onAssistant={openAssistant}
           />
-        ))}
+        )}
       </main>
 
       <footer className="site-footer">
@@ -691,11 +799,14 @@ export default function App({ tenant }: { tenant: EnterpriseCardConfig }) {
         </div>
       </footer>
 
-      <AIAssistant
+      <DeferredAIAssistant
         key={tenant.id}
         ref={assistantRef}
         config={tenant.assistant}
         cardSlug={tenant.id}
+        onLeadPrompt={
+          publishedCard ? () => publicExperienceRef.current?.openLead() : undefined
+        }
       />
     </div>
   );

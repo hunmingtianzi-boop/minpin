@@ -105,6 +105,7 @@ def build_rag_orchestrator(
             expected_embedding_dimensions=settings.embedding_dimension,
             max_top_k=max(settings.retrieval_top_k, 30),
             max_candidate_limit=max(settings.retrieval_top_k * 8, 100),
+            embedding_model=settings.embedding_model,
         ),
     )
     return RAGOrchestrator(

@@ -15,9 +15,20 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.errors import ApiError, ApiErrorBody, ApiErrorEnvelope, api_error_handler
 from app.api.middleware import RequestContextMiddleware
-from app.api.routes import health, public_conversations
+from app.api.routes import (
+    admin,
+    auth,
+    crm,
+    health,
+    knowledge_ops,
+    platform,
+    public_catalog,
+    public_conversations,
+    workflow,
+)
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
+from app.core.metrics import MetricsMiddleware, MetricsRegistry
 from app.core.request_context import request_id_ctx
 from app.services.ai_runtime import build_rag_orchestrator
 
@@ -96,16 +107,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = runtime_settings
+    app.state.require_staff_session_validation = True
+    app.state.metrics = MetricsRegistry()
 
     app.add_middleware(
         CORSMiddleware,
         allow_origins=runtime_settings.cors_allowed_origins,
-        allow_credentials=False,
+        allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-Id"],
-        expose_headers=["X-Request-Id", "Retry-After"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "If-Match",
+            "X-CSRF-Token",
+            "X-Request-Id",
+        ],
+        expose_headers=["ETag", "X-CSRF-Token", "X-Request-Id", "Retry-After"],
         max_age=600,
     )
+    app.add_middleware(MetricsMiddleware, registry=app.state.metrics)
     app.add_middleware(RequestContextMiddleware)
 
     app.add_exception_handler(ApiError, api_error_handler)
@@ -140,7 +161,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(status_code=500, content=payload.model_dump(mode="json"))
 
     app.include_router(health.router, prefix=runtime_settings.api_prefix)
+    app.include_router(auth.router, prefix=runtime_settings.api_prefix)
+    app.include_router(admin.router, prefix=runtime_settings.api_prefix)
+    app.include_router(knowledge_ops.router, prefix=runtime_settings.api_prefix)
+    app.include_router(platform.router, prefix=runtime_settings.api_prefix)
+    app.include_router(crm.router, prefix=runtime_settings.api_prefix)
     app.include_router(public_conversations.router, prefix=runtime_settings.api_prefix)
+    app.include_router(public_catalog.router, prefix=runtime_settings.api_prefix)
+    app.include_router(workflow.router, prefix=runtime_settings.api_prefix)
     return app
 
 

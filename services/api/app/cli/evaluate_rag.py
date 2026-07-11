@@ -12,10 +12,12 @@ import httpx
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.ai import ProviderCredentials, RAGRequest
+from app.ai import ForbiddenTopicPolicy, ProviderCredentials, RAGRequest
 from app.cli.seed_content import deterministic_id
 from app.core.config import Settings, get_settings
-from app.db.models import KnowledgeChunk
+from app.core.redaction import redact_sensitive_text
+from app.db.models import ForbiddenTopic, KnowledgeChunk
+from app.db.session import set_rls_context
 from app.evaluation import (
     EvaluationObservation,
     compute_metrics,
@@ -63,6 +65,41 @@ async def _source_ids_for_chunks(
     return [by_id[chunk_id] for chunk_id in chunk_ids if chunk_id in by_id]
 
 
+async def _forbidden_topic_policies(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    tenant_id: uuid.UUID,
+    company_id: uuid.UUID,
+) -> tuple[ForbiddenTopicPolicy, ...]:
+    async with sessions() as session, session.begin():
+        await set_rls_context(session, tenant_id=tenant_id, company_id=company_id)
+        rows = (
+            await session.scalars(
+                select(ForbiddenTopic)
+                .where(
+                    ForbiddenTopic.tenant_id == tenant_id,
+                    ForbiddenTopic.company_id == company_id,
+                    ForbiddenTopic.is_active.is_(True),
+                )
+                .order_by(ForbiddenTopic.updated_at.desc(), ForbiddenTopic.id)
+                .limit(200)
+            )
+        ).all()
+    return tuple(
+        ForbiddenTopicPolicy(
+            rule_id=str(row.id),
+            topic=row.topic,
+            match_terms=tuple(row.match_terms),
+            action=row.action,
+            safe_response=(
+                redact_sensitive_text(row.safe_response).content if row.safe_response else None
+            ),
+            version=row.version,
+        )
+        for row in rows
+    )
+
+
 async def run_evaluation(
     *,
     dataset: Path,
@@ -80,6 +117,11 @@ async def run_evaluation(
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     observations: list[EvaluationObservation] = []
     try:
+        forbidden_topics = await _forbidden_topic_policies(
+            sessions,
+            tenant_id=tenant_id,
+            company_id=company_id,
+        )
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(settings.llm_timeout_seconds, connect=5.0)
         ) as client:
@@ -101,6 +143,7 @@ async def run_evaluation(
                         tenant_id=str(tenant_id),
                         company_id=str(company_id),
                         question=case.question,
+                        forbidden_topics=forbidden_topics,
                     ),
                     chat_credentials=chat_credentials,
                     embedding_credentials=embedding_credentials,
@@ -173,4 +216,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

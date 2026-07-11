@@ -17,7 +17,13 @@ export type AssistantStreamEvent =
     }
   | { type: "error"; code: string; retryable: boolean; requestId?: string };
 
-type AssistantSession = {
+export type PublicPolicyVersions = {
+  privacy: string;
+  chatNotice: string;
+  leadConsent: string;
+};
+
+export type VisitorSession = {
   token: string;
   expiresAt: string;
   privacyVersion: string;
@@ -65,12 +71,12 @@ export class AssistantApiError extends Error {
   }
 }
 
-function getApiBaseUrl() {
+export function getPublicApiBaseUrl() {
   return (import.meta.env.VITE_API_BASE_URL ?? "").trim().replace(/\/+$/, "");
 }
 
 export function isAssistantApiConfigured() {
-  return getApiBaseUrl().length > 0;
+  return getPublicApiBaseUrl().length > 0;
 }
 
 export function getAssistantSessionStorageKey(cardSlug: string) {
@@ -118,7 +124,7 @@ function requireString(value: unknown, label: string) {
   return value;
 }
 
-function readSession(cardSlug: string): AssistantSession | undefined {
+function readSession(cardSlug: string): VisitorSession | undefined {
   const storage = getSessionStorage();
   if (!storage) return undefined;
 
@@ -156,7 +162,7 @@ function readSession(cardSlug: string): AssistantSession | undefined {
   }
 }
 
-function writeSession(cardSlug: string, session: AssistantSession) {
+function writeSession(cardSlug: string, session: VisitorSession) {
   try {
     getSessionStorage()?.setItem(
       getAssistantSessionStorageKey(cardSlug),
@@ -173,6 +179,10 @@ export function clearAssistantSession(cardSlug: string) {
   } catch {
     // Ignore unavailable or blocked session storage.
   }
+}
+
+export function getActiveAssistantConversationId(cardSlug: string) {
+  return readSession(cardSlug)?.conversationId;
 }
 
 function isAbortError(error: unknown) {
@@ -211,6 +221,7 @@ async function responseError(response: Response) {
       response.status === 401 ||
       response.status === 403 ||
       response.status === 429 ||
+      (response.status === 409 && code === "POLICY_VERSION_MISMATCH") ||
       response.status >= 500,
     requestId,
     retryAfterSeconds:
@@ -258,7 +269,11 @@ function jsonHeaders(token?: string, idempotencyKey?: string) {
   return headers;
 }
 
-async function getPolicyVersions(baseUrl: string, cardSlug: string, signal?: AbortSignal) {
+async function getPolicyVersions(
+  baseUrl: string,
+  cardSlug: string,
+  signal?: AbortSignal,
+): Promise<PublicPolicyVersions> {
   const envelope = await requestJson<unknown>(
     `${baseUrl}/public/cards/${encodeURIComponent(cardSlug)}`,
     { method: "GET", headers: { Accept: "application/json" } },
@@ -267,8 +282,9 @@ async function getPolicyVersions(baseUrl: string, cardSlug: string, signal?: Abo
   const data = requireRecord(requireRecord(envelope, "card envelope").data, "card data");
   const versions = requireRecord(data.policy_versions, "policy versions");
   return {
-    privacyVersion: requireString(versions.privacy, "privacy policy version"),
-    chatNoticeVersion: requireString(versions.chat_notice, "chat notice version"),
+    privacy: requireString(versions.privacy, "privacy policy version"),
+    chatNotice: requireString(versions.chat_notice, "chat notice version"),
+    leadConsent: requireString(versions.lead_consent, "lead consent version"),
   };
 }
 
@@ -356,10 +372,14 @@ async function ensureAssistantSession(
     const visit = await createVisit(
       baseUrl,
       cardSlug,
-      versions.privacyVersion,
+      versions.privacy,
       signal,
     );
-    session = { ...visit, ...versions };
+    session = {
+      ...visit,
+      privacyVersion: versions.privacy,
+      chatNoticeVersion: versions.chatNotice,
+    };
     writeSession(cardSlug, session);
   }
 
@@ -380,6 +400,46 @@ async function ensureAssistantSession(
   const completedSession = { ...session, conversationId };
   writeSession(cardSlug, completedSession);
   return completedSession;
+}
+
+export async function ensurePublicVisitorSession({
+  cardSlug,
+  policyVersions,
+  signal,
+}: {
+  cardSlug: string;
+  policyVersions?: PublicPolicyVersions;
+  signal?: AbortSignal;
+}): Promise<VisitorSession> {
+  const baseUrl = getPublicApiBaseUrl();
+  const normalizedSlug = cardSlug.trim();
+  if (!baseUrl) {
+    throw new AssistantApiError("公开服务 API 尚未配置。", {
+      code: "API_NOT_CONFIGURED",
+    });
+  }
+  if (!normalizedSlug) {
+    throw new AssistantApiError("缺少名片标识。", { code: "INVALID_CARD_SLUG" });
+  }
+
+  const saved = readSession(normalizedSlug);
+  if (saved) return saved;
+
+  const versions =
+    policyVersions ?? (await getPolicyVersions(baseUrl, normalizedSlug, signal));
+  const visit = await createVisit(
+    baseUrl,
+    normalizedSlug,
+    versions.privacy,
+    signal,
+  );
+  const session: VisitorSession = {
+    ...visit,
+    privacyVersion: versions.privacy,
+    chatNoticeVersion: versions.chatNotice,
+  };
+  writeSession(normalizedSlug, session);
+  return session;
 }
 
 function parseEventBlock(block: string) {
@@ -549,7 +609,7 @@ export async function streamAssistantMessage({
   idempotencyKey,
   onEvent,
 }: StreamAssistantMessageOptions) {
-  const baseUrl = getApiBaseUrl();
+  const baseUrl = getPublicApiBaseUrl();
   if (!baseUrl) {
     throw new AssistantApiError("AI API 尚未配置。", {
       code: "API_NOT_CONFIGURED",
@@ -599,7 +659,9 @@ export async function streamAssistantMessage({
   } catch (error) {
     if (
       error instanceof AssistantApiError &&
-      (error.status === 401 || error.status === 403)
+      (error.status === 401 ||
+        error.status === 403 ||
+        (error.status === 409 && error.code === "POLICY_VERSION_MISMATCH"))
     ) {
       clearAssistantSession(normalizedSlug);
     }

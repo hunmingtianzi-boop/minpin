@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @cf/card-web test
+      - run: pnpm --filter @cf/card-web build
+      - run: pnpm --filter @cf/admin-web test
+      - run: pnpm --filter @cf/admin-web build
+      - run: node tools/validate_openapi.js
+
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/api/requirements.lock
+      - run: python -m pip install --disable-pip-version-check -r services/api/requirements.lock
+      - run: python -m pip install --no-deps -e services/api
+      - run: python -m ruff check services/api tools/sync_openapi_contract.py
+      - run: python -m pytest services/api/tests -m "not integration"
+      - run: python tools/sync_openapi_contract.py --check
+      - name: Verify performance harness
+        run: |
+          python -m ruff check --config services/api/pyproject.toml tools/perf
+          python -m pytest tools/perf/tests
+      - name: Run loopback performance smoke
+        run: python -m tools.perf.smoke --output artifacts/perf/ci-smoke.json
+      - name: Upload performance smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/perf/ci-smoke.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  worker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: services/worker/requirements.lock
+      - run: python -m pip install --disable-pip-version-check -r services/worker/requirements.lock
+      - run: python -m pip install --no-deps -e services/api -e services/worker
+      - run: python -m ruff check services/worker
+      - run: python -m pytest services/worker/tests -m "not integration"
+
+  postgres-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18
+        env:
+          POSTGRES_DB: cf_ai_card
+          POSTGRES_USER: cf_ai_card
+          POSTGRES_PASSWORD: ci-owner-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cf_ai_card -d cf_ai_card"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql+asyncpg://cf_ai_card_app:change-me-app-local-only@127.0.0.1:5432/cf_ai_card
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://cf_ai_card:ci-owner-password@127.0.0.1:5432/cf_ai_card
+      WORKER_DATABASE_URL: postgresql+asyncpg://cf_ai_card_worker:change-me-worker-local-only@127.0.0.1:5432/cf_ai_card
+      JWT_SIGNING_KEY: ci-only-signing-key-with-at-least-32-bytes
+      FIELD_ENCRYPTION_KEY: ci-only-field-encryption-key-not-production
+      FIELD_ENCRYPTION_KEY_REF: ci-v1
+      STAFF_AUTH_COOKIE_SECURE: "false"
+      CORS_ALLOWED_ORIGINS: '["http://127.0.0.1:4173"]'
+      RUN_PLATFORM_INTEGRATION: "1"
+      RUN_WORKER_INTEGRATION: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            services/api/requirements.lock
+            services/worker/requirements.lock
+      - name: Install PostgreSQL 18 client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-common ca-certificates
+          sudo sh /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends postgresql-client-18
+          echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
+      - run: python -m pip install --disable-pip-version-check -r services/api/requirements.lock
+      - run: python -m pip install --disable-pip-version-check -r services/worker/requirements.lock
+      - run: python -m pip install --no-deps -e services/api -e services/worker
+      - name: Initialize extensions and least-privilege roles
+        env:
+          PGPASSWORD: ci-owner-password
+        run: psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U cf_ai_card -d cf_ai_card -f infra/postgres/001_extensions.sql
+      - name: Verify migration round trip
+        working-directory: services/api
+        run: |
+          python -m alembic upgrade head
+          python -m alembic downgrade base
+          python -m alembic upgrade head
+          python -m alembic current
+          python -m alembic check
+      - name: Seed two isolated enterprises
+        working-directory: services/api
+        run: >-
+          python -m app.cli.seed_content
+          ../../packages/tenant-content/template.knowledge.json
+          ../../packages/tenant-content/tuotu.knowledge.json
+      - name: Verify platform onboarding through application RLS
+        run: python -m pytest services/api/tests/test_platform_postgres_integration.py -m integration
+      - name: Verify worker leases, recovery, dead letters and deduplication
+        run: python -m pytest services/worker/tests/test_postgres_integration.py -m integration
+      - name: Create a real PostgreSQL backup
+        shell: pwsh
+        run: >-
+          ./tools/ops/postgres-backup.ps1
+          -OutputDirectory artifacts/backups
+          -RetentionDays 30
+      - name: Create isolated restore database
+        env:
+          PGPASSWORD: ci-owner-password
+        run: >-
+          psql -v ON_ERROR_STOP=1
+          -h 127.0.0.1 -U cf_ai_card -d postgres
+          -c "CREATE DATABASE cf_ai_card_restore_test OWNER cf_ai_card"
+      - name: Rehearse restore and verify the recovered schema
+        shell: pwsh
+        env:
+          RESTORE_DATABASE_URL: postgresql://cf_ai_card:ci-owner-password@127.0.0.1:5432/cf_ai_card_restore_test
+        run: |
+          $backup = Get-ChildItem artifacts/backups/*.dump |
+            Sort-Object LastWriteTimeUtc |
+            Select-Object -Last 1
+          if ($null -eq $backup) { throw "Backup artifact was not created." }
+          ./tools/ops/postgres-restore-rehearsal.ps1 `
+            -BackupFile $backup.FullName `
+            -ReportDirectory artifacts/restore-rehearsals `
+            -ExpectedAlembicVersion 20260711_0008 `
+            -RpoObjectiveHours 24 `
+            -RtoObjectiveSeconds 14400
+      - name: Upload backup and restore rehearsal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-restore-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            artifacts/backups/
+            artifacts/restore-rehearsals/
+          if-no-files-found: warn
+          retention-days: 14

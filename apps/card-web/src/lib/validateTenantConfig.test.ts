@@ -4,6 +4,7 @@ import type {
   EnterpriseCardConfig,
   FeatureGridSection,
   FaqSection,
+  ProcessSection,
 } from "../domain/card";
 import { templateTenant } from "../tenants/template/tenant";
 import { tuotuTenant } from "../tenants/tuotu/tenant";
@@ -19,6 +20,11 @@ const getFeatureGrid = (config: EnterpriseCardConfig) =>
 
 const getFaq = (config: EnterpriseCardConfig) =>
   config.sections.find((section): section is FaqSection => section.type === "faq")!;
+
+const getProcess = (config: EnterpriseCardConfig) =>
+  config.sections.find(
+    (section): section is ProcessSection => section.type === "process",
+  )!;
 
 describe("validateTenantConfig", () => {
   it("accepts the curated Tuotu tenant", () => {
@@ -155,6 +161,21 @@ describe("validateTenantConfig", () => {
       expect.objectContaining({
         code: "invalid-action-target",
         path: "hero.actions[0]",
+      }),
+    );
+  });
+
+  it("rejects an unsupported process branch marker", () => {
+    const config = cloneTenant();
+    const step = getProcess(config).steps[0] as unknown as { path: string };
+    step.path = "branch-c";
+
+    const result = validateTenantConfig(config);
+
+    expect(result.errors).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-config",
+        path: expect.stringContaining("steps[0].path"),
       }),
     );
   });

@@ -46,7 +46,10 @@ def _row() -> dict[str, Any]:
 def _repository(executor: RecordingExecutor) -> PostgresHybridRetrievalRepository:
     return PostgresHybridRetrievalRepository(
         executor,
-        config=HybridRetrievalConfig(expected_embedding_dimensions=3),
+        config=HybridRetrievalConfig(
+            expected_embedding_dimensions=3,
+            embedding_model="embed-v1",
+        ),
     )
 
 
@@ -77,11 +80,17 @@ async def test_hybrid_sql_enforces_scope_publication_and_current_version() -> No
     assert "<=> CAST(:query_embedding AS vector)" in sql
     assert "similarity(e.evidence_text, :query_text)" in sql
     assert "FULL OUTER JOIN lexical_ranked" in sql
+    assert "e.embedding_model = :embedding_model" in sql
+    assert "FROM products AS product" in sql
+    assert "product.status = 'published'" in sql
+    assert "FROM case_studies AS case_study" in sql
+    assert "case_study.status = 'published'" in sql
     assert ":rrf_k + v.vector_rank" in sql
     assert parameters["query_embedding"] == "[0.1,0.2,0.3]"
     assert parameters["published_review_status"] == "approved"
     assert parameters["public_visibility"] == "public"
     assert parameters["active_document_status"] == "published"
+    assert parameters["embedding_model"] == "embed-v1"
     assert evidence[0].evidence_id == "chunk-1"
     assert evidence[0].source_url == "https://example.test/source"
     assert evidence[0].score == pytest.approx(0.031)
@@ -109,6 +118,7 @@ async def test_lexical_path_has_no_vector_expression_but_keeps_all_scope_filters
     assert "v.review_status = :published_review_status" in sql
     assert "c.visibility = :public_visibility" in sql
     assert "query_embedding" not in parameters
+    assert parameters["embedding_model"] == "embed-v1"
 
 
 def test_sql_schema_rejects_identifier_injection() -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from functools import lru_cache
+from ipaddress import ip_network
 from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
@@ -25,6 +27,7 @@ class Settings(BaseSettings):
     app_name: str = "cf-ai-card"
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
+    metrics_bearer_token: SecretStr | None = None
     cors_allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:4173", "http://localhost:4173"]
     )
@@ -39,8 +42,31 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
 
     jwt_signing_key: SecretStr = SecretStr("replace-with-at-least-32-random-bytes")
+    field_encryption_key: SecretStr = SecretStr("replace-with-kms-backed-key")
+    field_encryption_key_ref: str = Field(default="local-v1", min_length=1, max_length=128)
+    field_encryption_previous_keys: SecretStr | None = None
+    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     visitor_token_ttl_seconds: int = Field(default=7_200, ge=300, le=86_400)
     access_token_ttl_seconds: int = Field(default=900, ge=300, le=3_600)
+    refresh_token_ttl_seconds: int = Field(default=604_800, ge=3_600, le=7_776_000)
+    staff_login_max_failures: int = Field(default=5, ge=3, le=20)
+    staff_login_lock_seconds: int = Field(default=900, ge=60, le=86_400)
+    staff_login_ip_rate_limit_per_minute: int = Field(default=30, ge=1, le=1_000)
+    staff_login_account_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
+    staff_refresh_ip_rate_limit_per_minute: int = Field(default=60, ge=1, le=1_000)
+    staff_refresh_cookie_name: str = Field(
+        default="cf_staff_refresh",
+        pattern=r"^[A-Za-z0-9_-]{3,80}$",
+    )
+    staff_csrf_cookie_name: str = Field(
+        default="cf_staff_csrf",
+        pattern=r"^[A-Za-z0-9_-]{3,80}$",
+    )
+    staff_auth_cookie_secure: bool = False
+    staff_auth_cookie_samesite: Literal["strict", "lax"] = "strict"
+    admin_bootstrap_tenant_slug: str | None = None
+    admin_bootstrap_account: str | None = None
+    admin_bootstrap_password: SecretStr | None = None
 
     llm_provider: str = "deepseek"
     llm_base_url: str = "https://api.deepseek.com"
@@ -71,6 +97,8 @@ class Settings(BaseSettings):
     retrieval_min_lexical_score: float = Field(default=0.08, ge=0, le=1)
 
     public_chat_rate_limit_per_minute: int = Field(default=10, ge=1, le=300)
+    public_chat_ip_card_rate_limit_per_minute: int = Field(default=20, ge=1, le=1_000)
+    public_visit_ip_card_rate_limit_per_minute: int = Field(default=60, ge=1, le=2_000)
     max_message_chars: int = Field(default=2_000, ge=100, le=10_000)
     max_conversation_messages: int = Field(default=30, ge=2, le=200)
     model_daily_budget_cny: float = Field(default=100.0, gt=0)
@@ -90,7 +118,42 @@ class Settings(BaseSettings):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
 
-    @field_validator("llm_api_key", "embedding_api_key", mode="before")
+    @field_validator("trusted_proxy_cidrs", mode="before")
+    @classmethod
+    def parse_trusted_proxy_cidrs(cls, value: object) -> object:
+        if isinstance(value, str) and not value.lstrip().startswith("["):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("trusted_proxy_cidrs")
+    @classmethod
+    def validate_trusted_proxy_cidrs(cls, value: list[str]) -> list[str]:
+        for item in value:
+            try:
+                ip_network(item, strict=False)
+            except ValueError as exc:
+                raise ValueError(f"invalid trusted proxy CIDR: {item}") from exc
+        return value
+
+    @field_validator("field_encryption_key_ref")
+    @classmethod
+    def validate_field_encryption_key_ref(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or any(
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:/-"
+            for character in normalized
+        ):
+            raise ValueError("FIELD_ENCRYPTION_KEY_REF has an invalid format")
+        return normalized
+
+    @field_validator(
+        "llm_api_key",
+        "embedding_api_key",
+        "admin_bootstrap_password",
+        "field_encryption_previous_keys",
+        "metrics_bearer_token",
+        mode="before",
+    )
     @classmethod
     def empty_secret_is_unconfigured(cls, value: object) -> object:
         if value is None:
@@ -101,6 +164,14 @@ class Settings(BaseSettings):
             return None
         return value
 
+    @field_validator("admin_bootstrap_tenant_slug", "admin_bootstrap_account", mode="before")
+    @classmethod
+    def empty_bootstrap_text_is_unconfigured(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         if self.app_env in {"staging", "production"}:
@@ -108,6 +179,41 @@ class Settings(BaseSettings):
             if signing_key.startswith("replace-") or len(signing_key) < 32:
                 raise ValueError(
                     "JWT_SIGNING_KEY must be a strong secret outside local development"
+                )
+            encryption_key = self.field_encryption_key.get_secret_value()
+            if encryption_key.startswith("replace-") or len(encryption_key) < 32:
+                raise ValueError(
+                    "FIELD_ENCRYPTION_KEY must be a strong secret outside local development"
+                )
+            if self.field_encryption_key_ref.casefold().startswith("local"):
+                raise ValueError(
+                    "FIELD_ENCRYPTION_KEY_REF must identify a managed key outside local "
+                    "development"
+                )
+            if self.field_encryption_previous_keys is not None:
+                try:
+                    previous_keys = json.loads(
+                        self.field_encryption_previous_keys.get_secret_value()
+                    )
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        "FIELD_ENCRYPTION_PREVIOUS_KEYS must be a secret JSON object"
+                    ) from exc
+                if not isinstance(previous_keys, dict) or not all(
+                    isinstance(reference, str)
+                    and isinstance(secret, str)
+                    and len(secret) >= 32
+                    and not secret.startswith("replace-")
+                    for reference, secret in previous_keys.items()
+                ):
+                    raise ValueError(
+                        "FIELD_ENCRYPTION_PREVIOUS_KEYS must contain strong referenced keys"
+                    )
+            if self.app_env == "production" and not self.staff_auth_cookie_secure:
+                raise ValueError("STAFF_AUTH_COOKIE_SECURE must be true in production")
+            if self.metrics_bearer_token is None:
+                raise ValueError(
+                    "METRICS_BEARER_TOKEN is required outside local development"
                 )
             if not self.llm_api_key:
                 raise ValueError("LLM_API_KEY is required outside local development")
@@ -123,6 +229,33 @@ class Settings(BaseSettings):
                 "EMBEDDING_BASE_URL, EMBEDDING_API_KEY and EMBEDDING_MODEL are required "
                 "when EMBEDDING_PROVIDER is enabled"
             )
+        bootstrap_values = (
+            self.admin_bootstrap_tenant_slug,
+            self.admin_bootstrap_account,
+            self.admin_bootstrap_password,
+        )
+        if any(value is not None for value in bootstrap_values) and not all(
+            value is not None for value in bootstrap_values
+        ):
+            raise ValueError(
+                "ADMIN_BOOTSTRAP_TENANT_SLUG, ADMIN_BOOTSTRAP_ACCOUNT and "
+                "ADMIN_BOOTSTRAP_PASSWORD must be configured together"
+            )
+        if self.admin_bootstrap_tenant_slug and not all(
+            character.islower() or character.isdigit() or character == "-"
+            for character in self.admin_bootstrap_tenant_slug
+        ):
+            raise ValueError("ADMIN_BOOTSTRAP_TENANT_SLUG has an invalid format")
+        if self.admin_bootstrap_account and not 3 <= len(self.admin_bootstrap_account) <= 200:
+            raise ValueError("ADMIN_BOOTSTRAP_ACCOUNT length is invalid")
+        if self.admin_bootstrap_password:
+            password = self.admin_bootstrap_password.get_secret_value()
+            if not 12 <= len(password) <= 200:
+                raise ValueError("ADMIN_BOOTSTRAP_PASSWORD must contain 12-200 characters")
+        if self.staff_refresh_cookie_name == self.staff_csrf_cookie_name:
+            raise ValueError("staff refresh and CSRF cookie names must be different")
+        if "*" in self.cors_allowed_origins and self.app_env in {"staging", "production"}:
+            raise ValueError("credentialed CORS cannot use a wildcard origin")
         if self.llm_thinking == "enabled" and self.llm_temperature != 0.1:
             # DeepSeek V4 ignores sampling temperature in thinking mode. Rejecting a
             # misleading production configuration is safer than silently accepting it.

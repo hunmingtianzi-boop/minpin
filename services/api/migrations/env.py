@@ -5,7 +5,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import Enum, String, pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -19,6 +19,57 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
+
+
+def compare_column_type(
+    _context: object,
+    _inspected_column: object,
+    _metadata_column: object,
+    inspected_type: object,
+    metadata_type: object,
+) -> bool | None:
+    """Treat reflected VARCHAR + CHECK enums as the declared non-native enum.
+
+    PostgreSQL reflection intentionally exposes the storage type rather than
+    reconstructing SQLAlchemy's Python enum wrapper. The migration DDL and
+    database contract tests own the CHECK constraints and permitted values.
+    """
+
+    if isinstance(metadata_type, Enum) and isinstance(inspected_type, String):
+        return False
+    return None
+
+
+def _index_column_names(value: object) -> tuple[str, ...]:
+    expressions = getattr(value, "expressions", ())
+    result: list[str] = []
+    for expression in expressions:
+        current = getattr(expression, "element", expression)
+        name = getattr(current, "name", None)
+        if name is None:
+            return ()
+        result.append(str(name))
+    return tuple(result)
+
+
+def include_schema_object(
+    obj: object,
+    name: str | None,
+    type_: str,
+    _reflected: bool,
+    compare_to: object | None,
+) -> bool:
+    """Ignore only reflection-only ordering differences for the same index.
+
+    A missing index still has ``compare_to=None`` and remains a migration drift.
+    """
+
+    if type_ == "index" and compare_to is not None and name == getattr(compare_to, "name", None):
+        left = _index_column_names(obj)
+        right = _index_column_names(compare_to)
+        if left and left == right:
+            return False
+    return True
 
 
 def database_url() -> str:
@@ -35,8 +86,9 @@ def database_url() -> str:
 def migration_options() -> dict[str, object]:
     return {
         "target_metadata": target_metadata,
-        "compare_type": True,
+        "compare_type": compare_column_type,
         "compare_server_default": True,
+        "include_object": include_schema_object,
         "include_schemas": True,
         "transaction_per_migration": True,
     }

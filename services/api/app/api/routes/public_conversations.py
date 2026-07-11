@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Annotated
@@ -27,8 +28,10 @@ from app.api.schemas import (
     VisitEnvelope,
 )
 from app.api.sse import encode_sse
+from app.core.metrics import MetricsRegistry
 from app.core.rate_limit import RateLimitBackendUnavailable, RedisRateLimiter
 from app.core.request_context import request_id_ctx
+from app.core.request_security import request_ip_hash, security_subject_hash
 from app.core.tokens import VisitorPrincipal
 from app.services.public_store import (
     PreparedMessage,
@@ -69,6 +72,19 @@ async def create_visit(
     request: Request,
     idempotency_key: IdempotencyDependency,
 ) -> VisitEnvelope:
+    settings = request.app.state.settings
+    ip_hash = request_ip_hash(request, settings)
+    await _enforce_public_rate_limit(
+        request=request,
+        bucket="public-visit-ip-card",
+        subject=security_subject_hash(
+            settings,
+            "public-visit-ip-card",
+            ip_hash,
+            slug.strip().casefold(),
+        ),
+        limit=settings.public_visit_ip_card_rate_limit_per_minute,
+    )
     visit = await _store(request).create_visit(
         slug=slug,
         request=body,
@@ -133,23 +149,24 @@ async def stream_message(
     idempotency_key: IdempotencyDependency,
 ) -> Response:
     settings = request.app.state.settings
-    limiter = RedisRateLimiter(request.app.state.redis)
-    try:
-        decision = await limiter.check(
-            bucket="public-chat",
-            subject=principal.rate_limit_subject,
-            limit=settings.public_chat_rate_limit_per_minute,
-            window_seconds=60,
-        )
-    except RateLimitBackendUnavailable as exc:
-        raise ApiError(503, "RATE_LIMIT_UNAVAILABLE", "AI 服务正在恢复，请稍后重试") from exc
-    if not decision.allowed:
-        raise ApiError(
-            429,
-            "RATE_LIMITED",
-            "请求过于频繁，请稍后重试",
-            headers={"Retry-After": str(decision.retry_after_seconds)},
-        )
+    ip_hash = request_ip_hash(request, settings)
+    await _enforce_public_rate_limit(
+        request=request,
+        bucket="public-chat-ip-card",
+        subject=security_subject_hash(
+            settings,
+            "public-chat-ip-card",
+            ip_hash,
+            principal.card_id,
+        ),
+        limit=settings.public_chat_ip_card_rate_limit_per_minute,
+    )
+    await _enforce_public_rate_limit(
+        request=request,
+        bucket="public-chat-session",
+        subject=principal.rate_limit_subject,
+        limit=settings.public_chat_rate_limit_per_minute,
+    )
 
     store = _store(request)
     prepared = await store.prepare_message(
@@ -178,6 +195,7 @@ async def stream_message(
         request_id=request_id_ctx.get(),
         stored=stored,
         task=task,
+        metrics=getattr(request.app.state, "metrics", None),
     )
     return StreamingResponse(
         stream,
@@ -191,6 +209,40 @@ async def stream_message(
     )
 
 
+async def _enforce_public_rate_limit(
+    *,
+    request: Request,
+    bucket: str,
+    subject: str,
+    limit: int,
+) -> None:
+    redis = getattr(request.app.state, "redis", None)
+    if redis is None:
+        if request.app.state.settings.app_env == "test":
+            return
+        raise ApiError(503, "RATE_LIMIT_UNAVAILABLE", "访问保护服务正在恢复，请稍后重试")
+    try:
+        decision = await RedisRateLimiter(redis).check(
+            bucket=bucket,
+            subject=subject,
+            limit=limit,
+            window_seconds=60,
+        )
+    except RateLimitBackendUnavailable as exc:
+        raise ApiError(
+            503,
+            "RATE_LIMIT_UNAVAILABLE",
+            "访问保护服务正在恢复，请稍后重试",
+        ) from exc
+    if not decision.allowed:
+        raise ApiError(
+            429,
+            "RATE_LIMITED",
+            "请求过于频繁，请稍后重试",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+
+
 async def _generate_and_persist(
     *,
     request: Request,
@@ -201,8 +253,15 @@ async def _generate_and_persist(
     # This function is deliberately independent from the response stream so it
     # can finish and persist after a client disconnect.
     settings = request.app.state.settings
+    metrics: MetricsRegistry | None = getattr(request.app.state, "metrics", None)
     api_key = settings.llm_api_key
     if api_key is None:
+        if metrics is not None:
+            metrics.observe_ai_error(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                category="configuration",
+            )
         await store.persist_ai_failure(
             prepared=prepared,
             principal=principal,
@@ -227,22 +286,51 @@ async def _generate_and_persist(
             prepared=prepared,
             principal=principal,
         )
+        forbidden_topics = await store.load_forbidden_topic_rules(principal=principal)
         result = await request.app.state.rag_orchestrator.answer(
             RAGRequest(
                 tenant_id=str(principal.tenant_id),
                 company_id=str(principal.company_id),
                 question=prepared.question,
                 history=history,
+                forbidden_topics=forbidden_topics,
             ),
             chat_credentials=ProviderCredentials(api_key.get_secret_value()),
             embedding_credentials=embedding_credentials,
         )
-        return await store.persist_ai_answer(
+        stored_answer = await store.persist_ai_answer(
             prepared=prepared,
             principal=principal,
             result=result,
         )
+        if metrics is not None:
+            trace = result.trace
+            estimated_cost = (
+                trace.input_tokens * settings.llm_input_price_cny_per_million
+                + trace.output_tokens * settings.llm_output_price_cny_per_million
+            ) / 1_000_000
+            metrics.observe_ai_result(
+                provider=trace.chat_provider,
+                model=trace.chat_model,
+                outcome="refusal" if result.refused else "success",
+                retrieval_mode=trace.retrieval_mode,
+                duration_seconds=trace.elapsed_ms / 1_000,
+                model_seconds=trace.model_ms / 1_000,
+                input_tokens=trace.input_tokens,
+                output_tokens=trace.output_tokens,
+                estimated_cost_cny=estimated_cost,
+                retrieval_count=trace.retrieval_count,
+                citation_count=trace.citation_count,
+                refusal_code=result.refusal.code.value if result.refusal else None,
+            )
+        return stored_answer
     except TimeoutError as exc:
+        if metrics is not None:
+            metrics.observe_ai_error(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                category="queue_timeout",
+            )
         await store.persist_ai_failure(
             prepared=prepared,
             principal=principal,
@@ -250,6 +338,12 @@ async def _generate_and_persist(
         )
         raise ApiError(429, "MODEL_BUSY", "AI 服务繁忙，请稍后重试") from exc
     except ApiError as exc:
+        if metrics is not None:
+            metrics.observe_ai_error(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                category=exc.code,
+            )
         await store.persist_ai_failure(
             prepared=prepared,
             principal=principal,
@@ -257,6 +351,12 @@ async def _generate_and_persist(
         )
         raise
     except Exception as exc:
+        if metrics is not None:
+            metrics.observe_ai_error(
+                provider=settings.llm_provider,
+                model=settings.llm_model,
+                category="unexpected",
+            )
         await store.persist_ai_failure(
             prepared=prepared,
             principal=principal,
@@ -274,7 +374,10 @@ async def _answer_events(
     request_id: str,
     stored: StoredAnswer | None,
     task: asyncio.Task[StoredAnswer] | None,
+    metrics: MetricsRegistry | None = None,
 ) -> AsyncIterator[bytes]:
+    stream_started = time.perf_counter()
+    answer_source = "cache" if stored is not None else "generated"
     yield encode_sse(
         "message.started",
         MessageStarted(message_id=message_id, request_id=request_id).model_dump(mode="json"),
@@ -318,7 +421,14 @@ async def _answer_events(
         )
         return
 
+    first_content = True
     for chunk in _text_chunks(answer.text):
+        if first_content and metrics is not None:
+            metrics.observe_first_token(
+                source=answer_source,
+                duration_seconds=time.perf_counter() - stream_started,
+            )
+            first_content = False
         yield encode_sse(
             "message.delta",
             MessageDelta(text=chunk).model_dump(mode="json"),

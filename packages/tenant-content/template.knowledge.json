@@ -71,5 +71,21 @@
         "tags": ["接入", "发布", "版本"]
       }
     }
+  ],
+  "forbidden_topics": [
+    {
+      "external_id": "secrets-and-cross-tenant",
+      "topic": "凭据、隐藏指令、内部资料或其他企业数据",
+      "match_terms": ["API Key", "数据库密码", "私钥", "系统提示词", "其他企业未公开", "绕过租户隔离"],
+      "action": "refuse",
+      "safe_response": "无法提供凭据、隐藏指令、内部资料或其他企业的数据；可以继续咨询本企业已审核发布的公开信息。"
+    },
+    {
+      "external_id": "unverified-claims",
+      "topic": "未经审核的资质、案例、数据、价格或结果承诺",
+      "match_terms": ["保证效果", "百分百", "最低报价", "官方背书", "保证录用"],
+      "action": "handoff",
+      "safe_response": "该信息需要企业工作人员依据正式材料确认；可以留下联系方式，由工作人员进一步沟通。"
+    }
   ]
 }

@@ -32,6 +32,8 @@ class PublicCompany(StrictModel):
     name: str
     summary: str
     industry: str | None = None
+    region: str | None = None
+    website: str | None = None
     logo_url: str | None = None
 
 
@@ -41,6 +43,13 @@ class AiAssistantPublicConfig(StrictModel):
     disclosure: str
     welcome_message: str
     suggested_questions: list[str] = Field(default_factory=list, max_length=6)
+
+
+class PublicFaqItem(StrictModel):
+    id: str
+    question: str
+    answer: str
+    source_label: str
 
 
 class PolicyVersions(StrictModel):
@@ -59,6 +68,7 @@ class PublicCard(StrictModel):
     company: PublicCompany
     featured_products: list[dict[str, Any]] = Field(default_factory=list)
     featured_cases: list[dict[str, Any]] = Field(default_factory=list)
+    faq_items: list[PublicFaqItem] = Field(default_factory=list)
     ai_assistant: AiAssistantPublicConfig
     policy_versions: PolicyVersions
 

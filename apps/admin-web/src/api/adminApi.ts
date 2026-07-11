@@ -1,0 +1,777 @@
+import { apiClient, ApiClient, ApiError, unwrapData } from "./client";
+import type {
+  AdminUser,
+  CardSettings,
+  CardSettingsInput,
+  CaseStudy,
+  CaseStudyInput,
+  CompanyProfile,
+  CompanyProfileInput,
+  ContentVisibility,
+  ForbiddenAction,
+  ForbiddenTopic,
+  ForbiddenTopicInput,
+  KnowledgeDocument,
+  KnowledgeDocumentDetail,
+  KnowledgeDocumentInput,
+  KnowledgeVisibility,
+  ManagedCard,
+  ManagedCardInput,
+  Product,
+  ProductInput,
+} from "./types";
+
+type JsonRecord = Record<string, unknown>;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function optionalString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string") return value;
+  }
+  return "";
+}
+
+function nullableString(value: string): string | null {
+  const normalized = value.trim();
+  return normalized || null;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function requireRecord(payload: unknown, label: string): JsonRecord {
+  const data = unwrapData(payload);
+  if (!isRecord(data)) {
+    throw new ApiError(`${label}接口返回了无法识别的数据。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return data;
+}
+
+function requireNestedRecord(
+  data: JsonRecord,
+  field: string,
+  label: string,
+): JsonRecord {
+  const value = data[field];
+  if (!isRecord(value)) {
+    throw new ApiError(`${label}缺少 ${field}。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return value;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value) {
+    throw new ApiError(`${label}缺少有效字符串。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return value;
+}
+
+function requireId(data: JsonRecord, label: string): string {
+  return requireString(data.id, `${label} id`);
+}
+
+function normalizeCompany(payload: unknown): CompanyProfile {
+  const raw = requireRecord(payload, "企业资料");
+  return {
+    id: typeof raw.id === "string" ? raw.id : undefined,
+    name: optionalString(raw.name),
+    summary: optionalString(raw.summary),
+    industry: optionalString(raw.industry),
+    region: optionalString(raw.region),
+    website: optionalString(raw.website),
+    logoUrl: optionalString(raw.logo_url),
+    version: optionalNumber(raw.version),
+    updatedAt: optionalString(raw.updated_at) || undefined,
+  };
+}
+
+function normalizeCard(payload: unknown): CardSettings {
+  const raw = requireRecord(payload, "名片设置");
+  const questions = Array.isArray(raw.suggested_questions)
+    ? raw.suggested_questions.filter(
+        (value): value is string => typeof value === "string",
+      )
+    : [];
+  const policies = isRecord(raw.policy_versions) ? raw.policy_versions : {};
+  return {
+    id: typeof raw.id === "string" ? raw.id : undefined,
+    displayName: optionalString(raw.display_name),
+    title: optionalString(raw.title),
+    slug: optionalString(raw.slug),
+    avatarUrl: optionalString(raw.avatar_url),
+    assistantName: optionalString(raw.assistant_name),
+    welcomeMessage: optionalString(raw.welcome_message),
+    suggestedQuestions: questions,
+    policyVersions: {
+      privacy: optionalString(policies.privacy),
+      chatNotice: optionalString(policies.chat_notice),
+      leadConsent: optionalString(policies.lead_consent),
+    },
+    status: optionalString(raw.status) || undefined,
+    version: optionalNumber(raw.version),
+    updatedAt: optionalString(raw.updated_at) || undefined,
+  };
+}
+
+function normalizeLatestVersion(raw: unknown): KnowledgeDocument["latestVersion"] {
+  if (!isRecord(raw)) return undefined;
+  return {
+    id: requireId(raw, "知识版本"),
+    versionNumber: optionalNumber(raw.version_number) ?? 1,
+    reviewStatus: optionalString(raw.review_status),
+    chunkCount: optionalNumber(raw.chunk_count) ?? 0,
+    indexedChunkCount: optionalNumber(raw.indexed_chunk_count) ?? 0,
+    indexStatus: optionalString(raw.index_status) || undefined,
+    indexErrorCode: optionalString(raw.index_error_code) || undefined,
+  };
+}
+
+function normalizeDocument(raw: unknown): KnowledgeDocument {
+  if (!isRecord(raw)) {
+    throw new ApiError("知识列表包含无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    id: requireId(raw, "知识条目"),
+    title: optionalString(raw.title),
+    status: optionalString(raw.status) || "draft",
+    version: optionalNumber(raw.version),
+    latestVersion: normalizeLatestVersion(raw.latest_version),
+    updatedAt: optionalString(raw.updated_at) || undefined,
+  };
+}
+
+function normalizeDocuments(payload: unknown): KnowledgeDocument[] {
+  const raw = unwrapData(payload);
+  if (!Array.isArray(raw)) {
+    throw new ApiError("知识列表接口返回了无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return raw.map(normalizeDocument);
+}
+
+function requireNumber(value: unknown, label: string): number {
+  const normalized = optionalNumber(value);
+  if (normalized === undefined) {
+    throw new ApiError(`${label}缺少有效数字。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return normalized;
+}
+
+function normalizeVisibility(value: unknown, label: string): ContentVisibility {
+  const visibility = optionalString(value) || "public";
+  if (!(["public", "authenticated", "internal"] as string[]).includes(visibility)) {
+    throw new ApiError(`${label}包含无法识别的 visibility。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return visibility as ContentVisibility;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function normalizeList<T>(
+  payload: unknown,
+  label: string,
+  normalizer: (value: unknown) => T,
+): T[] {
+  const raw = unwrapData(payload);
+  if (!Array.isArray(raw)) {
+    throw new ApiError(`${label}接口返回了无法识别的数据。`, {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return raw.map(normalizer);
+}
+
+function normalizeProduct(rawValue: unknown): Product {
+  if (!isRecord(rawValue)) {
+    throw new ApiError("产品列表包含无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    id: requireId(rawValue, "产品"),
+    slug: requireString(rawValue.slug, "产品 slug"),
+    name: optionalString(rawValue.name),
+    category: optionalString(rawValue.category),
+    summary: optionalString(rawValue.summary),
+    detail: optionalString(rawValue.detail),
+    audience: optionalString(rawValue.audience),
+    priceBoundary: optionalString(rawValue.price_boundary),
+    imageUrl: optionalString(rawValue.image_url),
+    visibility: normalizeVisibility(rawValue.visibility, "产品"),
+    sortOrder: optionalNumber(rawValue.sort_order) ?? 0,
+    settings: isRecord(rawValue.settings) ? rawValue.settings : {},
+    status: optionalString(rawValue.status) || "draft",
+    version: requireNumber(rawValue.version, "产品 version"),
+    publishedAt: optionalString(rawValue.published_at) || undefined,
+    createdAt: optionalString(rawValue.created_at) || undefined,
+    updatedAt: optionalString(rawValue.updated_at) || undefined,
+  };
+}
+
+function normalizeCaseStudy(rawValue: unknown): CaseStudy {
+  if (!isRecord(rawValue)) {
+    throw new ApiError("案例列表包含无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    id: requireId(rawValue, "案例"),
+    slug: requireString(rawValue.slug, "案例 slug"),
+    title: optionalString(rawValue.title),
+    industry: optionalString(rawValue.industry),
+    background: optionalString(rawValue.background),
+    solution: optionalString(rawValue.solution),
+    result: optionalString(rawValue.result),
+    clientDisplayName: optionalString(rawValue.client_display_name),
+    imageUrl: optionalString(rawValue.image_url),
+    visibility: normalizeVisibility(rawValue.visibility, "案例"),
+    sortOrder: optionalNumber(rawValue.sort_order) ?? 0,
+    settings: isRecord(rawValue.settings) ? rawValue.settings : {},
+    status: optionalString(rawValue.status) || "draft",
+    version: requireNumber(rawValue.version, "案例 version"),
+    publishedAt: optionalString(rawValue.published_at) || undefined,
+    createdAt: optionalString(rawValue.created_at) || undefined,
+    updatedAt: optionalString(rawValue.updated_at) || undefined,
+  };
+}
+
+function normalizeForbiddenTopic(rawValue: unknown): ForbiddenTopic {
+  if (!isRecord(rawValue)) {
+    throw new ApiError("禁答主题列表包含无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  const action = optionalString(rawValue.action) || "refuse";
+  if (!("refuse handoff safe_template".split(" ") as string[]).includes(action)) {
+    throw new ApiError("禁答主题包含无法识别的 action。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    id: requireId(rawValue, "禁答主题"),
+    topic: optionalString(rawValue.topic),
+    matchTerms: normalizeStringArray(rawValue.match_terms),
+    action: action as ForbiddenAction,
+    safeResponse: optionalString(rawValue.safe_response),
+    isActive: rawValue.is_active !== false,
+    version: requireNumber(rawValue.version, "禁答主题 version"),
+    createdAt: optionalString(rawValue.created_at) || undefined,
+    updatedAt: optionalString(rawValue.updated_at) || undefined,
+  };
+}
+
+function normalizeManagedCard(rawValue: unknown): ManagedCard {
+  if (!isRecord(rawValue)) {
+    throw new ApiError("名片列表包含无法识别的数据。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  const policies = isRecord(rawValue.policy_versions)
+    ? rawValue.policy_versions
+    : {};
+  return {
+    id: requireId(rawValue, "名片"),
+    ownerUserId: requireString(rawValue.owner_user_id, "名片 owner_user_id"),
+    slug: requireString(rawValue.slug, "名片 slug"),
+    displayName: optionalString(rawValue.display_name),
+    title: optionalString(rawValue.title),
+    avatarUrl: optionalString(rawValue.avatar_url),
+    assistantName: optionalString(rawValue.assistant_name),
+    welcomeMessage: optionalString(rawValue.welcome_message),
+    suggestedQuestions: normalizeStringArray(rawValue.suggested_questions),
+    policyVersions: {
+      privacy: optionalString(policies.privacy),
+      chatNotice: optionalString(policies.chat_notice),
+      leadConsent: optionalString(policies.lead_consent),
+    },
+    status: optionalString(rawValue.status) || "draft",
+    version: requireNumber(rawValue.version, "名片 version"),
+    shareUrl: requireString(rawValue.share_url, "名片 share_url"),
+    qrUrl: requireString(rawValue.qr_url, "名片 qr_url"),
+    publishedAt: optionalString(rawValue.published_at) || undefined,
+    createdAt: optionalString(rawValue.created_at) || undefined,
+    updatedAt: optionalString(rawValue.updated_at) || undefined,
+  };
+}
+
+function normalizeKnowledgeDetail(payload: unknown): KnowledgeDocumentDetail {
+  const raw = requireRecord(payload, "知识详情");
+  const record = normalizeDocument(raw);
+  const visibility = optionalString(raw.visibility) || "public";
+  if (!(["public", "authenticated", "internal"] as string[]).includes(visibility)) {
+    throw new ApiError("知识详情包含无法识别的 visibility。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    ...record,
+    rawText: optionalString(raw.raw_text),
+    visibility: visibility as KnowledgeVisibility,
+    metadata: isRecord(raw.metadata) ? raw.metadata : {},
+    editableVersionId: optionalString(raw.editable_version_id) || undefined,
+  };
+}
+
+function companyPayload(input: CompanyProfileInput) {
+  return {
+    name: input.name.trim(),
+    summary: input.summary.trim(),
+    industry: nullableString(input.industry),
+    region: nullableString(input.region),
+    website: nullableString(input.website),
+    logo_url: nullableString(input.logoUrl),
+  };
+}
+
+function cardPayload(input: CardSettingsInput) {
+  const policyVersions = Object.fromEntries(
+    [
+      ["privacy", input.policyVersions.privacy],
+      ["chat_notice", input.policyVersions.chatNotice],
+      ["lead_consent", input.policyVersions.leadConsent],
+    ]
+      .map(([key, value]) => [key, value.trim()] as const)
+      .filter(([, value]) => value.length > 0),
+  );
+  return {
+    slug: input.slug.trim(),
+    display_name: input.displayName.trim(),
+    title: input.title.trim(),
+    avatar_url: nullableString(input.avatarUrl),
+    assistant_name: nullableString(input.assistantName),
+    welcome_message: nullableString(input.welcomeMessage),
+    suggested_questions: input.suggestedQuestions
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 6),
+    policy_versions: policyVersions,
+  };
+}
+
+function knowledgeDraftPayload(input: KnowledgeDocumentInput) {
+  return {
+    raw_text: input.answer.trim(),
+    title: input.title.trim(),
+    visibility: input.visibility,
+    metadata: input.metadata,
+  };
+}
+
+function productPayload(input: ProductInput) {
+  return {
+    slug: input.slug.trim(),
+    name: input.name.trim(),
+    category: nullableString(input.category),
+    summary: input.summary.trim(),
+    detail: input.detail.trim(),
+    audience: nullableString(input.audience),
+    price_boundary: nullableString(input.priceBoundary),
+    image_url: nullableString(input.imageUrl),
+    visibility: input.visibility,
+    sort_order: input.sortOrder,
+    settings: input.settings,
+  };
+}
+
+function caseStudyPayload(input: CaseStudyInput) {
+  return {
+    slug: input.slug.trim(),
+    title: input.title.trim(),
+    industry: nullableString(input.industry),
+    background: input.background.trim(),
+    solution: input.solution.trim(),
+    result: input.result.trim(),
+    client_display_name: nullableString(input.clientDisplayName),
+    image_url: nullableString(input.imageUrl),
+    visibility: input.visibility,
+    sort_order: input.sortOrder,
+    settings: input.settings,
+  };
+}
+
+function forbiddenTopicPayload(input: ForbiddenTopicInput) {
+  return {
+    topic: input.topic.trim(),
+    match_terms: input.matchTerms.map((value) => value.trim()).filter(Boolean),
+    action: input.action,
+    safe_response: nullableString(input.safeResponse),
+  };
+}
+
+function managedCardPayload(input: ManagedCardInput, requireOwner: boolean) {
+  const ownerUserId = input.ownerUserId?.trim();
+  if (requireOwner && !ownerUserId) {
+    throw new ApiError("编辑名片时必须保留有效的所有者。", {
+      code: "INVALID_CARD_OWNER",
+    });
+  }
+  const policyVersions = Object.fromEntries(
+    [
+      ["privacy", input.policyVersions.privacy],
+      ["chat_notice", input.policyVersions.chatNotice],
+      ["lead_consent", input.policyVersions.leadConsent],
+    ]
+      .map(([key, value]) => [key, value.trim()] as const)
+      .filter(([, value]) => value.length > 0),
+  );
+  return {
+    ...(ownerUserId ? { owner_user_id: ownerUserId } : {}),
+    display_name: input.displayName.trim(),
+    title: input.title.trim(),
+    avatar_url: nullableString(input.avatarUrl),
+    assistant_name: nullableString(input.assistantName),
+    welcome_message: nullableString(input.welcomeMessage),
+    suggested_questions: input.suggestedQuestions
+      .map((value) => value.trim())
+      .filter(Boolean)
+      .slice(0, 6),
+    policy_versions: policyVersions,
+  };
+}
+
+export function createAdminApi(client: ApiClient) {
+  return {
+  async me(): Promise<AdminUser> {
+    const data = requireRecord(await client.get("/auth/me"), "当前用户");
+    const user = requireNestedRecord(data, "user", "当前用户");
+    const membership = requireNestedRecord(data, "membership", "当前用户");
+    const permissions = Array.isArray(membership.permissions)
+      ? membership.permissions.filter(
+          (value): value is string => typeof value === "string",
+        )
+      : [];
+    return {
+      id: requireId(user, "当前用户"),
+      displayName: requireString(user.display_name, "当前用户 display_name"),
+      membershipId: requireId(membership, "当前成员关系"),
+      tenantId: requireString(membership.tenant_id, "tenant_id"),
+      companyId: requireString(membership.company_id, "company_id"),
+      role: optionalString(membership.role) || undefined,
+      permissions,
+    };
+  },
+
+  async getCompanyProfile(): Promise<CompanyProfile> {
+    return normalizeCompany(await client.get("/admin/company/profile"));
+  },
+
+  async updateCompanyProfile(input: CompanyProfileInput): Promise<void> {
+    await client.put(
+      "/admin/company/profile",
+      companyPayload(input),
+      { version: input.version },
+    );
+  },
+
+  async getCard(): Promise<CardSettings> {
+    return normalizeCard(await client.get("/admin/card"));
+  },
+
+  async updateCard(input: CardSettingsInput): Promise<void> {
+    await client.put("/admin/card", cardPayload(input), {
+      version: input.version,
+    });
+  },
+
+  async listKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
+    return normalizeDocuments(
+      await client.get("/admin/knowledge/documents"),
+    );
+  },
+
+  async getKnowledgeDocument(id: string): Promise<KnowledgeDocumentDetail> {
+    return normalizeKnowledgeDetail(
+      await client.get(
+        `/admin/knowledge/documents/${encodeURIComponent(id)}`,
+      ),
+    );
+  },
+
+  async createKnowledgeDocument(title: string): Promise<string> {
+    const raw = requireRecord(
+      await client.post("/admin/knowledge/documents", {
+        title: title.trim(),
+        source_type: "faq",
+      }),
+      "新建知识",
+    );
+    return requireId(raw, "新建知识");
+  },
+
+  async updateKnowledgeDocument(
+    id: string,
+    input: KnowledgeDocumentInput,
+  ): Promise<void> {
+    await client.put(
+      `/admin/knowledge/documents/${encodeURIComponent(id)}`,
+      knowledgeDraftPayload(input),
+    );
+  },
+
+  async publishKnowledgeDocument(id: string): Promise<void> {
+    await client.post(
+      `/admin/knowledge/documents/${encodeURIComponent(id)}/publish`,
+      {},
+    );
+  },
+
+  async listProducts(): Promise<Product[]> {
+    return normalizeList(
+      await client.get("/admin/products?limit=100&offset=0"),
+      "产品列表",
+      normalizeProduct,
+    );
+  },
+
+  async createProduct(input: ProductInput): Promise<Product> {
+    return normalizeProduct(
+      unwrapData(await client.post("/admin/products", productPayload(input))),
+    );
+  },
+
+  async updateProduct(
+    id: string,
+    version: number,
+    input: ProductInput,
+  ): Promise<Product> {
+    return normalizeProduct(
+      unwrapData(
+        await client.patch(
+          `/admin/products/${encodeURIComponent(id)}`,
+          productPayload(input),
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async publishProduct(id: string, version: number): Promise<Product> {
+    return normalizeProduct(
+      unwrapData(
+        await client.post(
+          `/admin/products/${encodeURIComponent(id)}:publish`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async archiveProduct(id: string, version: number): Promise<Product> {
+    return normalizeProduct(
+      unwrapData(
+        await client.post(
+          `/admin/products/${encodeURIComponent(id)}/archive`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async deleteProduct(id: string, version: number): Promise<void> {
+    await client.delete(`/admin/products/${encodeURIComponent(id)}`, { version });
+  },
+
+  async listCaseStudies(): Promise<CaseStudy[]> {
+    return normalizeList(
+      await client.get("/admin/cases?limit=100&offset=0"),
+      "案例列表",
+      normalizeCaseStudy,
+    );
+  },
+
+  async createCaseStudy(input: CaseStudyInput): Promise<CaseStudy> {
+    return normalizeCaseStudy(
+      unwrapData(await client.post("/admin/cases", caseStudyPayload(input))),
+    );
+  },
+
+  async updateCaseStudy(
+    id: string,
+    version: number,
+    input: CaseStudyInput,
+  ): Promise<CaseStudy> {
+    return normalizeCaseStudy(
+      unwrapData(
+        await client.patch(
+          `/admin/cases/${encodeURIComponent(id)}`,
+          caseStudyPayload(input),
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async publishCaseStudy(id: string, version: number): Promise<CaseStudy> {
+    return normalizeCaseStudy(
+      unwrapData(
+        await client.post(
+          `/admin/cases/${encodeURIComponent(id)}:publish`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async archiveCaseStudy(id: string, version: number): Promise<CaseStudy> {
+    return normalizeCaseStudy(
+      unwrapData(
+        await client.post(
+          `/admin/case-studies/${encodeURIComponent(id)}/archive`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async deleteCaseStudy(id: string, version: number): Promise<void> {
+    await client.delete(`/admin/cases/${encodeURIComponent(id)}`, { version });
+  },
+
+  async listForbiddenTopics(): Promise<ForbiddenTopic[]> {
+    return normalizeList(
+      await client.get("/admin/forbidden-topics?limit=100&offset=0"),
+      "禁答主题列表",
+      normalizeForbiddenTopic,
+    );
+  },
+
+  async createForbiddenTopic(
+    input: ForbiddenTopicInput,
+  ): Promise<ForbiddenTopic> {
+    return normalizeForbiddenTopic(
+      unwrapData(
+        await client.post("/admin/forbidden-topics", {
+          ...forbiddenTopicPayload(input),
+          is_active: input.isActive,
+        }),
+      ),
+    );
+  },
+
+  async updateForbiddenTopic(
+    id: string,
+    version: number,
+    input: ForbiddenTopicInput,
+  ): Promise<ForbiddenTopic> {
+    return normalizeForbiddenTopic(
+      unwrapData(
+        await client.patch(
+          `/admin/forbidden-topics/${encodeURIComponent(id)}`,
+          forbiddenTopicPayload(input),
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async setForbiddenTopicActive(
+    id: string,
+    version: number,
+    active: boolean,
+  ): Promise<ForbiddenTopic> {
+    return normalizeForbiddenTopic(
+      unwrapData(
+        await client.post(
+          `/admin/forbidden-topics/${encodeURIComponent(id)}/${
+            active ? "activate" : "deactivate"
+          }`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async deleteForbiddenTopic(id: string, version: number): Promise<void> {
+    await client.delete(`/admin/forbidden-topics/${encodeURIComponent(id)}`, {
+      version,
+    });
+  },
+
+  async listManagedCards(): Promise<ManagedCard[]> {
+    return normalizeList(
+      await client.get("/admin/cards?limit=100&offset=0"),
+      "名片列表",
+      normalizeManagedCard,
+    );
+  },
+
+  async createManagedCard(input: ManagedCardInput): Promise<ManagedCard> {
+    return normalizeManagedCard(
+      unwrapData(
+        await client.post("/admin/cards", managedCardPayload(input, false)),
+      ),
+    );
+  },
+
+  async updateManagedCard(
+    id: string,
+    version: number,
+    input: ManagedCardInput,
+  ): Promise<ManagedCard> {
+    return normalizeManagedCard(
+      unwrapData(
+        await client.patch(
+          `/admin/cards/${encodeURIComponent(id)}`,
+          managedCardPayload(input, true),
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async publishManagedCard(id: string, version: number): Promise<ManagedCard> {
+    return normalizeManagedCard(
+      unwrapData(
+        await client.post(
+          `/admin/cards/${encodeURIComponent(id)}:publish`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+
+  async deactivateManagedCard(
+    id: string,
+    version: number,
+  ): Promise<ManagedCard> {
+    return normalizeManagedCard(
+      unwrapData(
+        await client.post(
+          `/admin/cards/${encodeURIComponent(id)}:deactivate`,
+          {},
+          { version },
+        ),
+      ),
+    );
+  },
+  };
+}
+
+export const adminApi = createAdminApi(apiClient);

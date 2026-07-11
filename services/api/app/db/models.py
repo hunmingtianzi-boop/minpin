@@ -74,6 +74,30 @@ class ContentStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class LeadStatus(StrEnum):
+    NEW = "new"
+    VIEWED = "viewed"
+    FOLLOWING = "following"
+    WON = "won"
+    LOST = "lost"
+    INVALID = "invalid"
+
+
+class PrivacyRequestType(StrEnum):
+    ACCESS = "access"
+    CORRECTION = "correction"
+    DELETION = "deletion"
+    WITHDRAW_CONSENT = "withdraw_consent"
+
+
+class PrivacyRequestStatus(StrEnum):
+    PENDING = "pending"
+    VERIFIED = "verified"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    REJECTED = "rejected"
+
+
 class MembershipRole(StrEnum):
     PLATFORM_ADMIN = "platform_admin"
     COMPANY_ADMIN = "company_admin"
@@ -160,8 +184,16 @@ class OutboxStatus(StrEnum):
 
 class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "tenants"
-    __table_args__ = (CheckConstraint("char_length(btrim(name)) > 0", name="name_not_blank"),)
+    __table_args__ = (
+        CheckConstraint("char_length(btrim(name)) > 0", name="name_not_blank"),
+        CheckConstraint(
+            "slug ~ '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'",
+            name="slug_format",
+        ),
+        UniqueConstraint("slug", name="uq_tenants_slug"),
+    )
 
+    slug: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     tenant_type: Mapped[TenantType] = mapped_column(
         "type",
@@ -244,12 +276,11 @@ class Membership(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ["companies.tenant_id", "companies.id"],
             ondelete="CASCADE",
         ),
-        Index(
-            "uq_memberships_user_scope",
+        UniqueConstraint(
             "user_id",
             "tenant_id",
             "company_id",
-            unique=True,
+            name="uq_memberships_user_scope",
             postgresql_nulls_not_distinct=True,
         ),
         Index("ix_memberships_scope_status", "tenant_id", "company_id", "status"),
@@ -286,16 +317,71 @@ class AuthSession(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             ["companies.tenant_id", "companies.id"],
             ondelete="CASCADE",
         ),
+        UniqueConstraint("refresh_token_hash", name="uq_auth_sessions_refresh_token_hash"),
         Index("ix_auth_sessions_user_expires", "user_id", "expires_at"),
     )
 
     user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     company_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
-    refresh_token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoke_reason: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
+class StaffCredential(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """Unscoped login index; all post-password reads must switch into its scope."""
+
+    __tablename__ = "staff_credentials"
+    __table_args__ = (
+        ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["membership_id"], ["memberships.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("account_normalized", name="uq_staff_credentials_account"),
+        UniqueConstraint("membership_id", name="uq_staff_credentials_membership"),
+        CheckConstraint(
+            "account_normalized = lower(btrim(account_normalized)) "
+            "AND char_length(account_normalized) BETWEEN 3 AND 200",
+            name="account_normalized",
+        ),
+        CheckConstraint("failed_attempts >= 0", name="failed_attempts_non_negative"),
+        Index("ix_staff_credentials_scope", "tenant_id", "company_id", "user_id"),
+    )
+
+    user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    membership_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    company_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    account_normalized: Mapped[str] = mapped_column(String(200), nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(512), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    failed_attempts: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_authenticated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    password_changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
 
 class Card(
@@ -347,6 +433,207 @@ class Card(
     )
 
 
+class CardContactField(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "card_contact_fields"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "card_id"],
+            ["cards.tenant_id", "cards.company_id", "cards.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "company_id",
+            "card_id",
+            "field_type",
+            name="uq_card_contact_fields_card_type",
+        ),
+        CheckConstraint("sort_order >= 0", name="sort_order_non_negative"),
+        Index("ix_card_contact_fields_card_order", "card_id", "sort_order", "id"),
+    )
+
+    card_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    field_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(String(80), nullable=False)
+    value_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    value_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    visibility: Mapped[Visibility] = mapped_column(
+        db_enum(Visibility, "card_contact_visibility"),
+        nullable=False,
+        default=Visibility.PUBLIC,
+        server_default=text("'public'"),
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class Product(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    SoftDeleteMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    __tablename__ = "products"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_products_scope_id"),
+        UniqueConstraint("company_id", "slug", name="uq_products_company_slug"),
+        CheckConstraint("sort_order >= 0", name="sort_order_non_negative"),
+        CheckConstraint(
+            "status <> 'published' OR published_at IS NOT NULL",
+            name="published_requires_timestamp",
+        ),
+        Index("ix_products_company_status_updated", "company_id", "status", "updated_at"),
+        Index("ix_products_company_category_order", "company_id", "category", "sort_order"),
+    )
+
+    slug: Mapped[str] = mapped_column(String(96), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    audience: Mapped[str | None] = mapped_column(Text, nullable=True)
+    price_boundary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(2_048), nullable=True)
+    visibility: Mapped[Visibility] = mapped_column(
+        db_enum(Visibility, "product_visibility"),
+        nullable=False,
+        default=Visibility.PUBLIC,
+        server_default=text("'public'"),
+    )
+    status: Mapped[ContentStatus] = mapped_column(
+        db_enum(ContentStatus, "product_status"),
+        nullable=False,
+        default=ContentStatus.DRAFT,
+        server_default=text("'draft'"),
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+
+
+class CaseStudy(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    SoftDeleteMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    __tablename__ = "case_studies"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_case_studies_scope_id"),
+        UniqueConstraint("company_id", "slug", name="uq_case_studies_company_slug"),
+        CheckConstraint("sort_order >= 0", name="sort_order_non_negative"),
+        CheckConstraint(
+            "status <> 'published' OR published_at IS NOT NULL",
+            name="published_requires_timestamp",
+        ),
+        Index(
+            "ix_case_studies_company_status_updated",
+            "company_id",
+            "status",
+            "updated_at",
+        ),
+        Index(
+            "ix_case_studies_company_industry_order",
+            "company_id",
+            "industry",
+            "sort_order",
+        ),
+    )
+
+    slug: Mapped[str] = mapped_column(String(96), nullable=False)
+    title: Mapped[str] = mapped_column(String(240), nullable=False)
+    industry: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    background: Mapped[str] = mapped_column(Text, nullable=False)
+    solution: Mapped[str] = mapped_column(Text, nullable=False)
+    result: Mapped[str] = mapped_column(Text, nullable=False)
+    client_display_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    image_url: Mapped[str | None] = mapped_column(String(2_048), nullable=True)
+    visibility: Mapped[Visibility] = mapped_column(
+        db_enum(Visibility, "case_study_visibility"),
+        nullable=False,
+        default=Visibility.PUBLIC,
+        server_default=text("'public'"),
+    )
+    status: Mapped[ContentStatus] = mapped_column(
+        db_enum(ContentStatus, "case_study_status"),
+        nullable=False,
+        default=ContentStatus.DRAFT,
+        server_default=text("'draft'"),
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    settings: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+
+
+class ForbiddenTopic(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    __tablename__ = "forbidden_topics"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_forbidden_topics_scope_id"),
+        CheckConstraint(
+            "action IN ('refuse', 'handoff', 'safe_template')",
+            name="action_allowed",
+        ),
+        Index("ix_forbidden_topics_company_active", "company_id", "is_active", "updated_at"),
+    )
+
+    topic: Mapped[str] = mapped_column(String(240), nullable=False)
+    match_terms: Mapped[list[str]] = mapped_column(
+        ARRAY(String(160)),
+        nullable=False,
+        default=list,
+        server_default=text("'{}'::varchar[]"),
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False, server_default=text("'refuse'"))
+    safe_response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+
+
 class Visitor(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
     __tablename__ = "visitors"
     __table_args__ = (
@@ -394,6 +681,7 @@ class VisitorProfile(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Bas
     email_hmac: Mapped[str | None] = mapped_column(String(64), nullable=True)
     wechat_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     company_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    demand_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
 
 
@@ -542,6 +830,13 @@ class Message(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
         ),
         UniqueConstraint("tenant_id", "company_id", "id", name="uq_messages_scope_id"),
         Index("ix_messages_conversation_created", "conversation_id", "created_at"),
+        Index(
+            "uq_messages_client_message",
+            "conversation_id",
+            "client_message_id",
+            unique=True,
+            postgresql_where=text("client_message_id IS NOT NULL"),
+        ),
     )
 
     conversation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
@@ -676,13 +971,23 @@ class AIRun(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
             ondelete="RESTRICT",
         ),
         UniqueConstraint("message_id", name="uq_ai_runs_message_id"),
+        CheckConstraint(
+            "message_id IS NOT NULL OR (resource_type IS NOT NULL AND resource_id IS NOT NULL)",
+            name="source_reference_required",
+        ),
         CheckConstraint("input_tokens >= 0 AND output_tokens >= 0", name="tokens_non_negative"),
         CheckConstraint("total_latency_ms >= 0", name="latency_non_negative"),
         Index("ix_ai_runs_company_created", "company_id", "created_at"),
         Index("ix_ai_runs_trace_id", "trace_id"),
+        Index("ix_ai_runs_resource", "company_id", "resource_type", "resource_id"),
     )
 
-    message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    message_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    purpose: Mapped[str] = mapped_column(
+        String(80), nullable=False, default="rag_answer", server_default=text("'rag_answer'")
+    )
+    resource_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    resource_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     prompt_version_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     model_config_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     provider: Mapped[str] = mapped_column(String(80), nullable=False)
@@ -752,6 +1057,8 @@ class KnowledgeDocument(
             name="fk_knowledge_documents_current_version",
             use_alter=True,
             ondelete="RESTRICT",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         UniqueConstraint("tenant_id", "company_id", "id", name="uq_knowledge_documents_scope_id"),
         UniqueConstraint(
@@ -767,6 +1074,12 @@ class KnowledgeDocument(
         ),
         Index(
             "ix_knowledge_documents_company_status_updated", "company_id", "status", "updated_at"
+        ),
+        Index(
+            "ix_knowledge_documents_title_trgm",
+            "title",
+            postgresql_using="gin",
+            postgresql_ops={"title": "gin_trgm_ops"},
         ),
     )
 
@@ -1099,6 +1412,165 @@ class VisitSummary(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base)
     stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class Lead(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    __tablename__ = "leads"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "card_id"],
+            ["cards.tenant_id", "cards.company_id", "cards.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "visitor_id"],
+            ["visitors.tenant_id", "visitors.company_id", "visitors.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "conversation_id"],
+            ["conversations.tenant_id", "conversations.company_id", "conversations.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_leads_scope_id"),
+        CheckConstraint(
+            "priority IN ('low', 'medium', 'high')",
+            name="priority_allowed",
+        ),
+        Index("ix_leads_company_status_created", "company_id", "status", "created_at"),
+        Index("ix_leads_owner_status_created", "owner_user_id", "status", "created_at"),
+    )
+
+    card_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    visitor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    status: Mapped[LeadStatus] = mapped_column(
+        db_enum(LeadStatus, "lead_status"),
+        nullable=False,
+        default=LeadStatus.NEW,
+        server_default=text("'new'"),
+    )
+    priority: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="medium",
+        server_default=text("'medium'"),
+    )
+    requirement_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    interest_tags: Mapped[list[str]] = mapped_column(
+        ARRAY(String(160)),
+        nullable=False,
+        default=list,
+        server_default=text("'{}'::varchar[]"),
+    )
+    viewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class LeadFollowup(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
+    __tablename__ = "lead_followups"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "lead_id"],
+            ["leads.tenant_id", "leads.company_id", "leads.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["actor_user_id"], ["users.id"], ondelete="RESTRICT"),
+        CheckConstraint(
+            "followup_type IN ('note', 'call', 'message', 'meeting', 'status_change')",
+            name="type_allowed",
+        ),
+        Index("ix_lead_followups_lead_created", "lead_id", "created_at"),
+    )
+
+    lead_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    followup_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    next_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
+class PrivacyRequest(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "privacy_requests"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "visitor_id"],
+            ["visitors.tenant_id", "visitors.company_id", "visitors.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["handled_by"], ["users.id"], ondelete="SET NULL"),
+        Index("ix_privacy_requests_company_status_created", "company_id", "status", "created_at"),
+        Index("ix_privacy_requests_visitor_created", "visitor_id", "created_at"),
+    )
+
+    visitor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    request_type: Mapped[PrivacyRequestType] = mapped_column(
+        db_enum(PrivacyRequestType, "privacy_request_type"),
+        nullable=False,
+    )
+    status: Mapped[PrivacyRequestStatus] = mapped_column(
+        db_enum(PrivacyRequestStatus, "privacy_request_status"),
+        nullable=False,
+        default=PrivacyRequestStatus.PENDING,
+        server_default=text("'pending'"),
+    )
+    note_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    verification_method: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    handled_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    evidence: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+
+
+class Notification(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
+    __tablename__ = "notifications"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["recipient_user_id"], ["users.id"], ondelete="CASCADE"),
+        Index(
+            "ix_notifications_recipient_read_created",
+            "recipient_user_id",
+            "read_at",
+            "created_at",
+        ),
+    )
+
+    recipient_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    notification_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    resource_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class IdempotencyKey(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
     __tablename__ = "idempotency_keys"
     __table_args__ = (
@@ -1170,6 +1642,48 @@ class AuditLog(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
     )
 
 
+class SecurityEvent(UUIDPrimaryKeyMixin, Base):
+    """Unscoped authentication audit boundary.
+
+    Failed logins do not yet have a trusted tenant scope, so they cannot be
+    represented safely in a company-scoped audit row. Only keyed hashes and
+    identifiers are stored here, never credentials, tokens, or raw IP values.
+    """
+
+    __tablename__ = "security_events"
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('succeeded', 'failed', 'blocked')",
+            name="outcome_allowed",
+        ),
+        Index("ix_security_events_type_occurred", "event_type", "occurred_at"),
+        Index("ix_security_events_account_occurred", "account_hash", "occurred_at"),
+        Index("ix_security_events_ip_occurred", "request_ip_hash", "occurred_at"),
+    )
+
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(24), nullable=False)
+    account_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    membership_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    tenant_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    company_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    session_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    reason_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    event_data: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=text("'{}'::jsonb"),
+    )
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
     __tablename__ = "outbox_events"
     __table_args__ = (
@@ -1184,8 +1698,33 @@ class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
             "deduplication_key",
             name="uq_outbox_events_deduplication_key",
         ),
+        UniqueConstraint(
+            "tenant_id",
+            "company_id",
+            "id",
+            name="uq_outbox_events_scope_id",
+        ),
         CheckConstraint("attempts >= 0", name="attempts_non_negative"),
+        CheckConstraint(
+            """
+            status <> 'processing' OR (
+              locked_at IS NOT NULL
+              AND locked_by IS NOT NULL
+              AND lock_token IS NOT NULL
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at > locked_at
+            )
+            """,
+            name="processing_lease",
+        ),
         Index("ix_outbox_events_dispatch", "status", "available_at", "created_at"),
+        Index(
+            "ix_outbox_events_lease_recovery",
+            "status",
+            "lease_expires_at",
+            "available_at",
+            "created_at",
+        ),
         Index("ix_outbox_events_aggregate", "company_id", "aggregate_type", "aggregate_id"),
     )
 
@@ -1212,8 +1751,70 @@ class OutboxEvent(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lock_token: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class OutboxDelivery(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
+    __tablename__ = "outbox_deliveries"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "event_id"],
+            ["outbox_events.tenant_id", "outbox_events.company_id", "outbox_events.id"],
+            ondelete="CASCADE",
+            name="fk_outbox_deliveries_event_scope",
+        ),
+        UniqueConstraint(
+            "event_id",
+            "handler_name",
+            name="uq_outbox_deliveries_event_handler",
+        ),
+        CheckConstraint("char_length(result_hash) = 64", name="result_hash_sha256"),
+        Index("ix_outbox_deliveries_company_completed", "company_id", "completed_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    handler_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class WorkerJobResult(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "worker_job_results"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "event_id"],
+            ["outbox_events.tenant_id", "outbox_events.company_id", "outbox_events.id"],
+            ondelete="CASCADE",
+            name="fk_worker_job_results_event_scope",
+        ),
+        UniqueConstraint("event_id", name="uq_worker_job_results_event"),
+        CheckConstraint("schema_version > 0", name="schema_version_positive"),
+        CheckConstraint(
+            "status IN ('completed', 'passed', 'failed_gate')",
+            name="status_allowed",
+        ),
+        CheckConstraint("char_length(report_hash) = 64", name="report_hash_sha256"),
+        Index("ix_worker_job_results_company_created", "company_id", "created_at"),
+    )
+
+    event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(160), nullable=False)
+    result_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    report: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    report_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
 __all__ = [
@@ -1221,21 +1822,35 @@ __all__ = [
     "AuditLog",
     "AuthSession",
     "Card",
+    "CardContactField",
+    "CaseStudy",
     "Company",
     "ConsentRecord",
     "Conversation",
+    "ForbiddenTopic",
     "IdempotencyKey",
     "KnowledgeChunk",
     "KnowledgeDocument",
     "KnowledgeGap",
     "KnowledgeIndexJob",
     "KnowledgeVersion",
+    "Lead",
+    "LeadFollowup",
+    "LeadStatus",
     "Membership",
     "Message",
     "MessageCitation",
     "ModelConfig",
+    "Notification",
+    "OutboxDelivery",
     "OutboxEvent",
+    "PrivacyRequest",
+    "PrivacyRequestStatus",
+    "PrivacyRequestType",
+    "Product",
     "PromptVersion",
+    "SecurityEvent",
+    "StaffCredential",
     "Tenant",
     "User",
     "Visit",
@@ -1243,4 +1858,5 @@ __all__ = [
     "Visitor",
     "VisitorProfile",
     "VisitSummary",
+    "WorkerJobResult",
 ]

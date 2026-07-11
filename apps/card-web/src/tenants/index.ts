@@ -1,23 +1,25 @@
 import type { EnterpriseCardConfig } from "../domain/card";
-import { templateTenant } from "./template/tenant";
-import { tuotuTenant } from "./tuotu/tenant";
 
-export const tenantRegistry = {
-  template: templateTenant,
-  tuotu: tuotuTenant,
-} satisfies Record<string, EnterpriseCardConfig>;
+const tenantLoaders = {
+  template: () => import("./template/tenant").then((module) => module.templateTenant),
+  tuotu: () => import("./tuotu/tenant").then((module) => module.tuotuTenant),
+} satisfies Record<string, () => Promise<EnterpriseCardConfig>>;
 
-export type TenantSlug = keyof typeof tenantRegistry;
+export const registeredTenantSlugs = Object.freeze(Object.keys(tenantLoaders));
+export type TenantSlug = keyof typeof tenantLoaders;
 
 const normalizeSlug = (value: string | null | undefined) =>
   value?.trim().toLocaleLowerCase("en-US") ?? "";
 
 const isTenantSlug = (slug: string): slug is TenantSlug =>
-  Object.prototype.hasOwnProperty.call(tenantRegistry, slug);
+  Object.prototype.hasOwnProperty.call(tenantLoaders, slug);
+
+const isSafeRuntimeSlug = (slug: string) =>
+  /^[a-z0-9][a-z0-9-]{1,94}[a-z0-9]$/.test(slug);
 
 export function resolveTenantSlug(
   location: Pick<Location, "pathname" | "search">,
-): TenantSlug | undefined {
+): string | undefined {
   const pathMatch = location.pathname.match(/(?:^|\/)c\/([^/?#]+)/i);
   const pathSlug = normalizeSlug(pathMatch?.[1]);
   const querySlug = normalizeSlug(new URLSearchParams(location.search).get("tenant"));
@@ -25,18 +27,16 @@ export function resolveTenantSlug(
   const requestedSlug = pathSlug || querySlug || configuredSlug;
 
   if (requestedSlug) {
-    return isTenantSlug(requestedSlug) ? requestedSlug : undefined;
+    return isSafeRuntimeSlug(requestedSlug) ? requestedSlug : undefined;
   }
 
   return "template";
 }
 
-export function getTenant(
+export async function loadTenant(
   slug: string | null | undefined,
-): EnterpriseCardConfig | undefined {
-  return slug && isTenantSlug(slug) ? tenantRegistry[slug] : undefined;
+): Promise<EnterpriseCardConfig | undefined> {
+  return slug && isTenantSlug(slug) ? tenantLoaders[slug]() : undefined;
 }
 
 export { defineTenant } from "./defineTenant";
-export { templateTenant } from "./template/tenant";
-export { tuotuTenant } from "./tuotu/tenant";

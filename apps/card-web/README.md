@@ -95,7 +95,7 @@ public/
 |---|---|---|
 | `feature-grid` | 业务、产品或能力分组 | `businesses` |
 | `media-showcase` | 图片配能力说明 | `capabilities`、`action`、`visualLabel`、`visualTitle`、`visual` |
-| `process` | 流程与参与角色 | `steps`、`audienceHeading`、`audiences` |
+| `process` | 流程、分支路径与参与角色 | `steps`、`audienceHeading`、`audiences`；`steps[].path` 可选 `shared`、`branch-a`、`branch-b` |
 | `evidence` | 案例、指标、证据与支持信息 | `visual`、指标文案、主题列表、说明文案和支持列表 |
 | `engagement` | 接入、合作或转化步骤 | `steps`、`cta` |
 | `faq` | 从知识库选择常见问题 | `itemIds`，`action` 可选 |
@@ -134,6 +134,6 @@ public/
 
 ## `tuotu` seed 内容与素材
 
-`tuotu` 的企业资料来自用户提供的三份规划文档和拓途浙享公开网站。原始 DOCX 保持未修改。正式发布前仍需确认运营主体、联系人、数据证据、合作称谓、图片版权和人物肖像授权。
+`tuotu` 的企业资料来自用户提供的规划文档、生态总纲、IPO 结构稿、双轴图、业务讨论纪要和拓途浙享公开网站。页面按用户确认使用“拓浙 AI 集团”展示名称，但原始资料未提供工商主体证明。正式发布前仍需确认运营主体、联系人、数据证据、合作称谓、图片版权和人物肖像授权。
 
 `hero-ecosystem.webp` 是该 seed 的原创氛围素材，不是通用平台默认图。后续企业应使用自身已授权素材或单独生成适合其品牌的视觉资产。

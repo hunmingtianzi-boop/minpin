@@ -130,6 +130,44 @@ services:
       timeout: 5s
       retries: 20
 
+  worker:
+    build:
+      context: ..
+      dockerfile: services/worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      <<: *api-environment
+      DATABASE_URL: postgresql+asyncpg://${WORKER_DB_USER:-cf_ai_card_worker}:${WORKER_DB_PASSWORD:-change-me-worker-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+      WORKER_DATABASE_URL: postgresql+asyncpg://${WORKER_DB_USER:-cf_ai_card_worker}:${WORKER_DB_PASSWORD:-change-me-worker-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+      CELERY_BROKER_URL: redis://redis:6379/1
+      WORKER_ID: compose-worker
+      WORKER_HEALTH_HOST: 0.0.0.0
+      WORKER_HEALTH_PORT: 8020
+      EVALUATION_DATASET_DIR: /eval-data
+      EVALUATION_SUITE_VERSION: ${EVALUATION_SUITE_VERSION:-v2}
+      FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-replace-with-kms-backed-key}
+      FIELD_ENCRYPTION_KEY_REF: ${FIELD_ENCRYPTION_KEY_REF:-local-v1}
+      REMAP_SIGTERM: SIGQUIT
+    ports:
+      - "8020:8020"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/health/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
 volumes:
   postgres_data:
   redis_data:

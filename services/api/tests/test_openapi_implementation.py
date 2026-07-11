@@ -16,8 +16,29 @@ def test_implemented_vertical_slice_uses_contract_operation_ids() -> None:
             "/api/v1/public/conversations/{conversation_id}/messages:stream",
             "post",
         ): "streamConversationMessage",
+        ("/api/v1/auth/login", "post"): "login",
+        ("/api/v1/auth/refresh", "post"): "refreshStaffSession",
+        ("/api/v1/auth/logout", "post"): "logoutStaffSession",
+        ("/api/v1/auth/me", "get"): "getCurrentUser",
+        ("/api/v1/admin/company/profile", "get"): "getCompanyProfile",
+        ("/api/v1/admin/company/profile", "put"): "updateCompanyProfile",
+        ("/api/v1/admin/card", "get"): "getAdminCard",
+        ("/api/v1/admin/card", "put"): "updateAdminCard",
+        ("/api/v1/admin/knowledge/documents", "get"): "listKnowledgeDocuments",
+        ("/api/v1/admin/knowledge/documents", "post"): "createKnowledgeDocument",
+        (
+            "/api/v1/admin/knowledge/documents/{document_id}",
+            "get",
+        ): "getKnowledgeDocument",
+        (
+            "/api/v1/admin/knowledge/documents/{document_id}",
+            "put",
+        ): "putKnowledgeDocumentDraft",
+        (
+            "/api/v1/admin/knowledge/documents/{document_id}/publish",
+            "post",
+        ): "publishKnowledgeDocument",
     }
 
     for (path, method), operation_id in expected.items():
         assert paths[path][method]["operationId"] == operation_id
-

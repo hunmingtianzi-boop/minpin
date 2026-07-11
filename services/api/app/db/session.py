@@ -22,6 +22,8 @@ class DatabaseScope:
     company_id: UUID
     card_id: UUID | None = None
     card_slug: str | None = None
+    actor_user_id: UUID | None = None
+    actor_session_id: UUID | None = None
 
 
 def build_async_engine(database_url: str | None = None) -> AsyncEngine:
@@ -55,6 +57,8 @@ async def set_rls_context(
     tenant_id: UUID,
     company_id: UUID,
     card_slug: str | None = None,
+    actor_user_id: UUID | None = None,
+    actor_session_id: UUID | None = None,
 ) -> DatabaseScope:
     """Set transaction-local trusted scope consumed by PostgreSQL RLS policies."""
 
@@ -64,19 +68,25 @@ async def set_rls_context(
             SELECT
               set_config('app.tenant_id', :tenant_id, true),
               set_config('app.company_id', :company_id, true),
-              set_config('app.card_slug', :card_slug, true)
+              set_config('app.card_slug', :card_slug, true),
+              set_config('app.user_id', :actor_user_id, true),
+              set_config('app.session_id', :actor_session_id, true)
             """
         ),
         {
             "tenant_id": str(tenant_id),
             "company_id": str(company_id),
             "card_slug": card_slug or "",
+            "actor_user_id": str(actor_user_id) if actor_user_id else "",
+            "actor_session_id": str(actor_session_id) if actor_session_id else "",
         },
     )
     return DatabaseScope(
         tenant_id=tenant_id,
         company_id=company_id,
         card_slug=card_slug,
+        actor_user_id=actor_user_id,
+        actor_session_id=actor_session_id,
     )
 
 

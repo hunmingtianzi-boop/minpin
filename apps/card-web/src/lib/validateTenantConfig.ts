@@ -590,6 +590,21 @@ export function validateTenantConfig(config: unknown): TenantValidationResult {
         break;
       case "process":
         validateItemObjects(value.steps, `${path}.steps`, ["title", "text"]);
+        if (Array.isArray(value.steps)) {
+          value.steps.forEach((step, stepIndex) => {
+            if (
+              isRecord(step) &&
+              step.path !== undefined &&
+              !new Set(["shared", "branch-a", "branch-b"]).has(String(step.path))
+            ) {
+              addError(
+                "invalid-config",
+                `${path}.steps[${stepIndex}].path`,
+                "Process step path must be shared, branch-a, or branch-b.",
+              );
+            }
+          });
+        }
         requireString(value.audienceHeading, `${path}.audienceHeading`);
         validateItemObjects(
           value.audiences,
@@ -623,7 +638,7 @@ export function validateTenantConfig(config: unknown): TenantValidationResult {
         break;
       }
       case "faq":
-        validateStringArray(value.itemIds, `${path}.itemIds`);
+        validateStringArray(value.itemIds, `${path}.itemIds`, 1, 30);
         if (Array.isArray(value.itemIds)) {
           value.itemIds.forEach((itemId, itemIndex) => {
             if (!isNonEmptyString(itemId) || !knowledgeIds.has(itemId)) {

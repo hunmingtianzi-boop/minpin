@@ -29,6 +29,7 @@ class RefusalCode(StrEnum):
     MODEL_REFUSAL = "model_refusal"
     PROVIDER_ERROR = "provider_error"
     RETRIEVAL_ERROR = "retrieval_error"
+    FORBIDDEN_TOPIC = "forbidden_topic"
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +143,23 @@ class RetrievalQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class ForbiddenTopicPolicy:
+    rule_id: str
+    topic: str
+    match_terms: tuple[str, ...]
+    action: Literal["refuse", "handoff", "safe_template"]
+    safe_response: str | None = None
+    version: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class RAGRequest:
     tenant_id: str
     company_id: str
     question: str
     top_k: int | None = None
     history: tuple[ChatMessage, ...] = ()
+    forbidden_topics: tuple[ForbiddenTopicPolicy, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

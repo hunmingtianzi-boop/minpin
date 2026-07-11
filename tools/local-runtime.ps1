@@ -13,6 +13,13 @@ $PostgresData = Join-Path $Runtime "postgres-data"
 $RedisDir = Join-Path $Runtime "redis"
 $ApiPython = Join-Path $Root "services\api\.venv\Scripts\python.exe"
 $EmbeddingPython = Join-Path $Root "services\embedding\.venv\Scripts\python.exe"
+$WorkerPython = Join-Path $Root "services\worker\.venv\Scripts\python.exe"
+
+function Get-EnvironmentOrDefault([string]$Name, [string]$Default) {
+    $value = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if ([string]::IsNullOrWhiteSpace($value)) { return $Default }
+    return $value
+}
 
 function Import-LocalEnvironment {
     $envFile = Join-Path $Root ".env.local"
@@ -31,12 +38,21 @@ function Get-Listener([int]$Port) {
         Select-Object -First 1
 }
 
-function Wait-Http([string]$Url, [int]$Seconds = 30) {
+function Wait-Http(
+    [string]$Url,
+    [int]$Seconds = 30,
+    [int]$RequestTimeoutSeconds = 2
+) {
     $deadline = (Get-Date).AddSeconds($Seconds)
     do {
         Start-Sleep -Milliseconds 500
         try {
-            if ((Invoke-WebRequest -UseBasicParsing -Uri $Url -TimeoutSec 2).StatusCode -eq 200) {
+            if ((
+                Invoke-WebRequest `
+                    -UseBasicParsing `
+                    -Uri $Url `
+                    -TimeoutSec $RequestTimeoutSeconds
+            ).StatusCode -eq 200) {
                 return
             }
         } catch {
@@ -98,11 +114,27 @@ function Stop-ExpectedProcess([int]$Port, [string]$CommandPattern) {
     Stop-Process -Id $listener.OwningProcess -Force
 }
 
+function Get-CommandProcess([string]$CommandPattern) {
+    Get-CimInstance Win32_Process |
+        Where-Object { $null -ne $_.CommandLine -and $_.CommandLine -match $CommandPattern } |
+        Select-Object -First 1
+}
+
+function Stop-ExpectedCommandProcesses([string]$CommandPattern) {
+    $processes = Get-CimInstance Win32_Process |
+        Where-Object { $null -ne $_.CommandLine -and $_.CommandLine -match $CommandPattern }
+    foreach ($process in $processes) {
+        Stop-Process -Id $process.ProcessId -Force
+    }
+}
+
 function Show-Status {
     $rows = foreach ($service in @(
         @{ Name = "web"; Port = 4173 },
+        @{ Name = "admin"; Port = 4174 },
         @{ Name = "api"; Port = 8000 },
         @{ Name = "embedding"; Port = 8010 },
+        @{ Name = "worker"; Port = 8020 },
         @{ Name = "postgres"; Port = 5432 },
         @{ Name = "redis"; Port = 6379 }
     )) {
@@ -147,6 +179,21 @@ function Start-Runtime {
             -o $pgOptions `
             -w start
         if ($LASTEXITCODE -ne 0) { throw "PostgreSQL failed to start." }
+    }
+
+    $savedPgPassword = [Environment]::GetEnvironmentVariable("PGPASSWORD", "Process")
+    try {
+        $env:PGPASSWORD = Get-EnvironmentOrDefault "POSTGRES_PASSWORD" "change-me-local-only"
+        & (Join-Path $PostgresBin "psql.exe") `
+            -h "127.0.0.1" `
+            -p "5432" `
+            -U (Get-EnvironmentOrDefault "POSTGRES_USER" "cf_ai_card") `
+            -d (Get-EnvironmentOrDefault "POSTGRES_DB" "cf_ai_card") `
+            -v "ON_ERROR_STOP=1" `
+            -f (Join-Path $Root "infra\postgres\001_extensions.sql")
+        if ($LASTEXITCODE -ne 0) { throw "PostgreSQL runtime roles failed to initialize." }
+    } finally {
+        [Environment]::SetEnvironmentVariable("PGPASSWORD", $savedPgPassword, "Process")
     }
 
     if ($null -eq (Get-Listener 6379)) {
@@ -197,6 +244,45 @@ function Start-Runtime {
     }
     Wait-Http "http://127.0.0.1:8000/api/v1/health/ready"
 
+    if (-not (Test-Path -LiteralPath $WorkerPython)) {
+        throw "Worker runtime is missing: $WorkerPython"
+    }
+    if ($null -eq (Get-Listener 8020)) {
+        $savedPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+        try {
+            $env:PYTHONPATH = @(
+                (Join-Path $Root "services\api"),
+                (Join-Path $Root "services\worker")
+            ) -join ";"
+            if ($null -eq (Get-CommandProcess "celery.*cf_worker.*\sbeat(\s|$)")) {
+                Start-Process -FilePath $WorkerPython `
+                    -ArgumentList @(
+                        "-m", "celery", "-A", "cf_worker.celery_app:celery_app",
+                        "beat", "--loglevel=INFO",
+                        "--schedule", (Join-Path $Runtime "celerybeat-schedule")
+                    ) `
+                    -WorkingDirectory (Join-Path $Root "services\worker") `
+                    -WindowStyle Hidden `
+                    -RedirectStandardOutput (Join-Path $Runtime "worker-beat.stdout.log") `
+                    -RedirectStandardError (Join-Path $Runtime "worker-beat.stderr.log") |
+                    Out-Null
+            }
+            Start-Process -FilePath $WorkerPython `
+                -ArgumentList @(
+                    "-m", "celery", "-A", "cf_worker.celery_app:celery_app",
+                    "worker", "--pool=solo", "--loglevel=INFO",
+                    "--queues=outbox.poll,outbox.process"
+                ) `
+                -WorkingDirectory (Join-Path $Root "services\worker") `
+                -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $Runtime "worker.stdout.log") `
+                -RedirectStandardError (Join-Path $Runtime "worker.stderr.log") | Out-Null
+        } finally {
+            [Environment]::SetEnvironmentVariable("PYTHONPATH", $savedPythonPath, "Process")
+        }
+    }
+    Wait-Http "http://127.0.0.1:8020/health/ready" 60 5
+
     if ($null -eq (Get-Listener 4173)) {
         $command = '"C:\Program Files\nodejs\corepack.cmd" pnpm web:dev'
         Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
@@ -207,13 +293,27 @@ function Start-Runtime {
             -RedirectStandardError (Join-Path $Runtime "web.stderr.log") | Out-Null
     }
     Wait-Http "http://127.0.0.1:4173/c/tuotu"
+
+    if ($null -eq (Get-Listener 4174)) {
+        $adminCommand = '"C:\Program Files\nodejs\corepack.cmd" pnpm admin:dev'
+        Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" `
+            -ArgumentList "/d", "/s", "/c", "`"$adminCommand`"" `
+            -WorkingDirectory $Root `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput (Join-Path $Runtime "admin.stdout.log") `
+            -RedirectStandardError (Join-Path $Runtime "admin.stderr.log") | Out-Null
+    }
+    Wait-Http "http://127.0.0.1:4174/"
     Show-Status
 }
 
 function Stop-Runtime {
     Stop-ExpectedProcess 4173 "card-web|vite"
+    Stop-ExpectedProcess 4174 "admin-web|vite"
     Stop-ExpectedProcess 8000 "uvicorn.*app\.main"
     Stop-ExpectedProcess 8010 "uvicorn.*app:app.*services[/\\]embedding"
+    Stop-ExpectedProcess 8020 "celery.*cf_worker"
+    Stop-ExpectedCommandProcesses "celery.*cf_worker.*\sbeat(\s|$)"
 
     if ($null -ne (Get-Listener 6379)) {
         $redisCli = Join-Path $RedisDir "redis-cli.exe"

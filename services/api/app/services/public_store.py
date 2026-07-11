@@ -9,11 +9,11 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai.schemas import AIAnswer, ChatMessage, RefusalCode
+from app.ai.schemas import AIAnswer, ChatMessage, ForbiddenTopicPolicy, RefusalCode
 from app.api.errors import ApiError
 from app.api.schemas import (
     AiAssistantPublicConfig,
@@ -24,6 +24,7 @@ from app.api.schemas import (
     PolicyVersions,
     PublicCard,
     PublicCompany,
+    PublicFaqItem,
     VisitSession,
 )
 from app.api.schemas import (
@@ -33,6 +34,7 @@ from app.api.schemas import (
     MessageCitation as MessageCitationSchema,
 )
 from app.core.config import Settings
+from app.core.redaction import redact_sensitive_text
 from app.core.tokens import VisitorPrincipal, issue_visitor_token
 from app.db.models import (
     AIRun,
@@ -43,6 +45,7 @@ from app.db.models import (
     ContentStatus,
     Conversation,
     ConversationStatus,
+    ForbiddenTopic,
     IdempotencyKey,
     IdempotencyStatus,
     KnowledgeChunk,
@@ -56,8 +59,10 @@ from app.db.models import (
     ModelConfig,
     PromptStatus,
     PromptVersion,
+    Visibility,
     Visit,
     Visitor,
+    VisitSummary,
 )
 
 
@@ -137,6 +142,47 @@ class PublicStore:
                 )
             ).scalar_one()
 
+            faq_rows = (
+                await session.execute(
+                    select(
+                        KnowledgeDocument.source_id,
+                        KnowledgeDocument.title,
+                        KnowledgeChunk.text,
+                        KnowledgeChunk.ordinal,
+                        KnowledgeChunk.metadata_json,
+                    )
+                    .join(
+                        KnowledgeChunk,
+                        KnowledgeChunk.document_id == KnowledgeDocument.id,
+                    )
+                    .where(
+                        KnowledgeDocument.tenant_id == scope.tenant_id,
+                        KnowledgeDocument.company_id == scope.company_id,
+                        KnowledgeDocument.status == ContentStatus.PUBLISHED,
+                        KnowledgeDocument.source_type == "faq",
+                        KnowledgeChunk.version_id == KnowledgeDocument.current_version_id,
+                        KnowledgeChunk.is_active.is_(True),
+                        KnowledgeChunk.visibility == Visibility.PUBLIC,
+                    )
+                    .order_by(KnowledgeDocument.updated_at.desc(), KnowledgeChunk.ordinal)
+                    .limit(60)
+                )
+            ).all()
+            faq_by_source: dict[str, dict[str, Any]] = {}
+            for row in faq_rows:
+                item = faq_by_source.setdefault(
+                    row.source_id,
+                    {
+                        "question": row.title,
+                        "parts": [],
+                        "source_label": "企业已发布资料",
+                    },
+                )
+                item["parts"].append(row.text)
+                metadata = row.metadata_json if isinstance(row.metadata_json, dict) else {}
+                if isinstance(metadata.get("source_label"), str):
+                    item["source_label"] = metadata["source_label"]
+
             card_settings = card.settings if isinstance(card.settings, dict) else {}
             company_settings = company.settings if isinstance(company.settings, dict) else {}
             policies = card_settings.get("policy_versions", {})
@@ -152,16 +198,36 @@ class PublicStore:
                 display_name=card.display_name,
                 title=str(card_settings.get("title") or company.name),
                 avatar_url=_optional_string(card_settings.get("avatar_url")),
-                contact_fields=[],
                 company=PublicCompany(
                     id=company.id,
                     name=company.name,
                     summary=str(company_settings.get("summary") or ""),
                     industry=company.industry,
+                    region=_optional_string(company_settings.get("region")),
+                    website=_optional_string(company_settings.get("website")),
                     logo_url=_optional_string(company_settings.get("logo_url")),
                 ),
-                featured_products=[],
-                featured_cases=[],
+                contact_fields=_public_dict_list(
+                    card_settings.get("contact_fields"),
+                    allowed_keys=("label", "value", "href"),
+                ),
+                featured_products=_public_dict_list(
+                    company_settings.get("featured_products"),
+                    allowed_keys=("title", "description", "url"),
+                ),
+                featured_cases=_public_dict_list(
+                    company_settings.get("featured_cases"),
+                    allowed_keys=("title", "description", "industry", "url"),
+                ),
+                faq_items=[
+                    PublicFaqItem(
+                        id=source_id,
+                        question=str(item["question"]),
+                        answer="\n\n".join(str(part) for part in item["parts"]),
+                        source_label=str(item["source_label"]),
+                    )
+                    for source_id, item in list(faq_by_source.items())[:30]
+                ],
                 ai_assistant=AiAssistantPublicConfig(
                     available=bool(self._settings.llm_api_key and knowledge_count > 0),
                     display_name=str(
@@ -190,6 +256,13 @@ class PublicStore:
     ) -> VisitSession:
         async with self._sessions() as session, session.begin():
             scope = await self._resolve_public_card(session, slug)
+            card = await session.get(Card, scope.card_id)
+            if card is None:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "名片不存在")
+            if request.privacy_notice_version != _policy_version(
+                card, ConsentScope.BROWSE_NOTICE
+            ):
+                raise _policy_version_mismatch()
             claim = await self._claim_idempotency(
                 session,
                 tenant_id=scope.tenant_id,
@@ -268,7 +341,9 @@ class PublicStore:
     ) -> ConsentRecordSchema:
         async with self._sessions() as session, session.begin():
             await self._set_principal_scope(session, principal, card_slug=slug)
-            await self._require_principal_card(session, principal, slug)
+            card = await self._require_principal_card(session, principal, slug)
+            if request.policy_version != _policy_version(card, ConsentScope(request.scope)):
+                raise _policy_version_mismatch()
             claim = await self._claim_idempotency(
                 session,
                 tenant_id=principal.tenant_id,
@@ -326,24 +401,17 @@ class PublicStore:
     ) -> ConversationRecord:
         async with self._sessions() as session, session.begin():
             await self._set_principal_scope(session, principal, card_slug=slug)
-            await self._require_principal_card(session, principal, slug)
-            consent = (
-                await session.execute(
-                    select(ConsentRecord.id)
-                    .where(
-                        ConsentRecord.tenant_id == principal.tenant_id,
-                        ConsentRecord.company_id == principal.company_id,
-                        ConsentRecord.visitor_id == principal.visitor_id,
-                        ConsentRecord.scope == ConsentScope.CHAT_NOTICE,
-                        ConsentRecord.policy_version == request.chat_notice_version,
-                        ConsentRecord.granted.is_(True),
-                    )
-                    .order_by(ConsentRecord.recorded_at.desc())
-                    .limit(1)
-                )
-            ).scalar_one_or_none()
-            if consent is None:
-                raise ApiError(403, "CONSENT_REQUIRED", "请先确认 AI 对话告知")
+            card = await self._require_principal_card(session, principal, slug)
+            if request.chat_notice_version != _policy_version(
+                card, ConsentScope.CHAT_NOTICE
+            ):
+                raise _policy_version_mismatch()
+            await self._require_current_consent(
+                session,
+                principal=principal,
+                card=card,
+                scope=ConsentScope.CHAT_NOTICE,
+            )
 
             claim = await self._claim_idempotency(
                 session,
@@ -392,7 +460,8 @@ class PublicStore:
         content: str,
         idempotency_key: str,
     ) -> PreparedMessage:
-        normalized_content = content.strip()
+        redaction = redact_sensitive_text(content.strip())
+        normalized_content = redaction.content
         if not normalized_content:
             raise ApiError(400, "VALIDATION_ERROR", "问题不能为空")
         if len(normalized_content) > self._settings.max_message_chars:
@@ -402,6 +471,21 @@ class PublicStore:
             await self._set_principal_scope(session, principal)
             conversation = await self._require_conversation(
                 session, conversation_id=conversation_id, principal=principal
+            )
+            card = await session.get(Card, principal.card_id)
+            if (
+                card is None
+                or card.tenant_id != principal.tenant_id
+                or card.company_id != principal.company_id
+                or card.status != ContentStatus.PUBLISHED
+                or card.deleted_at is not None
+            ):
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "名片不存在")
+            await self._require_current_consent(
+                session,
+                principal=principal,
+                card=card,
+                scope=ConsentScope.CHAT_NOTICE,
             )
             claim = await self._claim_idempotency(
                 session,
@@ -480,6 +564,7 @@ class PublicStore:
                 role=MessageRole.USER,
                 content=normalized_content,
                 status=MessageStatus.COMPLETED,
+                content_redacted=redaction.redacted,
                 client_message_id=idempotency_key,
             )
             assistant = Message(
@@ -494,6 +579,16 @@ class PublicStore:
             conversation.last_activity_at = datetime.now(UTC)
             session.add_all([user_message, assistant])
             await session.flush()
+            await session.execute(
+                update(VisitSummary)
+                .where(
+                    VisitSummary.tenant_id == principal.tenant_id,
+                    VisitSummary.company_id == principal.company_id,
+                    VisitSummary.conversation_id == conversation_id,
+                    VisitSummary.is_current.is_(True),
+                )
+                .values(is_current=False, stale_at=func.now())
+            )
             claim.record.resource_type = "message"
             claim.record.resource_id = assistant.id
             return PreparedMessage(
@@ -562,6 +657,41 @@ class PublicStore:
                 "MODEL_BUDGET_EXCEEDED",
                 "今日 AI 服务额度已用完，请联系企业工作人员",
             )
+
+    async def load_forbidden_topic_rules(
+        self,
+        *,
+        principal: VisitorPrincipal,
+    ) -> tuple[ForbiddenTopicPolicy, ...]:
+        async with self._sessions() as session, session.begin():
+            await self._set_principal_scope(session, principal)
+            rows = (
+                await session.scalars(
+                    select(ForbiddenTopic)
+                    .where(
+                        ForbiddenTopic.tenant_id == principal.tenant_id,
+                        ForbiddenTopic.company_id == principal.company_id,
+                        ForbiddenTopic.is_active.is_(True),
+                    )
+                    .order_by(ForbiddenTopic.updated_at.desc(), ForbiddenTopic.id)
+                    .limit(200)
+                )
+            ).all()
+        return tuple(
+            ForbiddenTopicPolicy(
+                rule_id=str(row.id),
+                topic=row.topic,
+                match_terms=tuple(row.match_terms),
+                action=row.action,
+                safe_response=(
+                    redact_sensitive_text(row.safe_response).content
+                    if row.safe_response
+                    else None
+                ),
+                version=row.version,
+            )
+            for row in rows
+        )
 
     async def load_conversation_history(
         self,
@@ -885,6 +1015,51 @@ class PublicStore:
         return card
 
     @staticmethod
+    async def _require_current_consent(
+        session: AsyncSession,
+        *,
+        principal: VisitorPrincipal,
+        card: Card,
+        scope: ConsentScope,
+    ) -> ConsentRecord:
+        consent = (
+            await session.execute(
+                select(ConsentRecord)
+                .where(
+                    ConsentRecord.tenant_id == principal.tenant_id,
+                    ConsentRecord.company_id == principal.company_id,
+                    ConsentRecord.visitor_id == principal.visitor_id,
+                    ConsentRecord.scope == scope,
+                    ConsentRecord.evidence["card_id"].as_string()
+                    == str(principal.card_id),
+                )
+                .order_by(ConsentRecord.recorded_at.desc(), ConsentRecord.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        now = datetime.now(UTC)
+        expires_at = consent.expires_at if consent is not None else None
+        evidence = (
+            consent.evidence
+            if consent is not None and isinstance(consent.evidence, dict)
+            else {}
+        )
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            consent is None
+            or consent.tenant_id != principal.tenant_id
+            or consent.company_id != principal.company_id
+            or consent.visitor_id != principal.visitor_id
+            or evidence.get("card_id") != str(principal.card_id)
+            or not consent.granted
+            or consent.policy_version != _policy_version(card, scope)
+            or (expires_at is not None and expires_at <= now)
+        ):
+            raise ApiError(403, "CONSENT_REQUIRED", "请先确认当前版本的授权告知")
+        return consent
+
+    @staticmethod
     async def _require_conversation(
         session: AsyncSession,
         *,
@@ -1107,6 +1282,26 @@ class PublicStore:
         return (input_cost + output_cost).quantize(Decimal("0.000001"))
 
 
+def _policy_version(card: Card, scope: ConsentScope) -> str:
+    settings = card.settings if isinstance(card.settings, dict) else {}
+    policies = settings.get("policy_versions", {})
+    if not isinstance(policies, dict):
+        policies = {}
+    if scope == ConsentScope.BROWSE_NOTICE:
+        return str(policies.get("privacy") or "privacy-v1")
+    if scope == ConsentScope.CHAT_NOTICE:
+        return str(policies.get("chat_notice") or "chat-notice-v1")
+    return str(policies.get("lead_consent") or "lead-consent-v1")
+
+
+def _policy_version_mismatch() -> ApiError:
+    return ApiError(
+        409,
+        "POLICY_VERSION_MISMATCH",
+        "授权告知已更新，请刷新页面后重新确认",
+    )
+
+
 def citations_to_schema(citations: tuple[StoredCitation, ...]) -> tuple[MessageCitationSchema, ...]:
     return tuple(
         MessageCitationSchema(
@@ -1120,3 +1315,27 @@ def citations_to_schema(citations: tuple[StoredCitation, ...]) -> tuple[MessageC
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _public_dict_list(
+    value: object,
+    *,
+    allowed_keys: tuple[str, ...],
+    limit: int = 12,
+) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for raw_item in value:
+        if not isinstance(raw_item, dict):
+            continue
+        item = {
+            key: raw_value.strip()
+            for key in allowed_keys
+            if isinstance((raw_value := raw_item.get(key)), str) and raw_value.strip()
+        }
+        if item:
+            result.append(item)
+        if len(result) >= limit:
+            break
+    return result

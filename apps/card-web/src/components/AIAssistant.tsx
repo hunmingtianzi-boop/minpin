@@ -2,6 +2,7 @@ import {
   ArrowUp,
   ChatCircleDots,
   LinkSimple,
+  PaperPlaneTilt,
   Robot,
   Sparkle,
   X,
@@ -65,9 +66,17 @@ function requestErrorMessage(error: unknown) {
 
 export const AIAssistant = forwardRef<
   AIAssistantHandle,
-  { config: AssistantConfig; cardSlug: string }
+  { config: AssistantConfig; cardSlug: string; onLeadPrompt?: () => void }
 >(function AIAssistant(
-  { config, cardSlug }: { config: AssistantConfig; cardSlug: string },
+  {
+    config,
+    cardSlug,
+    onLeadPrompt,
+  }: {
+    config: AssistantConfig;
+    cardSlug: string;
+    onLeadPrompt?: () => void;
+  },
   ref,
 ) {
   const apiEnabled = isAssistantApiConfigured();
@@ -166,10 +175,16 @@ export const AIAssistant = forwardRef<
   }, [cancelActiveRequest, closeAssistant, isOpen]);
 
   useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: shouldReduceMotion ? "auto" : "smooth",
-    });
+    const container = scrollRef.current;
+    if (!container) return;
+    if (typeof container.scrollTo === "function") {
+      container.scrollTo({
+        top: container.scrollHeight,
+        behavior: shouldReduceMotion ? "auto" : "smooth",
+      });
+    } else {
+      container.scrollTop = container.scrollHeight;
+    }
   }, [messages, isLoading, shouldReduceMotion]);
 
   useEffect(() => {
@@ -257,6 +272,7 @@ export const AIAssistant = forwardRef<
 
       const controller = new AbortController();
       abortRef.current = controller;
+      let shouldOpenLead = false;
       void streamAssistantMessage({
         cardSlug,
         content: question,
@@ -282,9 +298,16 @@ export const AIAssistant = forwardRef<
                   : { ...message, citations: [...citations, event.citation] };
               }),
             );
+          } else if (event.type === "completed" && event.leadPrompt) {
+            shouldOpenLead = true;
           }
         },
       })
+        .then(() => {
+          if (!mountedRef.current || !shouldOpenLead || !onLeadPrompt) return;
+          setIsOpen(false);
+          window.setTimeout(onLeadPrompt, 0);
+        })
         .catch((error: unknown) => {
           if (!mountedRef.current) return;
           if (controller.signal.aborted) {
@@ -329,6 +352,7 @@ export const AIAssistant = forwardRef<
       config.knowledgeBase,
       isLoading,
       shouldReduceMotion,
+      onLeadPrompt,
     ],
   );
 
@@ -517,6 +541,19 @@ export const AIAssistant = forwardRef<
                   <ArrowUp size={18} weight="bold" aria-hidden="true" />
                 </button>
               </form>
+              {onLeadPrompt && (
+                <button
+                  className="assistant-lead-action"
+                  type="button"
+                  onClick={() => {
+                    closeAssistant();
+                    onLeadPrompt();
+                  }}
+                >
+                  <PaperPlaneTilt size={16} aria-hidden="true" />
+                  需要人工联系？留下合作需求
+                </button>
+              )}
               <p className="assistant-disclaimer">
                 {config.disclaimer}
               </p>

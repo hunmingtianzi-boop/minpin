@@ -145,6 +145,7 @@ export type MediaShowcaseSection = BaseSection & {
 export type JourneyStep = {
   title: string;
   text: string;
+  path?: "shared" | "branch-a" | "branch-b";
 };
 
 export type AudienceItem = {

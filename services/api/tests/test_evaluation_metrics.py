@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 
 @pytest.mark.parametrize(
     "filename,count",
-    [("template.v1.json", 7), ("tuotu.v1.json", 13)],
+        [("template.v1.json", 7), ("tuotu.v1.json", 13), ("tuotu.v2.json", 25)],
 )
 def test_evaluation_suites_validate(filename: str, count: int) -> None:
     suite = load_evaluation_suite(ROOT / "packages" / "evals" / filename)
