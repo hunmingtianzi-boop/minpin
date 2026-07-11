@@ -44,6 +44,7 @@ type NavItem = {
   icon: ComponentType;
   permission?: string;
   allowCardOwner?: boolean;
+  role?: string;
 };
 
 const navGroups: Array<{ label: string; items: NavItem[] }> = [
@@ -77,6 +78,18 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     ],
   },
   {
+    label: "平台治理",
+    items: [
+      {
+        path: APP_PATHS.platformEnterprises,
+        label: "企业开通",
+        icon: Building24Regular,
+        permission: "platform.enterprise.manage",
+        role: "platform_admin",
+      },
+    ],
+  },
+  {
     label: "企业治理",
     items: [
       { path: APP_PATHS.company, label: "企业资料", icon: Building24Regular, permission: "company.read" },
@@ -99,8 +112,10 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <nav className="primary-nav" aria-label="管理工作台主导航">
       {navGroups.map((group) => {
-        const visibleItems = group.items.filter((item) =>
-          hasNavPermission(auth.user, item.permission, item.allowCardOwner),
+        const visibleItems = group.items.filter(
+          (item) =>
+            (!item.role || auth.user?.role === item.role) &&
+            hasNavPermission(auth.user, item.permission, item.allowCardOwner),
         );
         if (visibleItems.length === 0) return null;
         return (

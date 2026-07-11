@@ -5,7 +5,7 @@
   "description": "创非凡数智名片 monorepo bootstrap",
   "packageManager": "pnpm@11.7.0",
   "engines": {
-    "node": ">=24 <26"
+    "node": ">=24 <25"
   },
   "scripts": {
     "local:start": "powershell -ExecutionPolicy Bypass -File tools/local-runtime.ps1 start",
@@ -14,8 +14,11 @@
     "admin:dev": "corepack pnpm --filter @cf/admin-web dev",
     "admin:build": "corepack pnpm --filter @cf/admin-web build",
     "admin:test": "corepack pnpm --filter @cf/admin-web test",
+    "e2e:test": "corepack pnpm exec playwright test",
+    "e2e:install": "corepack pnpm exec playwright install chromium",
+    "webvitals:test": "corepack pnpm exec playwright test --config playwright.performance.config.ts",
     "api:dev": "python -m uvicorn app.main:app --app-dir services/api --reload --host 127.0.0.1 --port 8000",
-    "api:lint": "services/api/.venv/Scripts/python -m ruff check services/api tools/sync_openapi_contract.py",
+    "api:lint": "services/api/.venv/Scripts/python -m ruff check services/api tools/sync_openapi_contract.py tools/release",
     "api:test": "services/api/.venv/Scripts/python -m pytest services/api/tests -m \"not integration\"",
     "docs:build": "node tools/build_dev_baseline_docx.js",
     "contracts:sync": "services/api/.venv/Scripts/python tools/sync_openapi_contract.py",
@@ -29,9 +32,11 @@
     "worker:test": "services/worker/.venv/Scripts/python.exe -m ruff check services/worker && services/worker/.venv/Scripts/python.exe -m pytest services/worker/tests -m \"not integration\"",
     "perf:test": "services/api/.venv/Scripts/python.exe -m ruff check --config services/api/pyproject.toml tools/perf && services/api/.venv/Scripts/python.exe -m pytest tools/perf/tests",
     "perf:smoke": "services/api/.venv/Scripts/python.exe -m tools.perf.smoke --output artifacts/perf/ci-smoke.json",
-    "check": "corepack pnpm contracts:check && corepack pnpm contracts:validate && corepack pnpm api:lint && corepack pnpm api:test && corepack pnpm worker:test && corepack pnpm perf:test && corepack pnpm perf:smoke && corepack pnpm web:test && corepack pnpm web:build && corepack pnpm admin:test && corepack pnpm admin:build"
+    "release:test": "services/api/.venv/Scripts/python.exe -m pytest tools/release/tests",
+    "check": "corepack pnpm contracts:check && corepack pnpm contracts:validate && corepack pnpm api:lint && corepack pnpm api:test && corepack pnpm worker:test && corepack pnpm perf:test && corepack pnpm perf:smoke && corepack pnpm release:test && corepack pnpm web:test && corepack pnpm web:build && corepack pnpm admin:test && corepack pnpm admin:build"
   },
   "devDependencies": {
+    "@playwright/test": "1.61.1",
     "docx": "9.6.1"
   }
 }

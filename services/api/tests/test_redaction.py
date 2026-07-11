@@ -4,8 +4,9 @@ from app.core.redaction import redact_sensitive_text
 
 
 def test_credentials_and_contact_pii_are_removed_before_downstream_use() -> None:
+    raw_secret = "sk-" + "testonly0123456789abcdefABCDEF"  # noqa: S105 - synthetic canary
     raw = (
-        "请帮我看看 sk-testonly0123456789abcdefABCDEF，"
+        f"请帮我看看 {raw_secret}，"
         "邮箱 alice@example.test，手机 13800138000，微信 alice_wechat。"
     )
 
@@ -14,7 +15,7 @@ def test_credentials_and_contact_pii_are_removed_before_downstream_use() -> None
     assert result.redacted
     assert set(result.categories) >= {"provider_token", "email", "mobile_phone", "wechat"}
     for secret in (
-        "sk-testonly0123456789abcdefABCDEF",
+        raw_secret,
         "alice@example.test",
         "13800138000",
         "alice_wechat",

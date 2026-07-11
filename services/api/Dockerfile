@@ -1,4 +1,6 @@
-FROM python:3.13-slim AS runtime
+FROM python:3.13.14-slim-trixie AS runtime
+
+ARG PIP_VERSION=26.1.2
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -11,7 +13,7 @@ RUN addgroup --system app && adduser --system --ingroup app app
 COPY services/api/pyproject.toml ./pyproject.toml
 COPY services/api/requirements-prod.lock ./requirements-prod.lock
 COPY services/api/app ./app
-RUN python -m pip install --upgrade pip \
+RUN python -m pip install --upgrade "pip==${PIP_VERSION}" \
     && python -m pip install --requirement requirements-prod.lock \
     && python -m pip install --no-deps .
 

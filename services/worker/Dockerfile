@@ -1,4 +1,6 @@
-FROM python:3.13-slim AS runtime
+FROM python:3.13.14-slim-trixie AS runtime
+
+ARG PIP_VERSION=26.1.2
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -10,7 +12,7 @@ WORKDIR /app
 RUN addgroup --system worker && adduser --system --ingroup worker worker
 
 COPY services/worker/requirements-prod.lock /tmp/requirements-prod.lock
-RUN python -m pip install --upgrade pip \
+RUN python -m pip install --upgrade "pip==${PIP_VERSION}" \
     && python -m pip install --requirement /tmp/requirements-prod.lock
 
 COPY services/api/pyproject.toml /src/api/pyproject.toml

@@ -78,6 +78,11 @@ const ForbiddenTopicsPage = lazy(() =>
     default: module.ForbiddenTopicsPage,
   })),
 );
+const PlatformEnterprisesPage = lazy(() =>
+  import("./pages/PlatformEnterprisesPage").then((module) => ({
+    default: module.PlatformEnterprisesPage,
+  })),
+);
 
 function CurrentPage() {
   const pathname = usePathname();
@@ -94,6 +99,7 @@ function CurrentPage() {
   if (pathname === APP_PATHS.cases) return <CaseStudiesPage />;
   if (pathname === APP_PATHS.forbiddenTopics) return <ForbiddenTopicsPage />;
   if (pathname === APP_PATHS.knowledge) return <KnowledgePage />;
+  if (pathname === APP_PATHS.platformEnterprises) return <PlatformEnterprisesPage />;
   if (pathname === APP_PATHS.overview) return <OverviewPage />;
 
   return (

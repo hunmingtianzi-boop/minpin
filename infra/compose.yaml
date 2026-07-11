@@ -2,7 +2,7 @@ name: cf-ai-card-local
 
 services:
   postgres:
-    image: pgvector/pgvector:0.8.2-pg18
+    image: pgvector/pgvector:0.8.4-pg18
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-cf_ai_card}
@@ -20,7 +20,7 @@ services:
       retries: 20
 
   redis:
-    image: redis:8-alpine
+    image: redis:8.6.4-alpine3.23
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     ports:
@@ -62,7 +62,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cf_ai_card}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
       REDIS_URL: redis://redis:6379/0
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-replace-with-at-least-32-random-bytes}
-      CORS_ALLOWED_ORIGINS: '${CORS_ALLOWED_ORIGINS:-["http://127.0.0.1:4173","http://localhost:4173"]}'
+      CORS_ALLOWED_ORIGINS: '${CORS_ALLOWED_ORIGINS:-["http://127.0.0.1:4173","http://localhost:4173","http://127.0.0.1:4174","http://localhost:4174","http://127.0.0.1:8080","http://localhost:8080","http://127.0.0.1:8081","http://localhost:8081"]}'
       LLM_PROVIDER: ${LLM_PROVIDER:-deepseek}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
       LLM_API_KEY: ${LLM_API_KEY:-}
@@ -126,6 +126,59 @@ services:
           "-c",
           "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)",
         ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  card-web:
+    build:
+      context: ..
+      dockerfile: apps/card-web/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  admin-web:
+    build:
+      context: ..
+      dockerfile: apps/admin-web/Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  gateway:
+    build:
+      context: ..
+      dockerfile: infra/gateway/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    depends_on:
+      api:
+        condition: service_healthy
+      card-web:
+        condition: service_healthy
+      admin-web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/gateway-health"]
       interval: 10s
       timeout: 5s
       retries: 20

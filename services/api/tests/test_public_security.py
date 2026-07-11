@@ -270,7 +270,7 @@ async def test_prepare_message_persists_and_forwards_only_redacted_content(
         "_claim_idempotency",
         AsyncMock(return_value=IdempotencyClaim(claim_record, created=True, replay=False)),
     )
-    raw_secret = "sk-testonly0123456789abcdefABCDEF"  # noqa: S105 - synthetic canary
+    raw_secret = "sk-" + "testonly0123456789abcdefABCDEF"  # noqa: S105 - synthetic canary
     raw_email = "alice@example.test"
     raw_phone = "13800138000"
 

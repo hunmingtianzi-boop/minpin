@@ -94,6 +94,34 @@ export type LoginInput = {
   credential: string;
 };
 
+export type PlatformEnterprise = {
+  tenantId: string;
+  tenantSlug: string;
+  tenantName: string;
+  companyId: string;
+  companyName: string;
+  status: string;
+  createdAt: string;
+};
+
+export type CreatePlatformEnterpriseInput = {
+  tenantSlug: string;
+  tenantName: string;
+  companyName: string;
+  industry: string;
+  adminAccount: string;
+  adminDisplayName: string;
+  adminPassword: string;
+  initialCardTitle: string;
+};
+
+export type CreatedPlatformEnterprise = PlatformEnterprise & {
+  adminUserId: string;
+  adminMembershipId: string;
+  initialCardId: string;
+  initialCardSlug: string;
+};
+
 export type ContentStatus =
   | "draft"
   | "review_pending"

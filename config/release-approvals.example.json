@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "release": {
+    "release_id": "replace-with-release-id",
+    "git_sha": "replace-with-40-character-git-sha",
+    "target_environment": "production"
+  },
+  "decisions": [
+    { "id": "Q-001", "status": "pending", "owner": "甲方负责人", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-002", "status": "pending", "owner": "技术/法务", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-003", "status": "pending", "owner": "产品/技术", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-004", "status": "pending", "owner": "甲方/产品", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-005", "status": "pending", "owner": "业务负责人", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-006", "status": "pending", "owner": "产品/甲方", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-007", "status": "pending", "owner": "法务/商务", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-008", "status": "pending", "owner": "法务/产品", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-009", "status": "pending", "owner": "法务/运营", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-010", "status": "pending", "owner": "项目负责人", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-011", "status": "pending", "owner": "产品/甲方", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] },
+    { "id": "Q-012", "status": "pending", "owner": "法务/技术", "decision": "", "approved_by": "", "approved_at": "", "evidence": [] }
+  ]
+}

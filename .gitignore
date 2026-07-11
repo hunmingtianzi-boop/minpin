@@ -32,6 +32,8 @@ docs/_source_extracted/
 
 # Generated previews and temporary QA files
 artifacts/
+playwright-report/
+test-results/
 .playwright-mcp/
 .runtime/
 .tmp/

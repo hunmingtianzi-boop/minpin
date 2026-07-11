@@ -15,6 +15,7 @@ export const APP_PATHS = {
   cases: "/cases",
   forbiddenTopics: "/forbidden-topics",
   knowledge: "/knowledge",
+  platformEnterprises: "/platform/enterprises",
 } as const;
 
 export type AppPath = (typeof APP_PATHS)[keyof typeof APP_PATHS];

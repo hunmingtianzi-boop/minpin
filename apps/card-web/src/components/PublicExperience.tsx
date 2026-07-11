@@ -206,9 +206,9 @@ function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        initial={shouldReduceMotion ? false : { opacity: 0, y: 24, scale: 0.985 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        exit={shouldReduceMotion ? undefined : { opacity: 0, y: 18, scale: 0.985 }}
+        initial={shouldReduceMotion ? false : { opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={shouldReduceMotion ? undefined : { opacity: 0 }}
         transition={{ duration: 0.2, ease: "easeOut" }}
       >
         <header className="public-dialog-header">
