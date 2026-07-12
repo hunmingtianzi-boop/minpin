@@ -157,7 +157,11 @@ try {
             "--questions", $QuestionFile,
             "--requests", [string]$RagRequestsPerScenario,
             "--concurrency", [string]$TargetConcurrency,
-            "--warmup-requests", [string]$WarmupRequests,
+            # Each RAG warm-up is a real public chat request and therefore
+            # consumes the same IP/card protection budget as measured traffic.
+            # Keep RAG scenarios independent of HTTP warm-ups so the default
+            # target + peak run stays within the configured 20/minute budget.
+            "--warmup-requests", "0",
             "--timeout-seconds", [string]$TimeoutSeconds,
             "--max-error-rate", "0.01",
             "--scenario", "local-rag-target",
