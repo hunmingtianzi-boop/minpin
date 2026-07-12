@@ -28,6 +28,11 @@ const LeadsPage = lazy(() =>
     default: module.LeadsPage,
   })),
 );
+const ExportsPage = lazy(() =>
+  import("./pages/ExportsPage").then((module) => ({
+    default: module.ExportsPage,
+  })),
+);
 const KnowledgeGapsPage = lazy(() =>
   import("./pages/KnowledgeGapsPage").then((module) => ({
     default: module.KnowledgeGapsPage,
@@ -83,16 +88,23 @@ const PlatformEnterprisesPage = lazy(() =>
     default: module.PlatformEnterprisesPage,
   })),
 );
+const MembersPage = lazy(() =>
+  import("./pages/MembersPage").then((module) => ({
+    default: module.MembersPage,
+  })),
+);
 
 function CurrentPage() {
   const pathname = usePathname();
   if (pathname === APP_PATHS.visits) return <VisitsPage />;
   if (pathname === APP_PATHS.conversations) return <ConversationsPage />;
   if (pathname === APP_PATHS.leads) return <LeadsPage />;
+  if (pathname === APP_PATHS.exports) return <ExportsPage />;
   if (pathname === APP_PATHS.knowledgeGaps) return <KnowledgeGapsPage />;
   if (pathname === APP_PATHS.notifications) return <NotificationsPage />;
   if (pathname === APP_PATHS.privacyRequests) return <PrivacyRequestsPage />;
   if (pathname === APP_PATHS.company) return <CompanyProfilePage />;
+  if (pathname === APP_PATHS.members) return <MembersPage />;
   if (pathname === APP_PATHS.card) return <CardSettingsPage />;
   if (pathname === APP_PATHS.cards) return <CardsPage />;
   if (pathname === APP_PATHS.products) return <ProductsPage />;

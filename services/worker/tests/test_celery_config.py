@@ -12,4 +12,9 @@ def test_celery_uses_redis_late_ack_and_visibility_larger_than_database_lease() 
         celery_app.conf.broker_transport_options["visibility_timeout"]
         > settings.outbox_lease_seconds
     )
-    assert "poll-postgresql-outbox" in celery_app.conf.beat_schedule
+    poll_schedule = celery_app.conf.beat_schedule["poll-postgresql-outbox"]
+    assert poll_schedule["schedule"] == settings.outbox_poll_seconds
+    assert poll_schedule["options"] == {
+        "queue": "outbox.poll",
+        "expires": settings.outbox_poll_seconds * 2,
+    }

@@ -13,6 +13,7 @@ type RequestOptions = {
 
 type VersionRequestOptions = {
   version?: number;
+  idempotencyKey?: string;
 };
 
 type SessionTokens = {
@@ -242,6 +243,13 @@ export class ApiClient {
     });
   }
 
+  async download(path: string): Promise<Response> {
+    if (!this.accessToken) {
+      await this.refreshSession();
+    }
+    return this.executeDownload(path, true);
+  }
+
   private storeSessionTokens(tokens: SessionTokens): void {
     this.accessToken = tokens.accessToken;
     this.csrfToken = tokens.csrfToken;
@@ -369,12 +377,52 @@ export class ApiClient {
       });
     }
   }
+
+  private async executeDownload(
+    path: string,
+    retryAfterRefresh: boolean,
+  ): Promise<Response> {
+    if (!this.baseUrl) {
+      throw new ApiError("尚未配置管理 API 地址。", {
+        code: "API_NOT_CONFIGURED",
+      });
+    }
+    const headers = new Headers({ Accept: "text/csv" });
+    if (this.accessToken) {
+      headers.set("Authorization", `Bearer ${this.accessToken}`);
+    }
+    let response: Response;
+    try {
+      response = await this.fetcher(`${this.baseUrl}${path}`, {
+        method: "GET",
+        headers,
+        credentials: "include",
+      });
+    } catch {
+      throw new ApiError("无法连接管理服务，请检查服务地址和网络状态。", {
+        code: "NETWORK_ERROR",
+      });
+    }
+    if (response.status === 401 && retryAfterRefresh) {
+      await this.refreshSession();
+      return this.executeDownload(path, false);
+    }
+    if (response.status === 401) {
+      this.clearSession();
+      this.notifyAuthExpired();
+    }
+    if (!response.ok) throw await parseError(response);
+    return response;
+  }
 }
 
 function versionHeaders(options: VersionRequestOptions): Headers {
   const headers = new Headers();
   if (options.version !== undefined) {
     headers.set("If-Match", String(options.version));
+  }
+  if (options.idempotencyKey) {
+    headers.set("Idempotency-Key", options.idempotencyKey);
   }
   return headers;
 }

@@ -33,9 +33,11 @@ export const permissionAliases: Record<string, string[]> = {
   "summaries.write": ["summaries.write", "conversations.write"],
   "leads.read": ["leads.read", "leads.write"],
   "leads.write": ["leads.write"],
+  "exports.read": ["visits.read", "leads.read", "conversations.read"],
   "knowledge.review": ["knowledge.review", "knowledge.write", "knowledge.publish"],
   "knowledge.publish": ["knowledge.publish", "knowledge.review"],
   "privacy.manage": ["privacy.manage"],
+  "members.manage": ["members.manage", "members.write", "company.manage"],
 };
 
 export function hasPermission(

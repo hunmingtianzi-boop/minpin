@@ -56,6 +56,7 @@ REQUIRED_TABLES = {
     "outbox_events",
     "outbox_deliveries",
     "worker_job_results",
+    "data_export_requests",
 }
 
 COMPANY_SCOPED_TABLES = REQUIRED_TABLES - {
@@ -232,6 +233,28 @@ def test_reliability_tables_have_deduplication_contracts(migration_sql: str) -> 
     assert "security definer" in migration_sql
     assert "for update skip locked" in migration_sql
     assert "cf_ai_card_worker" in migration_sql
+
+
+def test_async_exports_are_scoped_encrypted_expiring_worker_artifacts(
+    migration_sql: str,
+) -> None:
+    export = Base.metadata.tables["data_export_requests"]
+    assert {
+        "requested_by",
+        "export_type",
+        "status",
+        "scope_kind",
+        "file_ciphertext",
+        "file_sha256",
+        "expires_at",
+    } <= set(export.columns.keys())
+    assert "alter table data_export_requests force row level security" in migration_sql
+    assert "create policy data_export_requests_scope_isolation" in migration_sql
+    assert "app.scope_matches(tenant_id, company_id)" in migration_sql
+    assert "file_ciphertext bytea" in migration_sql
+    assert "grant select, update on data_export_requests to cf_ai_card_worker" in migration_sql
+    assert "grant select on visitors, visitor_profiles, visits, leads, messages" in migration_sql
+    assert "bypassrls" not in migration_sql.split("create table data_export_requests", 1)[1]
 
 
 def test_ai_runs_support_auditable_non_message_workflows(migration_sql: str) -> None:

@@ -19,6 +19,8 @@ describe("hasNavPermission", () => {
   it("allows company administrators to reach every management area", () => {
     expect(hasNavPermission(user("company_admin"), "catalog.read")).toBe(true);
     expect(hasNavPermission(user("company_admin"), "forbidden_topic.read")).toBe(true);
+    expect(hasNavPermission(user("company_admin"), "members.manage")).toBe(true);
+    expect(hasNavPermission(user("company_admin"), "exports.read")).toBe(true);
   });
 
   it("keeps card owners inside explicitly granted areas", () => {
@@ -29,6 +31,8 @@ describe("hasNavPermission", () => {
     expect(hasNavPermission(owner, "leads.read", true)).toBe(true);
     expect(hasNavPermission(owner, "catalog.read")).toBe(false);
     expect(hasNavPermission(owner, "privacy.manage")).toBe(false);
+    expect(hasNavPermission(owner, "members.manage")).toBe(false);
+    expect(hasNavPermission(owner, "exports.read", true)).toBe(true);
     expect(hasNavPermission(owner, "forbidden_topic.read")).toBe(false);
   });
 
@@ -37,6 +41,12 @@ describe("hasNavPermission", () => {
     expect(hasNavPermission(operator, "analytics.read")).toBe(true);
     expect(hasNavPermission(operator, "visits.read")).toBe(true);
     expect(hasNavPermission(operator, "leads.read")).toBe(true);
+    expect(hasNavPermission(operator, "privacy.manage")).toBe(false);
+  });
+
+  it("accepts member-management aliases without granting unrelated access", () => {
+    const operator = user("staff", ["members.write"]);
+    expect(hasNavPermission(operator, "members.manage")).toBe(true);
     expect(hasNavPermission(operator, "privacy.manage")).toBe(false);
   });
 });

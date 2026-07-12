@@ -6,6 +6,7 @@ from typing import Any
 
 from cf_worker.domain import (
     EvaluationRunner,
+    ExportIntent,
     HandlerResult,
     NotificationIntent,
     OutboxRecord,
@@ -15,6 +16,7 @@ from cf_worker.domain import (
 )
 
 _UUID_KEYS_BY_EVENT: dict[str, frozenset[str]] = {
+    "data_export.requested.v1": frozenset({"export_id", "requested_by"}),
     "knowledge.evaluate.requested.v1": frozenset({"company_id", "requested_by"}),
     "lead.created.v1": frozenset({"lead_id", "card_id", "owner_user_id"}),
     "privacy_request.created.v1": frozenset({"privacy_request_id"}),
@@ -43,6 +45,8 @@ class EventHandlerRegistry:
         payload = _validated_payload(event)
         if event.event_type == "knowledge.evaluate.requested.v1":
             return await self._evaluate(event, payload)
+        if event.event_type == "data_export.requested.v1":
+            return await self._data_export(event, payload)
         if event.event_type == "lead.created.v1":
             return self._lead(event, payload)
         if event.event_type == "privacy_request.created.v1":
@@ -52,6 +56,45 @@ class EventHandlerRegistry:
         if event.event_type in {"visit_summary.ready.v1", "visit_summary.generated.v1"}:
             return await self._visit_summary(event, payload)
         raise PermanentEventError("unsupported_event_type")
+
+    async def _data_export(
+        self,
+        event: OutboxRecord,
+        payload: Mapping[str, Any],
+    ) -> HandlerResult:
+        export_id = _uuid_value(payload, "export_id")
+        requested_by = _uuid_value(payload, "requested_by")
+        if event.aggregate_type != "data_export" or event.aggregate_id != export_id:
+            raise PermanentEventError("payload_aggregate_mismatch")
+        export: ExportIntent = await self._repository.build_export(
+            event,
+            export_id=export_id,
+            requested_by=requested_by,
+        )
+        return HandlerResult(
+            handler_name="data-export-v1",
+            notifications=(
+                NotificationIntent(
+                    recipient_user_id=requested_by,
+                    notification_type="data_export_ready",
+                    title="数据导出已完成",
+                    body="导出文件已生成，请在 24 小时内下载。",
+                    resource_type="data_export",
+                    resource_id=export_id,
+                ),
+            ),
+            export=export,
+            report=ReportIntent(
+                result_type="data_export",
+                schema_version=1,
+                status="completed",
+                report={
+                    "export_id": str(export_id),
+                    "row_count": export.row_count,
+                    "file_sha256": export.content_sha256(),
+                },
+            ),
+        )
 
     async def _evaluate(
         self,

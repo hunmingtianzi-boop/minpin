@@ -182,6 +182,20 @@ class OutboxStatus(StrEnum):
     DEAD_LETTER = "dead_letter"
 
 
+class DataExportType(StrEnum):
+    VISITORS = "visitors"
+    LEADS = "leads"
+    CONVERSATIONS = "conversations"
+
+
+class DataExportStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    EXPIRED = "expired"
+
+
 class Tenant(UUIDPrimaryKeyMixin, TimestampMixin, SoftDeleteMixin, Base):
     __tablename__ = "tenants"
     __table_args__ = (
@@ -1817,6 +1831,80 @@ class WorkerJobResult(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Ba
     report_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
+class DataExportRequest(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "data_export_requests"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["requested_by"], ["users.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "outbox_event_id"],
+            ["outbox_events.tenant_id", "outbox_events.company_id", "outbox_events.id"],
+            ondelete="RESTRICT",
+            name="fk_data_export_requests_outbox_scope",
+        ),
+        UniqueConstraint("outbox_event_id", name="uq_data_export_requests_outbox_event"),
+        CheckConstraint("scope_kind IN ('company', 'card_owner')", name="scope_kind_allowed"),
+        CheckConstraint(
+            "scope_kind = 'company' OR owner_user_id IS NOT NULL",
+            name="owner_scope_requires_user",
+        ),
+        CheckConstraint(
+            "NOT include_sensitive OR scope_kind = 'company'",
+            name="sensitive_requires_company_scope",
+        ),
+        CheckConstraint("row_count IS NULL OR row_count >= 0", name="row_count_non_negative"),
+        CheckConstraint(
+            "file_sha256 IS NULL OR char_length(file_sha256) = 64",
+            name="file_sha256",
+        ),
+        CheckConstraint(
+            "status <> 'completed' OR (completed_at IS NOT NULL AND expires_at IS NOT NULL "
+            "AND file_ciphertext IS NOT NULL AND file_sha256 IS NOT NULL "
+            "AND file_name IS NOT NULL AND row_count IS NOT NULL)",
+            name="completed_artifact_required",
+        ),
+        Index(
+            "ix_data_export_requests_requester_created",
+            "company_id",
+            "requested_by",
+            "created_at",
+        ),
+        Index("ix_data_export_requests_expiry", "status", "expires_at"),
+    )
+
+    requested_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    requested_role: Mapped[str] = mapped_column(String(40), nullable=False)
+    export_type: Mapped[DataExportType] = mapped_column(
+        db_enum(DataExportType, "data_export_type"), nullable=False
+    )
+    status: Mapped[DataExportStatus] = mapped_column(
+        db_enum(DataExportStatus, "data_export_status"),
+        nullable=False,
+        default=DataExportStatus.PENDING,
+        server_default=text("'pending'"),
+    )
+    scope_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    owner_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    include_sensitive: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    outbox_event_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    file_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    file_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    file_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    encryption_key_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+
 __all__ = [
     "AIRun",
     "AuditLog",
@@ -1827,6 +1915,9 @@ __all__ = [
     "Company",
     "ConsentRecord",
     "Conversation",
+    "DataExportRequest",
+    "DataExportStatus",
+    "DataExportType",
     "ForbiddenTopic",
     "IdempotencyKey",
     "KnowledgeChunk",

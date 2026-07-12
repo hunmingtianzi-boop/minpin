@@ -8,6 +8,82 @@ export type AdminUser = {
   permissions: string[];
 };
 
+export type MemberRole = "company_admin" | "card_owner";
+export type MemberStatus = "active" | "disabled";
+export type MemberLifecycleStatus = MemberStatus | "suspended";
+export type MemberRowOutcome =
+  | "created"
+  | "updated"
+  | "unchanged"
+  | "duplicate"
+  | "failed";
+
+export type CompanyMember = {
+  membershipId: string;
+  userId: string;
+  account: string;
+  displayName: string;
+  role: MemberRole;
+  permissions: string[];
+  status: MemberLifecycleStatus;
+  credentialEnabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MemberCreateInput = {
+  account: string;
+  displayName: string;
+  password: string;
+  email?: string;
+  mobile?: string;
+  role: MemberRole;
+  permissions: string[];
+  status: MemberStatus;
+  rotatePassword?: boolean;
+};
+
+export type MemberAccessInput = {
+  displayName?: string;
+  role?: MemberRole;
+  permissions?: string[];
+};
+
+export type MemberRowError = {
+  code: string;
+  message: string;
+  fields: string[];
+};
+
+export type BulkMemberRowResult = {
+  rowNumber: number;
+  account?: string;
+  outcome: MemberRowOutcome;
+  member?: CompanyMember;
+  error?: MemberRowError;
+  duplicateOfRow?: number;
+};
+
+export type BulkMemberResult = {
+  batchId: string;
+  summary: {
+    total: number;
+    succeeded: number;
+    created: number;
+    updated: number;
+    unchanged: number;
+    duplicated: number;
+    failed: number;
+  };
+  rows: BulkMemberRowResult[];
+};
+
+export type MemberPasswordReset = {
+  membershipId: string;
+  passwordChangedAt: string;
+  sessionsRevoked: number;
+};
+
 export type CompanyProfile = {
   id?: string;
   name: string;

@@ -19,8 +19,10 @@ from app.api.routes import (
     admin,
     auth,
     crm,
+    exports,
     health,
     knowledge_ops,
+    members,
     platform,
     public_catalog,
     public_conversations,
@@ -163,9 +165,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=runtime_settings.api_prefix)
     app.include_router(auth.router, prefix=runtime_settings.api_prefix)
     app.include_router(admin.router, prefix=runtime_settings.api_prefix)
+    app.include_router(members.router, prefix=runtime_settings.api_prefix)
     app.include_router(knowledge_ops.router, prefix=runtime_settings.api_prefix)
     app.include_router(platform.router, prefix=runtime_settings.api_prefix)
     app.include_router(crm.router, prefix=runtime_settings.api_prefix)
+    app.include_router(exports.router, prefix=runtime_settings.api_prefix)
     app.include_router(public_conversations.router, prefix=runtime_settings.api_prefix)
     app.include_router(public_catalog.router, prefix=runtime_settings.api_prefix)
     app.include_router(workflow.router, prefix=runtime_settings.api_prefix)

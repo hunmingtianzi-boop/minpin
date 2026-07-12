@@ -47,10 +47,23 @@ class ReportIntent:
 
 
 @dataclass(frozen=True, slots=True)
+class ExportIntent:
+    export_id: uuid.UUID
+    file_name: str
+    content_type: str
+    content: str = field(repr=False)
+    row_count: int
+
+    def content_sha256(self) -> str:
+        return hashlib.sha256(self.content.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
 class HandlerResult:
     handler_name: str
     notifications: tuple[NotificationIntent, ...] = ()
     report: ReportIntent | None = None
+    export: ExportIntent | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def result_hash(self) -> str:
@@ -75,6 +88,17 @@ class HandlerResult:
                     "report": self.report.report,
                 }
                 if self.report
+                else None
+            ),
+            "export": (
+                {
+                    "export_id": str(self.export.export_id),
+                    "file_name": self.export.file_name,
+                    "content_type": self.export.content_type,
+                    "content_sha256": self.export.content_sha256(),
+                    "row_count": self.export.row_count,
+                }
+                if self.export
                 else None
             ),
             "metadata": self.metadata,
@@ -117,6 +141,14 @@ class OutboxRepository(Protocol):
 
     async def summary_recipient(self, event: OutboxRecord) -> uuid.UUID | None: ...
 
+    async def build_export(
+        self,
+        event: OutboxRecord,
+        *,
+        export_id: uuid.UUID,
+        requested_by: uuid.UUID,
+    ) -> ExportIntent: ...
+
     async def complete(self, event: OutboxRecord, result: HandlerResult) -> str: ...
 
     async def fail(self, event: OutboxRecord, *, error_code: str, permanent: bool) -> str: ...
@@ -125,6 +157,7 @@ class OutboxRepository(Protocol):
 __all__ = [
     "ClaimedEvent",
     "EvaluationRunner",
+    "ExportIntent",
     "HandlerResult",
     "NotificationIntent",
     "OutboxRecord",

@@ -16,11 +16,13 @@ import {
   Chat24Regular,
   ContactCardGroup24Regular,
   Dismiss24Regular,
+  ArrowDownload24Regular,
   Eye24Regular,
   Home24Regular,
   Lightbulb24Regular,
   Navigation24Regular,
   PeopleTeam24Regular,
+  PeopleSettings24Regular,
   ShieldLock24Regular,
   ShieldError24Regular,
   SignOut24Regular,
@@ -58,6 +60,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { path: APP_PATHS.visits, label: "访问记录", icon: Eye24Regular, permission: "visits.read", allowCardOwner: true },
       { path: APP_PATHS.conversations, label: "AI 对话", icon: Chat24Regular, permission: "conversations.read", allowCardOwner: true },
       { path: APP_PATHS.leads, label: "销售线索", icon: PeopleTeam24Regular, permission: "leads.read", allowCardOwner: true },
+      { path: APP_PATHS.exports, label: "数据导出", icon: ArrowDownload24Regular, permission: "exports.read", allowCardOwner: true },
     ],
   },
   {
@@ -92,6 +95,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "企业治理",
     items: [
+      { path: APP_PATHS.members, label: "企业用户", icon: PeopleSettings24Regular, permission: "members.manage" },
       { path: APP_PATHS.company, label: "企业资料", icon: Building24Regular, permission: "company.read" },
       { path: APP_PATHS.privacyRequests, label: "隐私请求", icon: ShieldLock24Regular, permission: "privacy.manage" },
     ],

@@ -1,0 +1,71 @@
+import { FluentProvider } from "@fluentui/react-components";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { exportsApi } from "../api/exportsApi";
+import { AuthContext } from "../auth/AuthContext";
+import { adminLightTheme } from "../theme";
+import { ExportsPage } from "./ExportsPage";
+
+const item = {
+  id: "export-1",
+  exportType: "leads" as const,
+  status: "completed" as const,
+  includeSensitive: false,
+  rowCount: 2,
+  fileName: "leads.csv",
+  createdAt: "2026-07-12T00:00:00Z",
+  completedAt: "2026-07-12T00:01:00Z",
+  expiresAt: "2026-07-13T00:01:00Z",
+};
+
+function renderPage(role = "company_admin", permissions: string[] = []) {
+  return render(
+    <FluentProvider theme={adminLightTheme}>
+      <AuthContext.Provider value={{
+        status: "authenticated",
+        user: {
+          id: "user-1", displayName: "管理员", membershipId: "membership-1",
+          tenantId: "tenant-1", companyId: "company-1", role, permissions,
+        },
+        loginPending: false,
+        apiConfigured: true,
+        login: vi.fn(),
+        logout: vi.fn(),
+      }}>
+        <ExportsPage />
+      </AuthContext.Provider>
+    </FluentProvider>,
+  );
+}
+
+describe("ExportsPage", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("lists exports and creates a sensitive administrator export", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(exportsApi, "list").mockResolvedValue({ items: [item], total: 1, limit: 50, offset: 0 });
+    const create = vi.spyOn(exportsApi, "create").mockResolvedValue({
+      ...item, id: "export-2", status: "pending",
+    });
+    renderPage();
+
+    await screen.findByText("可下载");
+    await user.click(screen.getByRole("checkbox", { name: "包含未脱敏联系方式" }));
+    await user.click(screen.getByRole("button", { name: "创建导出" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith("leads", true));
+    expect(await screen.findByText("导出任务已创建，页面会自动更新处理状态。")).toBeInTheDocument();
+  });
+
+  it("disables sensitive export for a card owner", async () => {
+    vi.spyOn(exportsApi, "list").mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 });
+    renderPage("card_owner");
+    expect(await screen.findByRole("checkbox", { name: "包含未脱敏联系方式" })).toBeDisabled();
+  });
+
+  it("shows a permission state when no dataset can be read", () => {
+    renderPage("auditor");
+    expect(screen.getByText("没有访问权限")).toBeInTheDocument();
+  });
+});

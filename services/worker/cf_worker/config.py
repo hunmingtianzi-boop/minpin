@@ -23,11 +23,14 @@ class WorkerSettings(BaseSettings):
 
     app_env: str = "local"
     worker_database_url: SecretStr = SecretStr(
-        "postgresql+asyncpg://cf_ai_card_worker:change-me-worker-local-only@localhost:5432/"
+        "postgresql+asyncpg://cf_ai_card_worker:change-me-worker-local-only@127.0.0.1:5432/"
         "cf_ai_card"
     )
     redis_url: SecretStr = SecretStr("redis://localhost:6379/0")
     celery_broker_url: SecretStr = SecretStr("redis://localhost:6379/1")
+    field_encryption_key: SecretStr = SecretStr("replace-with-kms-backed-key")
+    field_encryption_key_ref: str = Field(default="local-v1", min_length=1, max_length=128)
+    field_encryption_previous_keys: SecretStr | None = None
     worker_id: str = Field(default_factory=_default_worker_id, min_length=1, max_length=128)
     worker_log_level: str = "INFO"
 
@@ -38,6 +41,8 @@ class WorkerSettings(BaseSettings):
     outbox_max_attempts: int = Field(default=6, ge=1, le=50)
     outbox_backoff_base_seconds: int = Field(default=5, ge=1, le=3_600)
     outbox_backoff_max_seconds: int = Field(default=900, ge=1, le=86_400)
+    export_retention_hours: int = Field(default=24, ge=1, le=168)
+    export_max_rows: int = Field(default=100_000, ge=1, le=1_000_000)
 
     worker_health_host: str = "0.0.0.0"  # noqa: S104 - container health endpoint
     worker_health_port: int = Field(default=8020, ge=1, le=65_535)
