@@ -15,11 +15,14 @@
     "admin:build": "corepack pnpm --filter @cf/admin-web build",
     "admin:test": "corepack pnpm --filter @cf/admin-web test",
     "e2e:test": "corepack pnpm exec playwright test",
+    "e2e:runtime": "corepack pnpm local:start && corepack pnpm exec playwright test --config playwright.runtime.config.ts",
     "e2e:install": "corepack pnpm exec playwright install chromium",
     "webvitals:test": "corepack pnpm exec playwright test --config playwright.performance.config.ts",
     "api:dev": "python -m uvicorn app.main:app --app-dir services/api --reload --host 127.0.0.1 --port 8000",
     "api:lint": "services/api/.venv/Scripts/python -m ruff check services/api tools/sync_openapi_contract.py tools/release",
     "api:test": "services/api/.venv/Scripts/python -m pytest services/api/tests -m \"not integration\"",
+    "eval:validate": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/run-api-python.ps1 -m pytest services/api/tests/test_evaluation_metrics.py",
+    "eval:live:tuotu": "powershell -NoProfile -ExecutionPolicy Bypass -File tools/run-api-python.ps1 -m app.cli.evaluate_rag packages/evals/tuotu.v2.json --output artifacts/evals/tuotu-v2.json",
     "docs:build": "node tools/build_dev_baseline_docx.js",
     "contracts:sync": "services/api/.venv/Scripts/python tools/sync_openapi_contract.py",
     "contracts:check": "services/api/.venv/Scripts/python tools/sync_openapi_contract.py --check",
@@ -32,8 +35,9 @@
     "worker:test": "services/worker/.venv/Scripts/python.exe -m ruff check services/worker && services/worker/.venv/Scripts/python.exe -m pytest services/worker/tests -m \"not integration\"",
     "perf:test": "services/api/.venv/Scripts/python.exe -m ruff check --config services/api/pyproject.toml tools/perf && services/api/.venv/Scripts/python.exe -m pytest tools/perf/tests",
     "perf:smoke": "services/api/.venv/Scripts/python.exe -m tools.perf.smoke --output artifacts/perf/ci-smoke.json",
+    "perf:acceptance": "powershell -ExecutionPolicy Bypass -File tools/perf/local-acceptance.ps1",
     "release:test": "services/api/.venv/Scripts/python.exe -m pytest tools/release/tests",
-    "check": "corepack pnpm contracts:check && corepack pnpm contracts:validate && corepack pnpm api:lint && corepack pnpm api:test && corepack pnpm worker:test && corepack pnpm perf:test && corepack pnpm perf:smoke && corepack pnpm release:test && corepack pnpm web:test && corepack pnpm web:build && corepack pnpm admin:test && corepack pnpm admin:build"
+    "check": "corepack pnpm contracts:check && corepack pnpm contracts:validate && corepack pnpm api:lint && corepack pnpm api:test && corepack pnpm eval:validate && corepack pnpm worker:test && corepack pnpm perf:test && corepack pnpm perf:smoke && corepack pnpm release:test && corepack pnpm web:test && corepack pnpm web:build && corepack pnpm admin:test && corepack pnpm admin:build"
   },
   "devDependencies": {
     "@playwright/test": "1.61.1",

@@ -80,7 +80,8 @@ async def test_hybrid_sql_enforces_scope_publication_and_current_version() -> No
     assert "<=> CAST(:query_embedding AS vector)" in sql
     assert "similarity(e.evidence_text, :query_text)" in sql
     assert "FULL OUTER JOIN lexical_ranked" in sql
-    assert "e.embedding_model = :embedding_model" in sql
+    assert "CAST(:embedding_model AS text) IS NULL" in sql
+    assert "e.embedding_model = CAST(:embedding_model AS text)" in sql
     assert "FROM products AS product" in sql
     assert "product.status = 'published'" in sql
     assert "FROM case_studies AS case_study" in sql

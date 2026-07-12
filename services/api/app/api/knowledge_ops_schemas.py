@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.text_integrity import ensure_text_integrity
+
 
 class KnowledgeOpsModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -21,7 +23,7 @@ class FaqWriteRequest(KnowledgeOpsModel):
     def reject_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("value must not be blank")
-        return value
+        return ensure_text_integrity(value)
 
 
 class FaqRecord(KnowledgeOpsModel):

@@ -247,26 +247,26 @@ function Start-Runtime {
     if (-not (Test-Path -LiteralPath $WorkerPython)) {
         throw "Worker runtime is missing: $WorkerPython"
     }
-    if ($null -eq (Get-Listener 8020)) {
-        $savedPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
-        try {
-            $env:PYTHONPATH = @(
-                (Join-Path $Root "services\api"),
-                (Join-Path $Root "services\worker")
-            ) -join ";"
-            if ($null -eq (Get-CommandProcess "celery.*cf_worker.*\sbeat(\s|$)")) {
-                Start-Process -FilePath $WorkerPython `
-                    -ArgumentList @(
-                        "-m", "celery", "-A", "cf_worker.celery_app:celery_app",
-                        "beat", "--loglevel=INFO",
-                        "--schedule", (Join-Path $Runtime "celerybeat-schedule")
-                    ) `
-                    -WorkingDirectory (Join-Path $Root "services\worker") `
-                    -WindowStyle Hidden `
-                    -RedirectStandardOutput (Join-Path $Runtime "worker-beat.stdout.log") `
-                    -RedirectStandardError (Join-Path $Runtime "worker-beat.stderr.log") |
-                    Out-Null
-            }
+    $savedPythonPath = [Environment]::GetEnvironmentVariable("PYTHONPATH", "Process")
+    try {
+        $env:PYTHONPATH = @(
+            (Join-Path $Root "services\api"),
+            (Join-Path $Root "services\worker")
+        ) -join ";"
+        if ($null -eq (Get-CommandProcess "celery.*cf_worker.*\sbeat(\s|$)")) {
+            Start-Process -FilePath $WorkerPython `
+                -ArgumentList @(
+                    "-m", "celery", "-A", "cf_worker.celery_app:celery_app",
+                    "beat", "--loglevel=INFO",
+                    "--schedule", (Join-Path $Runtime "celerybeat-schedule")
+                ) `
+                -WorkingDirectory (Join-Path $Root "services\worker") `
+                -WindowStyle Hidden `
+                -RedirectStandardOutput (Join-Path $Runtime "worker-beat.stdout.log") `
+                -RedirectStandardError (Join-Path $Runtime "worker-beat.stderr.log") |
+                Out-Null
+        }
+        if ($null -eq (Get-Listener 8020)) {
             Start-Process -FilePath $WorkerPython `
                 -ArgumentList @(
                     "-m", "celery", "-A", "cf_worker.celery_app:celery_app",
@@ -277,9 +277,9 @@ function Start-Runtime {
                 -WindowStyle Hidden `
                 -RedirectStandardOutput (Join-Path $Runtime "worker.stdout.log") `
                 -RedirectStandardError (Join-Path $Runtime "worker.stderr.log") | Out-Null
-        } finally {
-            [Environment]::SetEnvironmentVariable("PYTHONPATH", $savedPythonPath, "Process")
         }
+    } finally {
+        [Environment]::SetEnvironmentVariable("PYTHONPATH", $savedPythonPath, "Process")
     }
     Wait-Http "http://127.0.0.1:8020/health/ready" 60 5
 

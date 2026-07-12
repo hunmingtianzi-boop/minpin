@@ -260,7 +260,10 @@ vector_candidates AS (
         1.0 - (e.embedding <=> CAST(:query_embedding AS vector)) AS vector_score
     FROM eligible AS e
     WHERE e.embedding IS NOT NULL
-      AND (:embedding_model IS NULL OR e.embedding_model = :embedding_model)
+      AND (
+        CAST(:embedding_model AS text) IS NULL
+        OR e.embedding_model = CAST(:embedding_model AS text)
+      )
     ORDER BY e.embedding <=> CAST(:query_embedding AS vector), e.evidence_id
     LIMIT :candidate_limit
 ),

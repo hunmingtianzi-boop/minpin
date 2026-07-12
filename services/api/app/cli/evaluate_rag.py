@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -12,7 +13,12 @@ import httpx
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.ai import ForbiddenTopicPolicy, ProviderCredentials, RAGRequest
+from app.ai import (
+    DEFAULT_PROMPT_VERSION,
+    ForbiddenTopicPolicy,
+    ProviderCredentials,
+    RAGRequest,
+)
 from app.cli.seed_content import deterministic_id
 from app.core.config import Settings, get_settings
 from app.core.redaction import redact_sensitive_text
@@ -108,6 +114,7 @@ async def run_evaluation(
     company_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     suite = load_evaluation_suite(dataset)
+    dataset_bytes = await asyncio.to_thread(dataset.read_bytes)
     tenant_id = tenant_id or deterministic_id(suite.tenant_slug, "tenant")
     company_id = company_id or deterministic_id(suite.tenant_slug, "company")
     if settings.llm_api_key is None:
@@ -182,8 +189,16 @@ async def run_evaluation(
     gate = evaluate_release_gate(metrics)
     return {
         "dataset": str(dataset),
+        "dataset_sha256": hashlib.sha256(dataset_bytes).hexdigest(),
         "suite_version": suite.version,
         "tenant_slug": suite.tenant_slug,
+        "runtime": {
+            "llm_provider": settings.llm_provider,
+            "llm_model": settings.llm_model,
+            "prompt_version": DEFAULT_PROMPT_VERSION,
+            "embedding_provider": settings.embedding_provider,
+            "embedding_model": settings.embedding_model,
+        },
         "gate": gate.model_dump(mode="json"),
         "observations": [item.model_dump(mode="json") for item in observations],
     }

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import uuid
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.cli.seed_content import (
     _should_bootstrap_staff,
@@ -42,6 +44,19 @@ def test_tuotu_package_bootstraps_the_public_business_catalog() -> None:
         "handoff",
         "safe_template",
     }
+
+
+def test_content_package_rejects_utf8_text_decoded_as_latin1(tmp_path: Path) -> None:
+    source_path = ROOT / "packages" / "tenant-content" / "tuotu.knowledge.json"
+    payload = json.loads(source_path.read_text(encoding="utf-8"))
+    payload["documents"][0]["content"] = payload["documents"][0]["content"].encode(
+        "utf-8"
+    ).decode("latin-1")
+    corrupted_path = tmp_path / "corrupted.knowledge.json"
+    corrupted_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValidationError, match="forbidden control character"):
+        load_content_package(corrupted_path)
 
 
 def test_seed_identifiers_are_stable_and_tenant_specific() -> None:

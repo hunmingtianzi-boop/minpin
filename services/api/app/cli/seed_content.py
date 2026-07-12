@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -19,6 +19,7 @@ from app.ai.prompts import DEFAULT_PROMPT_VERSION, PromptRegistry
 from app.core.config import Settings, get_settings
 from app.core.pii import PiiCipher
 from app.core.staff_auth import hash_staff_password, normalize_staff_account
+from app.core.text_integrity import ensure_text_tree
 from app.db.models import (
     Card,
     CardContactField,
@@ -49,6 +50,11 @@ _SEED_NAMESPACE = uuid.UUID("f2a9d459-8e1b-49fb-94ee-33fc5125deaf")
 
 class StrictInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    @field_validator("*")
+    @classmethod
+    def reject_broken_text_encoding(cls, value: Any) -> Any:
+        return ensure_text_tree(value)
 
 
 class TenantInput(StrictInput):

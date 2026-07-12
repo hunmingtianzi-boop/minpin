@@ -4,6 +4,7 @@ const apiBaseUrl = "http://127.0.0.1:8000/api/v1";
 
 export default defineConfig({
   testDir: "tests/e2e",
+  testIgnore: "**/*.runtime.spec.ts",
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,

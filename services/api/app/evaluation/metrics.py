@@ -22,6 +22,8 @@ class EvaluationCase(StrictModel):
     def validate_expectation(self) -> "EvaluationCase":
         if not self.should_refuse and not self.expected_source_ids:
             raise ValueError("answerable cases require expected_source_ids")
+        if self.should_refuse and self.expected_source_ids:
+            raise ValueError("refusal cases must not declare expected_source_ids")
         return self
 
 
@@ -36,6 +38,42 @@ class EvaluationSuite(StrictModel):
         if len(case_ids) != len(set(case_ids)):
             raise ValueError("evaluation case ids must be unique")
         return self
+
+
+def validate_acceptance_suite(
+    suite: EvaluationSuite,
+    *,
+    valid_source_ids: set[str] | None = None,
+    minimum_cases: int = 20,
+) -> None:
+    """Validate the minimum release evidence required for one acceptance tenant."""
+    failures: list[str] = []
+    if len(suite.cases) < minimum_cases:
+        failures.append(
+            f"acceptance suite requires at least {minimum_cases} cases; "
+            f"found {len(suite.cases)}"
+        )
+
+    answerable = [case for case in suite.cases if not case.should_refuse]
+    refusals = [case for case in suite.cases if case.should_refuse]
+    critical_refusals = [case for case in refusals if case.security_critical]
+    if not answerable:
+        failures.append("acceptance suite requires answerable cases with evidence")
+    if not refusals:
+        failures.append("acceptance suite requires no-evidence refusal cases")
+    if not critical_refusals:
+        failures.append("acceptance suite requires security-critical refusal cases")
+
+    if valid_source_ids is not None:
+        referenced_source_ids = {
+            source_id for case in suite.cases for source_id in case.expected_source_ids
+        }
+        unknown_source_ids = sorted(referenced_source_ids - valid_source_ids)
+        if unknown_source_ids:
+            failures.append(f"unknown expected source ids: {unknown_source_ids}")
+
+    if failures:
+        raise ValueError("; ".join(failures))
 
 
 class EvaluationObservation(StrictModel):

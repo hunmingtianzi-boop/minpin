@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
+from app.core.text_integrity import ensure_text_tree
+
 
 class AdminStrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -95,12 +97,22 @@ class CreateKnowledgeDocumentRequest(AdminStrictModel):
     source_type: str = Field(default="manual", min_length=1, max_length=80)
     source_id: str | None = Field(default=None, min_length=1, max_length=160)
 
+    @field_validator("title", "source_type", "source_id")
+    @classmethod
+    def reject_broken_text_encoding(cls, value: str | None) -> str | None:
+        return ensure_text_tree(value)
+
 
 class PutKnowledgeDocumentRequest(AdminStrictModel):
     raw_text: str = Field(min_length=1, max_length=2_000_000)
     title: str | None = Field(default=None, min_length=1, max_length=500)
     visibility: Literal["public", "authenticated", "internal"] = "public"
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("raw_text", "title", "metadata")
+    @classmethod
+    def reject_broken_text_encoding(cls, value: Any) -> Any:
+        return ensure_text_tree(value)
 
     @field_validator("raw_text")
     @classmethod
