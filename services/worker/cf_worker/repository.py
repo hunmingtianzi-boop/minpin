@@ -8,8 +8,14 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.pii import PiiCipher, PiiCipherError, mask_value
+from app.services.audit import append_audit
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncConnection,
+    AsyncEngine,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from cf_worker.config import WorkerSettings
 from cf_worker.domain import (
@@ -19,6 +25,20 @@ from cf_worker.domain import (
     NotificationIntent,
     OutboxRecord,
 )
+
+
+class ClaimedScheduledPublish:
+    def __init__(self, row: Any) -> None:
+        self.id = row["job_id"]
+        self.tenant_id = row["tenant_id"]
+        self.company_id = row["company_id"]
+        self.lock_token = row["lock_token"]
+        self.resource_type = str(row["resource_type"])
+        self.resource_id = row["resource_id"]
+        self.target_version = int(row["target_version"])
+        self.knowledge_version_id = row["knowledge_version_id"]
+        self.scheduled_by = row["scheduled_by"]
+        self.attempt = int(row["attempts"])
 
 _SET_SCOPE_SQL = text(
     """
@@ -52,6 +72,10 @@ class PostgresOutboxRepository:
     async def close(self) -> None:
         await self._engine.dispose()
 
+    @property
+    def session_factory(self):
+        return async_sessionmaker(self._engine, expire_on_commit=False)
+
     async def purge_expired_visitor_profiles(self) -> int:
         """Physically remove expired derived profile evidence without loading PII."""
         async with self._engine.begin() as connection:
@@ -59,6 +83,200 @@ class PostgresOutboxRepository:
                 text("SELECT app.purge_expired_visitor_profiles()")
             )
             return max(int(deleted or 0), 0)
+
+    async def claim_scheduled_publishes(self) -> tuple[ClaimedScheduledPublish, ...]:
+        async with self._engine.begin() as connection:
+            rows = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT * FROM app.claim_scheduled_publish_jobs(
+                          :worker_id, :batch_size, :lease_seconds
+                        )
+                        """
+                    ),
+                    {
+                        "worker_id": self._settings.worker_id,
+                        "batch_size": self._settings.scheduled_publish_batch_size,
+                        "lease_seconds": self._settings.scheduled_publish_lease_seconds,
+                    },
+                )
+            ).mappings()
+            return tuple(ClaimedScheduledPublish(row) for row in rows)
+
+    async def complete_scheduled_publish(self, claim: ClaimedScheduledPublish) -> bool:
+        return await self._finish_scheduled_publish(claim, succeeded=True)
+
+    async def publish_scheduled_catalog(self, claim: ClaimedScheduledPublish) -> None:
+        table, required = {
+            "product": (
+                "products",
+                ("slug", "name", "summary", "detail"),
+            ),
+            "case_study": (
+                "case_studies",
+                ("slug", "title", "background", "solution", "result"),
+            ),
+        }.get(claim.resource_type, (None, ()))
+        if table is None:
+            raise RuntimeError("unsupported_scheduled_catalog_type")
+        sessions = async_sessionmaker(self._engine, expire_on_commit=False)
+        async with sessions() as session, session.begin():
+            await session.execute(
+                _SET_SCOPE_SQL,
+                {"tenant_id": str(claim.tenant_id), "company_id": str(claim.company_id)},
+            )
+            row = (
+                await session.execute(
+                    text(
+                        f"SELECT * FROM {table} WHERE id = :resource_id "  # noqa: S608
+                        "AND tenant_id = :tenant_id AND company_id = :company_id "
+                        "AND deleted_at IS NULL FOR UPDATE"
+                    ),
+                    {
+                        "resource_id": claim.resource_id,
+                        "tenant_id": claim.tenant_id,
+                        "company_id": claim.company_id,
+                    },
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                raise RuntimeError("scheduled_resource_not_found")
+            if int(row["version"]) != claim.target_version:
+                raise RuntimeError("scheduled_resource_version_conflict")
+            if str(row["status"]) == "published":
+                return
+            if str(row["status"]) == "archived":
+                raise RuntimeError("scheduled_resource_archived")
+            if any(not str(row[field] or "").strip() for field in required):
+                raise RuntimeError("scheduled_resource_incomplete")
+            result = await session.execute(
+                text(
+                    f"UPDATE {table} SET status = 'published', "  # noqa: S608
+                    "published_at = clock_timestamp(), version = version + 1 "
+                    "WHERE id = :resource_id AND tenant_id = :tenant_id "
+                    "AND company_id = :company_id AND version = :target_version"
+                ),
+                {
+                    "resource_id": claim.resource_id,
+                    "tenant_id": claim.tenant_id,
+                    "company_id": claim.company_id,
+                    "target_version": claim.target_version,
+                },
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("scheduled_resource_version_conflict")
+            await append_audit(
+                session,
+                tenant_id=claim.tenant_id,
+                company_id=claim.company_id,
+                actor_user_id=claim.scheduled_by,
+                action=f"{claim.resource_type}.scheduled_publish",
+                resource_type=claim.resource_type,
+                resource_id=claim.resource_id,
+                trace_id=f"scheduled-publish:{claim.id}",
+                event_data={
+                    "job_id": claim.id,
+                    "target_version": claim.target_version,
+                    "attempt": claim.attempt,
+                },
+            )
+
+    async def validate_scheduled_knowledge(self, claim: ClaimedScheduledPublish) -> None:
+        async with self._engine.begin() as connection:
+            await self._set_scope(connection, claim.tenant_id, claim.company_id)
+            row = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT document.version, document.status, version.review_status
+                        FROM knowledge_documents AS document
+                        JOIN knowledge_versions AS version
+                          ON version.tenant_id = document.tenant_id
+                         AND version.company_id = document.company_id
+                         AND version.document_id = document.id
+                         AND version.id = :version_id
+                        WHERE document.id = :resource_id
+                          AND document.tenant_id = :tenant_id
+                          AND document.company_id = :company_id
+                        """
+                    ),
+                    {
+                        "version_id": claim.knowledge_version_id,
+                        "resource_id": claim.resource_id,
+                        "tenant_id": claim.tenant_id,
+                        "company_id": claim.company_id,
+                    },
+                )
+            ).mappings().one_or_none()
+            if row is None:
+                raise RuntimeError("scheduled_resource_not_found")
+            if int(row["version"]) != claim.target_version:
+                raise RuntimeError("scheduled_resource_version_conflict")
+            if str(row["status"]) == "published":
+                raise RuntimeError("scheduled_resource_already_published")
+            if str(row["status"]) == "archived":
+                raise RuntimeError("scheduled_resource_archived")
+            if str(row["review_status"]) != "draft":
+                raise RuntimeError("scheduled_knowledge_version_conflict")
+
+    async def fail_scheduled_publish(
+        self, claim: ClaimedScheduledPublish, *, error_code: str, error_detail: str
+    ) -> bool:
+        return await self._finish_scheduled_publish(
+            claim, succeeded=False, error_code=error_code, error_detail=error_detail
+        )
+
+    async def _finish_scheduled_publish(
+        self,
+        claim: ClaimedScheduledPublish,
+        *,
+        succeeded: bool,
+        error_code: str | None = None,
+        error_detail: str | None = None,
+    ) -> bool:
+        async with self._engine.begin() as connection:
+            await self._set_scope(connection, claim.tenant_id, claim.company_id)
+            if succeeded:
+                result = await connection.execute(
+                    text(
+                        """
+                        UPDATE scheduled_publish_jobs
+                        SET status = 'completed', completed_at = clock_timestamp(),
+                            lock_token = NULL, locked_by = NULL, lease_expires_at = NULL,
+                            error_code = NULL, error_detail = NULL, version = version + 1
+                        WHERE id = :job_id AND lock_token = :lock_token
+                          AND status = 'processing'
+                        """
+                    ),
+                    {"job_id": claim.id, "lock_token": claim.lock_token},
+                )
+            else:
+                dead = claim.attempt >= self._settings.scheduled_publish_max_attempts
+                delay = min(5 * (2 ** max(claim.attempt - 1, 0)), 900)
+                result = await connection.execute(
+                    text(
+                        """
+                        UPDATE scheduled_publish_jobs
+                        SET status = :status,
+                            next_attempt_at = clock_timestamp() + make_interval(secs => :delay),
+                            lock_token = NULL, locked_by = NULL, lease_expires_at = NULL,
+                            error_code = :error_code, error_detail = :error_detail,
+                            version = version + 1
+                        WHERE id = :job_id AND lock_token = :lock_token
+                          AND status = 'processing'
+                        """
+                    ),
+                    {
+                        "job_id": claim.id,
+                        "lock_token": claim.lock_token,
+                        "status": "dead_letter" if dead else "failed",
+                        "delay": delay,
+                        "error_code": (error_code or "UNKNOWN")[:120],
+                        "error_detail": (error_detail or "")[:2_000],
+                    },
+                )
+            return result.rowcount == 1
 
     async def claim(self) -> tuple[ClaimedEvent, ...]:
         async with self._engine.begin() as connection:

@@ -27,3 +27,10 @@ def test_celery_uses_redis_late_ack_and_visibility_larger_than_database_lease() 
         "queue": "outbox.poll",
         "expires": settings.profile_retention_purge_seconds,
     }
+    scheduled_publish = celery_app.conf.beat_schedule["poll-scheduled-publishes"]
+    assert scheduled_publish["task"] == "cf_worker.poll_scheduled_publishes"
+    assert scheduled_publish["schedule"] == settings.scheduled_publish_poll_seconds
+    assert scheduled_publish["options"] == {
+        "queue": "outbox.poll",
+        "expires": settings.scheduled_publish_poll_seconds * 2,
+    }

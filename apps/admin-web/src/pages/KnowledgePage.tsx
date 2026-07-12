@@ -24,10 +24,18 @@ import { useState } from "react";
 
 import { adminApi } from "../api/adminApi";
 import { ApiError } from "../api/client";
+import {
+  scheduledPublicationsApi,
+  type ScheduledPublication,
+} from "../api/scheduledPublicationsApi";
 import type { KnowledgeDocument } from "../api/types";
 import { KnowledgeEditor } from "../components/KnowledgeEditor";
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
+import {
+  ScheduledPublicationActions,
+  ScheduledPublicationStatus,
+} from "../components/ScheduledPublicationActions";
 import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
 import { formatTimestamp } from "../utils/format";
@@ -38,6 +46,9 @@ export function hasPublishableDraft(document: KnowledgeDocument): boolean {
 
 export function KnowledgePage() {
   const resource = useResource(() => adminApi.listKnowledgeDocuments());
+  const schedules = useResource<ScheduledPublication[]>(() =>
+    scheduledPublicationsApi.list("knowledge_document"),
+  );
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<KnowledgeDocument>();
   const [publishTarget, setPublishTarget] = useState<KnowledgeDocument>();
@@ -84,6 +95,16 @@ export function KnowledgePage() {
       setPublishing(false);
     }
   };
+  const activeSchedule = (targetId: string) =>
+    schedules.data?.find(
+      (item) =>
+        item.resourceId === targetId &&
+        (["pending", "processing", "failed"] as string[]).includes(item.status),
+    );
+  const reloadAfterSchedule = (message: string) => {
+    setNotice(message);
+    schedules.reload();
+  };
 
   return (
     <main className="page-stack">
@@ -102,6 +123,22 @@ export function KnowledgePage() {
       {notice && (
         <MessageBar intent="success">
           <MessageBarBody>{notice}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {schedules.status === "error" && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            定时发布状态加载失败：{schedules.error?.message}
+            <Button appearance="subtle" size="small" onClick={schedules.reload}>
+              重试
+            </Button>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {schedules.status === "permission" && (
+        <MessageBar intent="warning">
+          <MessageBarBody>当前账号无权查看或管理定时发布任务。</MessageBarBody>
         </MessageBar>
       )}
 
@@ -138,7 +175,10 @@ export function KnowledgePage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {resource.data.map((document) => (
+                {resource.data.map((document) => {
+                  const schedule = activeSchedule(document.id);
+                  const targetVersion = document.version ?? document.latestVersion?.versionNumber;
+                  return (
                   <TableRow key={document.id}>
                     <TableCell>
                       <div className="knowledge-title-cell">
@@ -152,6 +192,7 @@ export function KnowledgePage() {
                     </TableCell>
                     <TableCell className="status-column">
                       <StatusBadge status={document.status} />
+                      <ScheduledPublicationStatus publication={schedule} />
                     </TableCell>
                     <TableCell className="updated-column">
                       {formatTimestamp(document.updatedAt)}
@@ -166,7 +207,7 @@ export function KnowledgePage() {
                         >
                           编辑
                         </Button>
-                        {hasPublishableDraft(document) && (
+                        {hasPublishableDraft(document) && !schedule && (
                           <Button
                             appearance="subtle"
                             size="small"
@@ -179,10 +220,23 @@ export function KnowledgePage() {
                             发布
                           </Button>
                         )}
+                        {hasPublishableDraft(document) && targetVersion !== undefined && (
+                          <ScheduledPublicationActions
+                            targetType="knowledge_document"
+                            targetId={document.id}
+                            targetVersion={targetVersion}
+                            targetLabel={document.title || "未命名知识"}
+                            knowledgeVersionId={document.latestVersion?.id}
+                            current={schedule}
+                            disabled={schedules.status === "loading" || schedules.status === "permission"}
+                            onChanged={reloadAfterSchedule}
+                          />
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

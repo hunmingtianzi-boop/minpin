@@ -20,11 +20,20 @@ import { useState } from "react";
 
 import { adminApi } from "../api/adminApi";
 import { ApiError } from "../api/client";
+import {
+  scheduledPublicationsApi,
+  type ScheduledPublication,
+  type ScheduledPublicationTargetType,
+} from "../api/scheduledPublicationsApi";
 import type { CaseStudy, Product } from "../api/types";
 import { ActionConfirmDialog } from "../components/ActionConfirmDialog";
 import { CaseStudyEditor, ProductEditor } from "../components/CatalogEditor";
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
+import {
+  ScheduledPublicationActions,
+  ScheduledPublicationStatus,
+} from "../components/ScheduledPublicationActions";
 import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
 import { formatTimestamp } from "../utils/format";
@@ -108,8 +117,13 @@ function actionCopy(action?: PendingAction) {
 
 export function CatalogPage({ kind }: { kind: CatalogKind }) {
   const config = contentConfig[kind];
+  const scheduleTargetType: ScheduledPublicationTargetType =
+    kind === "product" ? "product" : "case_study";
   const resource = useResource<CatalogRecord[]>(() =>
     kind === "product" ? adminApi.listProducts() : adminApi.listCaseStudies(),
+  );
+  const schedules = useResource<ScheduledPublication[]>(() =>
+    scheduledPublicationsApi.list(scheduleTargetType),
   );
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<CatalogRecord>();
@@ -183,6 +197,16 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
   };
 
   const copy = actionCopy(action);
+  const activeSchedule = (targetId: string) =>
+    schedules.data?.find(
+      (item) =>
+        item.resourceId === targetId &&
+        (["pending", "processing", "failed"] as string[]).includes(item.status),
+    );
+  const reloadAfterSchedule = (message: string) => {
+    setNotice(message);
+    schedules.reload();
+  };
 
   return (
     <main className="page-stack">
@@ -201,6 +225,22 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
       {notice && (
         <MessageBar intent="success">
           <MessageBarBody>{notice}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {schedules.status === "error" && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            定时发布状态加载失败：{schedules.error?.message}
+            <Button appearance="subtle" size="small" onClick={schedules.reload}>
+              重试
+            </Button>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {schedules.status === "permission" && (
+        <MessageBar intent="warning">
+          <MessageBarBody>当前账号无权查看或管理定时发布任务。</MessageBarBody>
         </MessageBar>
       )}
 
@@ -237,7 +277,9 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {resource.data.map((record) => (
+                {resource.data.map((record) => {
+                  const schedule = activeSchedule(record.id);
+                  return (
                   <TableRow key={record.id}>
                     <TableCell>
                       <div className="entity-title-cell">
@@ -247,6 +289,7 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                     </TableCell>
                     <TableCell className="status-column">
                       <StatusBadge status={record.status} />
+                      <ScheduledPublicationStatus publication={schedule} />
                     </TableCell>
                     <TableCell className="updated-column">
                       {formatTimestamp(record.updatedAt)}
@@ -261,7 +304,7 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                         >
                           编辑
                         </Button>
-                        {record.status !== "published" && (
+                        {record.status !== "published" && !schedule && (
                           <Button
                             appearance="subtle"
                             size="small"
@@ -270,6 +313,17 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                           >
                             发布
                           </Button>
+                        )}
+                        {record.status !== "published" && (
+                          <ScheduledPublicationActions
+                            targetType={scheduleTargetType}
+                            targetId={record.id}
+                            targetVersion={record.version}
+                            targetLabel={recordTitle(record) || "未命名内容"}
+                            current={schedule}
+                            disabled={schedules.status === "loading" || schedules.status === "permission"}
+                            onChanged={reloadAfterSchedule}
+                          />
                         )}
                         {record.status !== "archived" && (
                           <Button
@@ -292,7 +346,8 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                       </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
               </TableBody>
             </Table>
           </div>

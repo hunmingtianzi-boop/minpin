@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 
+from app.core.redaction import redact_sensitive_text
 from celery import shared_task
 from celery.utils.log import get_task_logger
 
@@ -11,6 +12,7 @@ from cf_worker.domain import ClaimedEvent
 from cf_worker.evaluation import ApiEvaluationRunner
 from cf_worker.handlers import EventHandlerRegistry
 from cf_worker.repository import PostgresOutboxRepository
+from cf_worker.scheduled_publish import ScheduledPublishExecutor
 from cf_worker.service import WorkerService
 
 logger = get_task_logger(__name__)
@@ -115,8 +117,45 @@ def purge_expired_visitor_profiles() -> int:
     return deleted
 
 
+@shared_task(
+    name="cf_worker.poll_scheduled_publishes",
+    ignore_result=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def poll_scheduled_publishes() -> int:
+    async def run() -> int:
+        settings = get_worker_settings()
+        repository = PostgresOutboxRepository(settings)
+        try:
+            executor = ScheduledPublishExecutor(repository, settings)
+            claims = await repository.claim_scheduled_publishes()
+            completed = 0
+            for claim in claims:
+                try:
+                    await executor.execute(claim)
+                    if await repository.complete_scheduled_publish(claim):
+                        completed += 1
+                except Exception as exc:
+                    logger.exception(
+                        "scheduled publish failed",
+                        extra={"job_id": str(claim.id), "error_type": type(exc).__name__},
+                    )
+                    await repository.fail_scheduled_publish(
+                        claim,
+                        error_code=type(exc).__name__,
+                        error_detail=redact_sensitive_text(str(exc)).content,
+                    )
+            return completed
+        finally:
+            await repository.close()
+
+    return asyncio.run(run())
+
+
 __all__ = [
     "poll_outbox",
     "process_outbox_event",
     "purge_expired_visitor_profiles",
+    "poll_scheduled_publishes",
 ]

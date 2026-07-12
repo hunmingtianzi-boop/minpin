@@ -37,6 +37,9 @@ export function knowledgeStatusLabel(status: string): string {
     verified: "已核验",
     in_progress: "处理中",
     completed: "已完成",
+    processing: "执行中",
+    cancelled: "已取消",
+    dead_letter: "已进入死信",
   };
   return labels[status] ?? status;
 }

@@ -188,6 +188,21 @@ class OutboxStatus(StrEnum):
     DEAD_LETTER = "dead_letter"
 
 
+class ScheduledPublishResourceType(StrEnum):
+    PRODUCT = "product"
+    CASE_STUDY = "case_study"
+    KNOWLEDGE_DOCUMENT = "knowledge_document"
+
+
+class ScheduledPublishStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
 class DataExportType(StrEnum):
     VISITORS = "visitors"
     LEADS = "leads"
@@ -2026,6 +2041,61 @@ class DataExportRequest(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, 
     failure_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
 
+class ScheduledPublishJob(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    __tablename__ = "scheduled_publish_jobs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["scheduled_by"], ["users.id"], ondelete="RESTRICT"),
+        CheckConstraint("attempts >= 0 AND max_attempts > 0", name="attempts_valid"),
+        CheckConstraint(
+            "status <> 'processing' OR (lock_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="processing_lease",
+        ),
+        CheckConstraint(
+            "status <> 'completed' OR completed_at IS NOT NULL", name="completed_timestamp"
+        ),
+        Index("ix_scheduled_publish_jobs_due", "status", "next_attempt_at", "scheduled_at"),
+        Index("ix_scheduled_publish_jobs_company_created", "company_id", "created_at"),
+    )
+
+    resource_type: Mapped[ScheduledPublishResourceType] = mapped_column(
+        db_enum(ScheduledPublishResourceType, "scheduled_publish_resource_type"), nullable=False
+    )
+    resource_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    target_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    knowledge_version_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    scheduled_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    status: Mapped[ScheduledPublishStatus] = mapped_column(
+        db_enum(ScheduledPublishStatus, "scheduled_publish_status"),
+        nullable=False,
+        default=ScheduledPublishStatus.PENDING,
+        server_default=text("'pending'"),
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("6"))
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    lock_token: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 __all__ = [
     "AIRun",
     "AuditLog",
@@ -2062,6 +2132,9 @@ __all__ = [
     "Product",
     "PromptVersion",
     "SecurityEvent",
+    "ScheduledPublishJob",
+    "ScheduledPublishResourceType",
+    "ScheduledPublishStatus",
     "StaffCredential",
     "Tenant",
     "User",

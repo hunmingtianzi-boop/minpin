@@ -1037,6 +1037,30 @@ a:hover {
   font-size: 13px;
 }
 
+.scheduled-publication-status {
+  display: grid;
+  gap: 5px;
+  margin-top: 6px;
+}
+
+.scheduled-publication-status > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.scheduled-publication-dialog {
+  display: grid;
+  gap: 16px;
+}
+
+.scheduled-publication-dialog > p {
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin: 0;
+}
+
 .mobile-drawer {
   width: min(320px, 88vw) !important;
 }

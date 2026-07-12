@@ -1,9 +1,10 @@
 import { FluentProvider } from "@fluentui/react-components";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { adminApi } from "../api/adminApi";
+import { scheduledPublicationsApi } from "../api/scheduledPublicationsApi";
 import type { CaseStudy, Product } from "../api/types";
 import { adminLightTheme } from "../theme";
 import { CatalogPage } from "./CatalogPage";
@@ -53,6 +54,10 @@ function renderPage(kind: "product" | "case") {
 }
 
 describe("CatalogPage", () => {
+  beforeEach(() => {
+    vi.spyOn(scheduledPublicationsApi, "list").mockResolvedValue([]);
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -72,6 +77,38 @@ describe("CatalogPage", () => {
 
     await waitFor(() => expect(publish).toHaveBeenCalledWith("product-1", 3));
     expect(await screen.findByText("产品已由服务端确认发布。")).toBeInTheDocument();
+  });
+
+  it("schedules a product draft with its optimistic version", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(adminApi, "listProducts").mockResolvedValue([product]);
+    const create = vi.spyOn(scheduledPublicationsApi, "create").mockResolvedValue({
+      id: "schedule-1",
+      resourceType: "product",
+      resourceId: "product-1",
+      targetVersion: 3,
+      scheduledBy: "user-1",
+      scheduledAt: "2099-01-01T01:00:00Z",
+      status: "pending",
+      attempts: 0,
+      maxAttempts: 5,
+      nextAttemptAt: "2099-01-01T01:00:00Z",
+      version: 1,
+    });
+    renderPage("product");
+
+    await screen.findByText("企业 AI 助手");
+    await user.click(screen.getByRole("button", { name: "定时发布" }));
+    fireEvent.change(screen.getByLabelText(/发布时间/), {
+      target: { value: "2099-01-01T09:00" },
+    });
+    await user.click(screen.getByRole("button", { name: "确认定时发布" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      targetType: "product",
+      targetId: "product-1",
+      version: 3,
+    })));
   });
 
   it("edits a product and keeps the server version for If-Match", async () => {

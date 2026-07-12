@@ -39,12 +39,18 @@ from app.api.catalog_schemas import (
 )
 from app.api.dependencies import get_staff_principal
 from app.api.errors import ApiError
+from app.api.scheduled_publish_schemas import (
+    ScheduledPublishJobEnvelope,
+    ScheduledPublishJobListEnvelope,
+    SchedulePublishRequest,
+)
 from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
-from app.db.models import ContentStatus
+from app.db.models import ContentStatus, ScheduledPublishResourceType
 from app.services.admin_store import AdminScope, AdminStore
 from app.services.catalog_knowledge import CatalogKnowledgeSynchronizer
 from app.services.catalog_store import CatalogScope, CatalogStore, require_version
+from app.services.scheduled_publish_store import ScheduledPublishStore
 
 router = APIRouter(prefix="/admin", tags=["Admin Content"])
 StaffDependency = Annotated[StaffPrincipal, Depends(get_staff_principal)]
@@ -154,6 +160,13 @@ def _catalog_knowledge(request: Request) -> CatalogKnowledgeSynchronizer:
     )
 
 
+def _scheduled_publish_store(request: Request) -> ScheduledPublishStore:
+    override = getattr(request.app.state, "scheduled_publish_store", None)
+    if override is not None:
+        return override
+    return ScheduledPublishStore(request.app.state.session_factory)
+
+
 def _scope(principal: StaffPrincipal) -> AdminScope:
     if principal.company_id is None:
         raise ApiError(403, "COMPANY_SCOPE_REQUIRED", "请选择企业作用域后再执行此操作")
@@ -182,6 +195,17 @@ def _require_permission(principal: StaffPrincipal, permission: str) -> None:
         return
     granted = {str(value) for value in principal.permissions}
     allowed = _PERMISSIONS.get(permission, {permission})
+    if granted.intersection(allowed) or granted.intersection({"*", "admin:*"}):
+        return
+    raise ApiError(403, "FORBIDDEN", "当前账号没有执行此操作的权限")
+
+
+def _require_any_permission(principal: StaffPrincipal, *permissions: str) -> None:
+    role = getattr(principal.role, "value", principal.role)
+    if str(role) in _ADMIN_ROLES:
+        return
+    granted = {str(value) for value in principal.permissions}
+    allowed = set().union(*(_PERMISSIONS.get(item, {item}) for item in permissions))
     if granted.intersection(allowed) or granted.intersection({"*", "admin:*"}):
         return
     raise ApiError(403, "FORBIDDEN", "当前账号没有执行此操作的权限")
@@ -381,6 +405,34 @@ async def publish_knowledge_document(
     return KnowledgePublishEnvelope(data=result)
 
 
+@router.post(
+    "/knowledge/documents/{document_id}:schedule-publish",
+    response_model=ScheduledPublishJobEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="scheduleKnowledgeDocumentPublish",
+)
+async def schedule_knowledge_document_publish(
+    document_id: uuid.UUID,
+    body: SchedulePublishRequest,
+    request: Request,
+    response: Response,
+    principal: StaffDependency,
+    if_match: IfMatchDependency,
+) -> ScheduledPublishJobEnvelope:
+    _require_permission(principal, "knowledge.publish")
+    job = await _scheduled_publish_store(request).schedule(
+        scope=_scope(principal),
+        resource_type=ScheduledPublishResourceType.KNOWLEDGE_DOCUMENT,
+        resource_id=document_id,
+        expected_version=parse_if_match(if_match),
+        knowledge_version_id=body.version_id,
+        scheduled_at=body.scheduled_at,
+        trace_id=request_id_ctx.get(),
+    )
+    _set_etag(response, job.version)
+    return ScheduledPublishJobEnvelope(data=job)
+
+
 @router.get(
     "/products",
     response_model=ProductListEnvelope,
@@ -511,6 +563,42 @@ async def publish_product(
     )
     _set_etag(response, record.version)
     return ProductEnvelope(data=record)
+
+
+@router.post(
+    "/products/{product_id}:schedule-publish",
+    response_model=ScheduledPublishJobEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="scheduleAdminProductPublish",
+)
+async def schedule_product_publish(
+    product_id: uuid.UUID,
+    body: SchedulePublishRequest,
+    request: Request,
+    response: Response,
+    principal: StaffDependency,
+    if_match: IfMatchDependency,
+) -> ScheduledPublishJobEnvelope:
+    _require_permission(principal, "catalog.publish")
+    if body.version_id is not None:
+        raise ApiError(422, "VERSION_ID_NOT_ALLOWED", "产品定时发布不能指定知识版本")
+    expected_version = parse_if_match(if_match)
+    scope = _catalog_scope(principal)
+    draft = await _catalog_store(request).get_product(scope=scope, product_id=product_id)
+    require_version(draft.version, expected_version)
+    await _catalog_knowledge(request).sync_product(
+        scope=_scope(principal), product=draft, trace_id=request_id_ctx.get()
+    )
+    job = await _scheduled_publish_store(request).schedule(
+        scope=_scope(principal),
+        resource_type=ScheduledPublishResourceType.PRODUCT,
+        resource_id=product_id,
+        expected_version=expected_version,
+        scheduled_at=body.scheduled_at,
+        trace_id=request_id_ctx.get(),
+    )
+    _set_etag(response, job.version)
+    return ScheduledPublishJobEnvelope(data=job)
 
 
 @router.post(
@@ -715,6 +803,110 @@ async def publish_case_study(
     )
     _set_etag(response, record.version)
     return CaseStudyEnvelope(data=record)
+
+
+@router.post(
+    "/case-studies/{case_study_id}:schedule-publish",
+    response_model=ScheduledPublishJobEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="scheduleAdminCaseStudyPublish",
+)
+@router.post(
+    "/cases/{case_study_id}:schedule-publish",
+    response_model=ScheduledPublishJobEnvelope,
+    status_code=status.HTTP_201_CREATED,
+    operation_id="scheduleAdminCasePublish",
+)
+async def schedule_case_study_publish(
+    case_study_id: uuid.UUID,
+    body: SchedulePublishRequest,
+    request: Request,
+    response: Response,
+    principal: StaffDependency,
+    if_match: IfMatchDependency,
+) -> ScheduledPublishJobEnvelope:
+    _require_permission(principal, "catalog.publish")
+    if body.version_id is not None:
+        raise ApiError(422, "VERSION_ID_NOT_ALLOWED", "案例定时发布不能指定知识版本")
+    expected_version = parse_if_match(if_match)
+    scope = _catalog_scope(principal)
+    draft = await _catalog_store(request).get_case_study(
+        scope=scope, case_study_id=case_study_id
+    )
+    require_version(draft.version, expected_version)
+    await _catalog_knowledge(request).sync_case_study(
+        scope=_scope(principal), case_study=draft, trace_id=request_id_ctx.get()
+    )
+    job = await _scheduled_publish_store(request).schedule(
+        scope=_scope(principal),
+        resource_type=ScheduledPublishResourceType.CASE_STUDY,
+        resource_id=case_study_id,
+        expected_version=expected_version,
+        scheduled_at=body.scheduled_at,
+        trace_id=request_id_ctx.get(),
+    )
+    _set_etag(response, job.version)
+    return ScheduledPublishJobEnvelope(data=job)
+
+
+@router.get(
+    "/scheduled-publishes",
+    response_model=ScheduledPublishJobListEnvelope,
+    operation_id="listScheduledPublishes",
+)
+async def list_scheduled_publishes(
+    request: Request,
+    principal: StaffDependency,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ScheduledPublishJobListEnvelope:
+    _require_any_permission(principal, "catalog.read", "knowledge.read")
+    records, total = await _scheduled_publish_store(request).list(
+        scope=_scope(principal), limit=limit, offset=offset
+    )
+    return ScheduledPublishJobListEnvelope(
+        data=records, total=total, limit=limit, offset=offset
+    )
+
+
+@router.get(
+    "/scheduled-publishes/{job_id}",
+    response_model=ScheduledPublishJobEnvelope,
+    operation_id="getScheduledPublish",
+)
+async def get_scheduled_publish(
+    job_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    principal: StaffDependency,
+) -> ScheduledPublishJobEnvelope:
+    _require_any_permission(principal, "catalog.read", "knowledge.read")
+    job = await _scheduled_publish_store(request).get(scope=_scope(principal), job_id=job_id)
+    _set_etag(response, job.version)
+    return ScheduledPublishJobEnvelope(data=job)
+
+
+@router.post(
+    "/scheduled-publishes/{job_id}:cancel",
+    response_model=ScheduledPublishJobEnvelope,
+    operation_id="cancelScheduledPublish",
+)
+async def cancel_scheduled_publish(
+    job_id: uuid.UUID,
+    request: Request,
+    response: Response,
+    principal: StaffDependency,
+    if_match: IfMatchDependency,
+) -> ScheduledPublishJobEnvelope:
+    _require_any_permission(principal, "catalog.publish", "knowledge.publish")
+    job = await _scheduled_publish_store(request).cancel(
+        scope=_scope(principal),
+        job_id=job_id,
+        expected_version=parse_if_match(if_match),
+        trace_id=request_id_ctx.get(),
+    )
+    _set_etag(response, job.version)
+    return ScheduledPublishJobEnvelope(data=job)
 
 
 @router.post(

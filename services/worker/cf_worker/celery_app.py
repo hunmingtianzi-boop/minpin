@@ -47,6 +47,14 @@ celery_app.conf.update(
                 "expires": settings.profile_retention_purge_seconds,
             },
         },
+        "poll-scheduled-publishes": {
+            "task": "cf_worker.poll_scheduled_publishes",
+            "schedule": settings.scheduled_publish_poll_seconds,
+            "options": {
+                "queue": "outbox.poll",
+                "expires": settings.scheduled_publish_poll_seconds * 2,
+            },
+        },
     },
 )
 

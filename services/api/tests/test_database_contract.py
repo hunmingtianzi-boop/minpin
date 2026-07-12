@@ -284,6 +284,23 @@ def test_long_term_profiles_are_scoped_encrypted_and_physically_purged(
     assert "to cf_ai_card_app" not in purge_grant
 
 
+def test_scheduled_publishing_is_scoped_leased_and_versioned(migration_sql: str) -> None:
+    job = Base.metadata.tables["scheduled_publish_jobs"]
+    assert {
+        "resource_type",
+        "resource_id",
+        "target_version",
+        "scheduled_at",
+        "lock_token",
+        "lease_expires_at",
+        "version",
+    } <= set(job.columns.keys())
+    assert "alter table scheduled_publish_jobs force row level security" in migration_sql
+    assert "create policy scheduled_publish_jobs_scope_isolation" in migration_sql
+    assert "create function app.claim_scheduled_publish_jobs" in migration_sql
+    assert "for update skip locked" in migration_sql
+
+
 def test_visitor_profile_downgrade_removes_unsupported_consent_scope() -> None:
     migration = (
         MIGRATIONS / "versions" / "20260711_0010_visitor_profile_personalization.py"

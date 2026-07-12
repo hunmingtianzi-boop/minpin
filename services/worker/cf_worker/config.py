@@ -44,6 +44,16 @@ class WorkerSettings(BaseSettings):
     export_retention_hours: int = Field(default=24, ge=1, le=168)
     export_max_rows: int = Field(default=100_000, ge=1, le=1_000_000)
     profile_retention_purge_seconds: int = Field(default=3_600, ge=60, le=86_400)
+    scheduled_publish_poll_seconds: float = Field(default=5.0, ge=1, le=300)
+    scheduled_publish_batch_size: int = Field(default=10, ge=1, le=100)
+    scheduled_publish_lease_seconds: int = Field(default=900, ge=30, le=3_600)
+    scheduled_publish_max_attempts: int = Field(default=6, ge=1, le=50)
+    embedding_provider: str | None = None
+    embedding_base_url: str | None = None
+    embedding_api_key: SecretStr | None = None
+    embedding_model: str | None = None
+    embedding_dimension: int = Field(default=1_024, ge=64, le=4_096)
+    embedding_timeout_seconds: float = Field(default=20.0, ge=2, le=120)
 
     worker_health_host: str = "0.0.0.0"  # noqa: S104 - container health endpoint
     worker_health_port: int = Field(default=8020, ge=1, le=65_535)
