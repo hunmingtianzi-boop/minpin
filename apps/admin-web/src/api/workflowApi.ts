@@ -10,6 +10,9 @@ import type {
   ConversationSummary,
   DashboardDailyMetric,
   DashboardOverview,
+  EmployeeAnalytics,
+  EmployeeAnalyticsPage,
+  EmployeeAnalyticsReconciliation,
   KnowledgeGap,
   KnowledgeGapStatus,
   Lead,
@@ -113,12 +116,64 @@ function normalizeDashboard(payload: unknown): DashboardOverview {
     uniqueVisitors: numberValue(raw.unique_visitors),
     conversations: numberValue(raw.conversations),
     aiAnswers: numberValue(raw.ai_answers),
+    totalLeads: numberValue(raw.total_leads),
     newLeads: numberValue(raw.new_leads),
     pendingGaps: numberValue(raw.pending_gaps),
     unreadNotifications: numberValue(raw.unread_notifications),
     conversationRate: numberValue(raw.conversation_rate),
     leadRate: numberValue(raw.lead_rate),
     daily: Array.isArray(raw.daily) ? raw.daily.map(normalizeDaily) : [],
+  };
+}
+
+function normalizeEmployeeAnalytics(value: unknown): EmployeeAnalytics {
+  const raw = isRecord(value) ? value : invalid("员工表现");
+  return {
+    userId: requiredString(raw.user_id, "员工 user_id"),
+    membershipId: requiredString(raw.membership_id, "员工 membership_id"),
+    displayName: stringValue(raw.display_name, "未命名员工"),
+    role: stringValue(raw.role),
+    membershipStatus: stringValue(raw.membership_status),
+    cardCount: numberValue(raw.card_count),
+    visits: numberValue(raw.visits),
+    uniqueVisitors: numberValue(raw.unique_visitors),
+    conversations: numberValue(raw.conversations),
+    leads: numberValue(raw.leads),
+    conversationRate: numberValue(raw.conversation_rate),
+    leadRate: numberValue(raw.lead_rate),
+    lastActivityAt: optionalString(raw.last_activity_at),
+  };
+}
+
+function normalizeEmployeeReconciliation(
+  value: unknown,
+): EmployeeAnalyticsReconciliation {
+  const raw = isRecord(value) ? value : invalid("员工表现对账");
+  return {
+    cardCount: numberValue(raw.card_count),
+    visits: numberValue(raw.visits),
+    uniqueVisitors: numberValue(raw.unique_visitors),
+    employeeUniqueVisitorsSum: numberValue(raw.employee_unique_visitors_sum),
+    conversations: numberValue(raw.conversations),
+    totalLeads: numberValue(raw.total_leads),
+    conversationRate: numberValue(raw.conversation_rate),
+    leadRate: numberValue(raw.lead_rate),
+    lastActivityAt: optionalString(raw.last_activity_at),
+  };
+}
+
+function normalizeEmployeeAnalyticsPage(payload: unknown): EmployeeAnalyticsPage {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+    invalid("员工表现列表");
+  }
+  return {
+    items: payload.data.map(normalizeEmployeeAnalytics),
+    total: numberValue(payload.total),
+    limit: numberValue(payload.limit, 20),
+    offset: numberValue(payload.offset),
+    generatedAt: requiredString(payload.generated_at, "员工表现生成时间"),
+    periodDays: numberValue(payload.period_days),
+    reconciliation: normalizeEmployeeReconciliation(payload.reconciliation),
   };
 }
 
@@ -346,6 +401,22 @@ export function createWorkflowApi(client: ApiClient) {
     async getDashboard(periodDays = 30): Promise<DashboardOverview> {
       return normalizeDashboard(
         await client.get(`/admin/dashboard${query({ period_days: periodDays })}`),
+      );
+    },
+
+    async listEmployeeAnalytics(options: {
+      periodDays?: number;
+      limit?: number;
+      offset?: number;
+    } = {}): Promise<EmployeeAnalyticsPage> {
+      return normalizeEmployeeAnalyticsPage(
+        await client.get(
+          `/admin/analytics/employees${query({
+            period_days: options.periodDays ?? 30,
+            limit: options.limit ?? 20,
+            offset: options.offset ?? 0,
+          })}`,
+        ),
       );
     },
 

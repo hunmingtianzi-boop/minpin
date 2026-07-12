@@ -11,11 +11,12 @@ import {
 import { ArrowClockwise24Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 
-import type { DashboardOverview } from "../api/types";
+import type { DashboardOverview, EmployeeAnalyticsPage } from "../api/types";
 import { workflowApi } from "../api/workflowApi";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../auth/permissions";
 import { PageHeader } from "../components/PageHeader";
+import { PaginationBar } from "../components/PaginationBar";
 import { ResourceState } from "../components/ResourceState";
 import { useResource } from "../hooks/useResource";
 import { APP_PATHS, onInternalLinkClick } from "../routing";
@@ -132,12 +133,122 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
   );
 }
 
+function EmployeePerformance({
+  resource,
+  dashboard,
+  onOffsetChange,
+}: {
+  resource: ReturnType<typeof useResource<EmployeeAnalyticsPage>>;
+  dashboard?: DashboardOverview;
+  onOffsetChange: (offset: number) => void;
+}) {
+  const data = resource.data;
+  const reconciliation = data?.reconciliation;
+  const reconciled = Boolean(
+    dashboard &&
+      reconciliation &&
+      dashboard.visits === reconciliation.visits &&
+      dashboard.conversations === reconciliation.conversations &&
+      dashboard.totalLeads === reconciliation.totalLeads &&
+      dashboard.uniqueVisitors === reconciliation.uniqueVisitors,
+  );
+
+  return (
+    <section className="content-panel data-panel" aria-labelledby="employee-performance-title">
+      <div className="section-heading-inline">
+        <div>
+          <h2 id="employee-performance-title">员工表现</h2>
+          <p>企业管理员查看全员；名片员工仅能看到本人，数据范围由服务端权限控制。</p>
+        </div>
+        <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={resource.reload}>
+          刷新员工数据
+        </Button>
+      </div>
+
+      {resource.status !== "ready" || !data ? (
+        <ResourceState
+          compact
+          status={resource.status === "ready" ? "empty" : resource.status}
+          title={resource.status === "empty" ? "当前周期暂无员工表现" : undefined}
+          description={resource.error?.message}
+          errorCode={resource.error?.code}
+          requestId={resource.error?.requestId}
+          onRetry={resource.status === "error" ? resource.reload : undefined}
+        />
+      ) : data.items.length === 0 ? (
+        <ResourceState
+          compact
+          status="empty"
+          title="当前周期暂无员工表现"
+          description="员工名片产生访问、对话或线索后会显示在这里。"
+        />
+      ) : (
+        <>
+          <div className="analytics-reconciliation" role="status">
+            <strong>{reconciled ? "与业务总览已对账" : dashboard ? "与业务总览存在差异" : "员工汇总"}</strong>
+            <span>
+              访问 {data.reconciliation.visits} · 独立访客 {data.reconciliation.uniqueVisitors} · 对话 {data.reconciliation.conversations} · 线索 {data.reconciliation.totalLeads}
+            </span>
+            {data.reconciliation.employeeUniqueVisitorsSum !== data.reconciliation.uniqueVisitors && (
+              <span>员工独立访客合计 {data.reconciliation.employeeUniqueVisitorsSum}；同一访客访问多位员工时，公司口径仅去重一次。</span>
+            )}
+          </div>
+          <div className="table-scroll">
+            <Table aria-label="员工表现">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>员工</TableHeaderCell>
+                  <TableHeaderCell>名片</TableHeaderCell>
+                  <TableHeaderCell>访问</TableHeaderCell>
+                  <TableHeaderCell>独立访客</TableHeaderCell>
+                  <TableHeaderCell>对话</TableHeaderCell>
+                  <TableHeaderCell>线索</TableHeaderCell>
+                  <TableHeaderCell>对话率</TableHeaderCell>
+                  <TableHeaderCell>线索率</TableHeaderCell>
+                  <TableHeaderCell>最近活跃</TableHeaderCell>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.items.map((employee) => (
+                  <TableRow key={employee.membershipId}>
+                    <TableCell>{employee.displayName}</TableCell>
+                    <TableCell>{employee.cardCount}</TableCell>
+                    <TableCell>{employee.visits}</TableCell>
+                    <TableCell>{employee.uniqueVisitors}</TableCell>
+                    <TableCell>{employee.conversations}</TableCell>
+                    <TableCell>{employee.leads}</TableCell>
+                    <TableCell>{formatRate(employee.conversationRate)}</TableCell>
+                    <TableCell>{formatRate(employee.leadRate)}</TableCell>
+                    <TableCell>{employee.lastActivityAt ? formatTimestamp(employee.lastActivityAt) : "暂无活跃"}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <PaginationBar total={data.total} limit={data.limit} offset={data.offset} onOffsetChange={onOffsetChange} />
+          <div className="dashboard-generated">员工统计生成于 {formatTimestamp(data.generatedAt)}</div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function OverviewPage() {
   const [periodDays, setPeriodDays] = useState(30);
+  const [employeeOffset, setEmployeeOffset] = useState(0);
   const resource = useResource(
     () => workflowApi.getDashboard(periodDays),
     periodDays,
   );
+  const employeeResource = useResource(
+    () => workflowApi.listEmployeeAnalytics({ periodDays, limit: 20, offset: employeeOffset }),
+    `${periodDays}:${employeeOffset}`,
+  );
+
+  const changePeriod = (days: number) => {
+    setPeriodDays(days);
+    setEmployeeOffset(0);
+  };
 
   return (
     <main className="page-stack">
@@ -149,7 +260,7 @@ export function OverviewPage() {
             <Select
               aria-label="统计周期"
               value={String(periodDays)}
-              onChange={(_, data) => setPeriodDays(Number(data.value))}
+              onChange={(_, data) => changePeriod(Number(data.value))}
             >
               <option value="7">最近 7 天</option>
               <option value="30">最近 30 天</option>
@@ -167,7 +278,14 @@ export function OverviewPage() {
       />
 
       {resource.status === "ready" && resource.data ? (
-        <DashboardContent data={resource.data} />
+        <>
+          <DashboardContent data={resource.data} />
+          <EmployeePerformance
+            resource={employeeResource}
+            dashboard={resource.data}
+            onOffsetChange={setEmployeeOffset}
+          />
+        </>
       ) : (
         <section className="content-panel">
           <ResourceState
@@ -178,6 +296,9 @@ export function OverviewPage() {
             onRetry={resource.status === "error" ? resource.reload : undefined}
           />
         </section>
+      )}
+      {resource.status !== "ready" && (
+        <EmployeePerformance resource={employeeResource} onOffsetChange={setEmployeeOffset} />
       )}
     </main>
   );

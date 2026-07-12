@@ -7632,6 +7632,125 @@
         }
       }
     },
+    "/admin/analytics/employees": {
+      "get": {
+        "tags": [
+          "Business Workflow"
+        ],
+        "summary": "List Employee Analytics",
+        "operationId": "listEmployeeAnalytics",
+        "parameters": [
+          {
+            "name": "period_days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "default": 30,
+              "title": "Period Days"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          },
+          {
+            "name": "sort_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "display_name",
+                "card_count",
+                "visits",
+                "unique_visitors",
+                "conversations",
+                "leads",
+                "conversation_rate",
+                "lead_rate",
+                "last_activity_at"
+              ],
+              "type": "string",
+              "default": "visits",
+              "title": "Sort By"
+            }
+          },
+          {
+            "name": "sort_order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
+              ],
+              "type": "string",
+              "default": "desc",
+              "title": "Sort Order"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmployeeAnalyticsListEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/visits": {
       "get": {
         "tags": [
@@ -10851,6 +10970,11 @@
             "minimum": 0.0,
             "title": "Ai Answers"
           },
+          "total_leads": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Leads"
+          },
           "new_leads": {
             "type": "integer",
             "minimum": 0.0,
@@ -10895,6 +11019,7 @@
           "unique_visitors",
           "conversations",
           "ai_answers",
+          "total_leads",
           "new_leads",
           "pending_gaps",
           "unread_notifications",
@@ -10902,6 +11027,224 @@
           "lead_rate"
         ],
         "title": "DashboardOverview"
+      },
+      "EmployeeAnalyticsItem": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "User Id"
+          },
+          "membership_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Membership Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "membership_status": {
+            "type": "string",
+            "title": "Membership Status"
+          },
+          "card_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Card Count"
+          },
+          "visits": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Visits"
+          },
+          "unique_visitors": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unique Visitors"
+          },
+          "conversations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Conversations"
+          },
+          "leads": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Leads",
+            "description": "All leads created in the period, regardless of status"
+          },
+          "conversation_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Conversation Rate"
+          },
+          "lead_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Lead Rate"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "user_id",
+          "membership_id",
+          "display_name",
+          "role",
+          "membership_status",
+          "card_count",
+          "visits",
+          "unique_visitors",
+          "conversations",
+          "leads",
+          "conversation_rate",
+          "lead_rate"
+        ],
+        "title": "EmployeeAnalyticsItem"
+      },
+      "EmployeeAnalyticsListEnvelope": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/EmployeeAnalyticsItem"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "reconciliation": {
+            "$ref": "#/components/schemas/EmployeeAnalyticsReconciliation"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "period_days": {
+            "type": "integer",
+            "maximum": 90.0,
+            "minimum": 1.0,
+            "title": "Period Days"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Offset"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data",
+          "reconciliation",
+          "generated_at",
+          "period_days",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "EmployeeAnalyticsListEnvelope"
+      },
+      "EmployeeAnalyticsReconciliation": {
+        "properties": {
+          "card_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Card Count"
+          },
+          "visits": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Visits"
+          },
+          "unique_visitors": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Unique Visitors",
+            "description": "Company-wide distinct visitors; reconciles with the dashboard"
+          },
+          "employee_unique_visitors_sum": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Employee Unique Visitors Sum",
+            "description": "Sum of per-employee distinct visitors; may exceed unique_visitors"
+          },
+          "conversations": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Conversations"
+          },
+          "total_leads": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Leads"
+          },
+          "conversation_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Conversation Rate"
+          },
+          "lead_rate": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Lead Rate"
+          },
+          "last_activity_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Activity At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "card_count",
+          "visits",
+          "unique_visitors",
+          "employee_unique_visitors_sum",
+          "conversations",
+          "total_leads",
+          "conversation_rate",
+          "lead_rate"
+        ],
+        "title": "EmployeeAnalyticsReconciliation"
       },
       "EnterpriseEnvelope": {
         "properties": {

@@ -24,6 +24,11 @@ def test_implemented_vertical_slice_uses_contract_operation_ids() -> None:
         ("/api/v1/admin/company/profile", "put"): "updateCompanyProfile",
         ("/api/v1/admin/card", "get"): "getAdminCard",
         ("/api/v1/admin/card", "put"): "updateAdminCard",
+        ("/api/v1/admin/dashboard", "get"): "getAdminDashboard",
+        (
+            "/api/v1/admin/analytics/employees",
+            "get",
+        ): "listEmployeeAnalytics",
         ("/api/v1/admin/knowledge/documents", "get"): "listKnowledgeDocuments",
         ("/api/v1/admin/knowledge/documents", "post"): "createKnowledgeDocument",
         (

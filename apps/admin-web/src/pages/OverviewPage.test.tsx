@@ -1,0 +1,130 @@
+import { FluentProvider } from "@fluentui/react-components";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { ApiError } from "../api/client";
+import type { DashboardOverview, EmployeeAnalyticsPage } from "../api/types";
+import { workflowApi } from "../api/workflowApi";
+import { AuthContext, type AuthContextValue } from "../auth/AuthContext";
+import { adminLightTheme } from "../theme";
+import { OverviewPage } from "./OverviewPage";
+
+const dashboard: DashboardOverview = {
+  generatedAt: "2026-07-12T03:00:00Z",
+  periodDays: 30,
+  visits: 20,
+  uniqueVisitors: 14,
+  conversations: 8,
+  aiAnswers: 10,
+  totalLeads: 3,
+  newLeads: 3,
+  pendingGaps: 1,
+  unreadNotifications: 2,
+  conversationRate: 0.4,
+  leadRate: 0.15,
+  daily: [],
+};
+
+const employees: EmployeeAnalyticsPage = {
+  items: [{
+    userId: "user-1",
+    membershipId: "membership-1",
+    displayName: "林顾问",
+    role: "card_owner",
+    membershipStatus: "active",
+    cardCount: 2,
+    visits: 20,
+    uniqueVisitors: 15,
+    conversations: 8,
+    leads: 3,
+    conversationRate: 0.4,
+    leadRate: 0.15,
+    lastActivityAt: "2026-07-12T02:00:00Z",
+  }],
+  total: 1,
+  limit: 20,
+  offset: 0,
+  generatedAt: "2026-07-12T03:00:00Z",
+  periodDays: 30,
+  reconciliation: {
+    cardCount: 2,
+    visits: 20,
+    uniqueVisitors: 14,
+    employeeUniqueVisitorsSum: 15,
+    conversations: 8,
+    totalLeads: 3,
+    conversationRate: 0.4,
+    leadRate: 0.15,
+    lastActivityAt: "2026-07-12T02:00:00Z",
+  },
+};
+
+const auth: AuthContextValue = {
+  status: "authenticated",
+  user: {
+    id: "admin-1",
+    displayName: "管理员",
+    membershipId: "membership-admin",
+    tenantId: "tenant-1",
+    companyId: "company-1",
+    role: "company_admin",
+    permissions: ["analytics.read"],
+  },
+  loginPending: false,
+  apiConfigured: true,
+  login: vi.fn(),
+  logout: vi.fn(),
+};
+
+function renderPage() {
+  return render(
+    <FluentProvider theme={adminLightTheme}>
+      <AuthContext.Provider value={auth}>
+        <OverviewPage />
+      </AuthContext.Provider>
+    </FluentProvider>,
+  );
+}
+
+describe("OverviewPage employee analytics", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows employee metrics and reconciliation notes", async () => {
+    vi.spyOn(workflowApi, "getDashboard").mockResolvedValue(dashboard);
+    vi.spyOn(workflowApi, "listEmployeeAnalytics").mockResolvedValue(employees);
+    renderPage();
+
+    expect(await screen.findByText("林顾问")).toBeInTheDocument();
+    expect(screen.getByText("与业务总览已对账")).toBeInTheDocument();
+    expect(screen.getByText(/员工独立访客合计 15/)).toBeInTheDocument();
+    expect(screen.getByRole("table", { name: "员工表现" })).toBeInTheDocument();
+  });
+
+  it("keeps the employee query period in sync and resets pagination", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(workflowApi, "getDashboard").mockResolvedValue(dashboard);
+    const list = vi.spyOn(workflowApi, "listEmployeeAnalytics").mockResolvedValue({
+      ...employees,
+      total: 21,
+    });
+    renderPage();
+
+    await screen.findByText("林顾问");
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await waitFor(() => expect(list).toHaveBeenCalledWith({ periodDays: 30, limit: 20, offset: 20 }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "统计周期" }), "7");
+    await waitFor(() => expect(list).toHaveBeenCalledWith({ periodDays: 7, limit: 20, offset: 0 }));
+  });
+
+  it("shows an employee-specific permission state without hiding the overview", async () => {
+    vi.spyOn(workflowApi, "getDashboard").mockResolvedValue(dashboard);
+    vi.spyOn(workflowApi, "listEmployeeAnalytics").mockRejectedValue(
+      new ApiError("没有员工分析权限。", { status: 403, code: "FORBIDDEN" }),
+    );
+    renderPage();
+
+    expect(await screen.findByText("没有访问权限")).toBeInTheDocument();
+    expect(screen.getByLabelText("核心指标")).toBeInTheDocument();
+  });
+});

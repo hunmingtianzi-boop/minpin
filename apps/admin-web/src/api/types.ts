@@ -324,12 +324,47 @@ export type DashboardOverview = {
   uniqueVisitors: number;
   conversations: number;
   aiAnswers: number;
+  totalLeads: number;
   newLeads: number;
   pendingGaps: number;
   unreadNotifications: number;
   conversationRate: number;
   leadRate: number;
   daily: DashboardDailyMetric[];
+};
+
+export type EmployeeAnalytics = {
+  userId: string;
+  membershipId: string;
+  displayName: string;
+  role: string;
+  membershipStatus: string;
+  cardCount: number;
+  visits: number;
+  uniqueVisitors: number;
+  conversations: number;
+  leads: number;
+  conversationRate: number;
+  leadRate: number;
+  lastActivityAt?: string;
+};
+
+export type EmployeeAnalyticsReconciliation = {
+  cardCount: number;
+  visits: number;
+  uniqueVisitors: number;
+  employeeUniqueVisitorsSum: number;
+  conversations: number;
+  totalLeads: number;
+  conversationRate: number;
+  leadRate: number;
+  lastActivityAt?: string;
+};
+
+export type EmployeeAnalyticsPage = PageResult<EmployeeAnalytics> & {
+  generatedAt: string;
+  periodDays: number;
+  reconciliation: EmployeeAnalyticsReconciliation;
 };
 
 export type Visit = {

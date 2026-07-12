@@ -25,6 +25,7 @@ class DashboardOverview(WorkflowModel):
     unique_visitors: int = Field(ge=0)
     conversations: int = Field(ge=0)
     ai_answers: int = Field(ge=0)
+    total_leads: int = Field(ge=0)
     new_leads: int = Field(ge=0)
     pending_gaps: int = Field(ge=0)
     unread_notifications: int = Field(ge=0)
@@ -35,6 +36,50 @@ class DashboardOverview(WorkflowModel):
 
 class DashboardEnvelope(WorkflowModel):
     data: DashboardOverview
+
+
+class EmployeeAnalyticsItem(WorkflowModel):
+    user_id: uuid.UUID
+    membership_id: uuid.UUID
+    display_name: str
+    role: str
+    membership_status: str
+    card_count: int = Field(ge=0)
+    visits: int = Field(ge=0)
+    unique_visitors: int = Field(ge=0)
+    conversations: int = Field(ge=0)
+    leads: int = Field(ge=0, description="All leads created in the period, regardless of status")
+    conversation_rate: float = Field(ge=0, le=1)
+    lead_rate: float = Field(ge=0, le=1)
+    last_activity_at: datetime | None = None
+
+
+class EmployeeAnalyticsReconciliation(WorkflowModel):
+    card_count: int = Field(ge=0)
+    visits: int = Field(ge=0)
+    unique_visitors: int = Field(
+        ge=0,
+        description="Company-wide distinct visitors; reconciles with the dashboard",
+    )
+    employee_unique_visitors_sum: int = Field(
+        ge=0,
+        description="Sum of per-employee distinct visitors; may exceed unique_visitors",
+    )
+    conversations: int = Field(ge=0)
+    total_leads: int = Field(ge=0)
+    conversation_rate: float = Field(ge=0, le=1)
+    lead_rate: float = Field(ge=0, le=1)
+    last_activity_at: datetime | None = None
+
+
+class EmployeeAnalyticsListEnvelope(WorkflowModel):
+    data: list[EmployeeAnalyticsItem]
+    reconciliation: EmployeeAnalyticsReconciliation
+    generated_at: datetime
+    period_days: int = Field(ge=1, le=90)
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
 
 
 class VisitItem(WorkflowModel):

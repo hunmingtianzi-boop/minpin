@@ -1179,6 +1179,25 @@ a:hover {
   border-top: 1px solid var(--border);
 }
 
+.analytics-reconciliation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 16px;
+  padding: 12px 14px;
+  background: var(--surface-subtle);
+  border-left: 3px solid var(--accent);
+}
+
+.analytics-reconciliation strong {
+  font-size: 13px;
+}
+
+.analytics-reconciliation span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .section-heading-inline {
   display: flex;
   align-items: flex-start;

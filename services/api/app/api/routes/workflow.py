@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Literal
 
 import structlog
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -13,6 +13,7 @@ from app.api.workflow_schemas import (
     ConversationDetailEnvelope,
     ConversationListEnvelope,
     DashboardEnvelope,
+    EmployeeAnalyticsListEnvelope,
     KnowledgeGapEnvelope,
     KnowledgeGapListEnvelope,
     NotificationEnvelope,
@@ -106,6 +107,52 @@ async def get_dashboard(
     )
     overview = await _store(request).dashboard(scope=_scope(principal), period_days=period_days)
     return DashboardEnvelope(data=overview)
+
+
+@router.get(
+    "/admin/analytics/employees",
+    response_model=EmployeeAnalyticsListEnvelope,
+    operation_id="listEmployeeAnalytics",
+)
+async def list_employee_analytics(
+    request: Request,
+    principal: StaffDependency,
+    period_days: Annotated[int, Query(ge=1, le=90)] = 30,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    sort_by: Literal[
+        "display_name",
+        "card_count",
+        "visits",
+        "unique_visitors",
+        "conversations",
+        "leads",
+        "conversation_rate",
+        "lead_rate",
+        "last_activity_at",
+    ] = "visits",
+    sort_order: Literal["asc", "desc"] = "desc",
+) -> EmployeeAnalyticsListEnvelope:
+    _require_access(principal, "analytics.read", allow_card_owner=True)
+    records, reconciliation, total, generated_at = await _store(
+        request
+    ).list_employee_analytics(
+        scope=_scope(principal),
+        period_days=period_days,
+        limit=limit,
+        offset=offset,
+        sort_by=sort_by,
+        sort_order=sort_order,
+    )
+    return EmployeeAnalyticsListEnvelope(
+        data=records,
+        reconciliation=reconciliation,
+        generated_at=generated_at,
+        period_days=period_days,
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(

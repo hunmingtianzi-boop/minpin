@@ -118,6 +118,57 @@ const privacyRequest = {
 };
 
 describe("workflowApi production contracts", () => {
+  it("normalizes paginated employee analytics and reconciliation", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: [{
+            user_id: "user-1",
+            membership_id: "membership-1",
+            display_name: "林顾问",
+            role: "card_owner",
+            membership_status: "active",
+            card_count: 2,
+            visits: 20,
+            unique_visitors: 15,
+            conversations: 8,
+            leads: 3,
+            conversation_rate: 0.4,
+            lead_rate: 0.15,
+            last_activity_at: "2026-07-12T02:00:00Z",
+          }],
+          total: 1,
+          limit: 20,
+          offset: 0,
+          generated_at: "2026-07-12T03:00:00Z",
+          period_days: 30,
+          reconciliation: {
+            card_count: 2,
+            visits: 20,
+            unique_visitors: 14,
+            employee_unique_visitors_sum: 15,
+            conversations: 8,
+            total_leads: 3,
+            conversation_rate: 0.4,
+            lead_rate: 0.15,
+            last_activity_at: "2026-07-12T02:00:00Z",
+          },
+        }),
+      );
+    const api = await authenticatedApi(fetcher);
+
+    await expect(api.listEmployeeAnalytics({ periodDays: 30 })).resolves.toMatchObject({
+      generatedAt: "2026-07-12T03:00:00Z",
+      items: [{ displayName: "林顾问", cardCount: 2, leadRate: 0.15 }],
+      reconciliation: { uniqueVisitors: 14, employeeUniqueVisitorsSum: 15 },
+    });
+    expect(fetcher.mock.calls[1][0]).toBe(
+      "https://api.example.test/api/v1/admin/analytics/employees?period_days=30&limit=20&offset=0",
+    );
+  });
+
   it("normalizes dashboard metrics and paginated visits", async () => {
     const fetcher = vi
       .fn<typeof fetch>()
@@ -131,6 +182,7 @@ describe("workflowApi production contracts", () => {
             unique_visitors: 31,
             conversations: 18,
             ai_answers: 27,
+            total_leads: 5,
             new_leads: 5,
             pending_gaps: 2,
             unread_notifications: 4,
@@ -164,6 +216,7 @@ describe("workflowApi production contracts", () => {
 
     await expect(api.getDashboard(30)).resolves.toMatchObject({
       visits: 42,
+      totalLeads: 5,
       conversationRate: 0.4286,
       daily: [{ day: "2026-07-11", leads: 1 }],
     });

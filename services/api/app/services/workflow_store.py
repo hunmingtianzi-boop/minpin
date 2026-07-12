@@ -17,6 +17,8 @@ from app.api.workflow_schemas import (
     ConversationItem,
     DailyMetric,
     DashboardOverview,
+    EmployeeAnalyticsItem,
+    EmployeeAnalyticsReconciliation,
     KnowledgeGapView,
     MessageView,
     NotificationView,
@@ -42,6 +44,8 @@ from app.db.models import (
     KnowledgeGapStatus,
     Lead,
     LeadStatus,
+    LifecycleStatus,
+    Membership,
     Message,
     MessageCitation,
     MessageStatus,
@@ -49,6 +53,7 @@ from app.db.models import (
     Notification,
     PromptStatus,
     PromptVersion,
+    User,
     Visit,
     VisitEvent,
     Visitor,
@@ -190,6 +195,15 @@ class WorkflowStore:
                 )
                 or 0
             )
+            total_leads = int(
+                await session.scalar(
+                    select(func.count(Lead.id))
+                    .select_from(Lead)
+                    .join(Card, Card.id == Lead.card_id)
+                    .where(*lead_filters)
+                )
+                or 0
+            )
             pending_gaps = int(
                 await session.scalar(
                     select(func.count(KnowledgeGap.id))
@@ -262,13 +276,335 @@ class WorkflowStore:
             unique_visitors=unique_visitors,
             conversations=conversations,
             ai_answers=ai_answers,
+            total_leads=total_leads,
             new_leads=new_leads,
             pending_gaps=pending_gaps,
             unread_notifications=unread_notifications,
-            conversation_rate=round(conversations / visits, 4) if visits else 0,
-            lead_rate=round(new_leads / conversations, 4) if conversations else 0,
+            conversation_rate=min(1.0, round(conversations / visits, 4)) if visits else 0,
+            lead_rate=min(1.0, round(total_leads / conversations, 4)) if conversations else 0,
             daily=daily,
         )
+
+    async def list_employee_analytics(
+        self,
+        *,
+        scope: WorkflowScope,
+        period_days: int,
+        limit: int,
+        offset: int,
+        sort_by: str,
+        sort_order: str,
+    ) -> tuple[
+        list[EmployeeAnalyticsItem],
+        EmployeeAnalyticsReconciliation,
+        int,
+        datetime,
+    ]:
+        generated_at = datetime.now(UTC)
+        cutoff = generated_at - timedelta(days=period_days)
+        async with self._sessions() as session, session.begin():
+            await self._set_scope(session, scope)
+            card_scope = (
+                Card.tenant_id == scope.tenant_id,
+                Card.company_id == scope.company_id,
+                Card.deleted_at.is_(None),
+            )
+            cards = (
+                select(
+                    Card.owner_user_id.label("owner_user_id"),
+                    func.count(Card.id).label("card_count"),
+                )
+                .where(*card_scope)
+                .group_by(Card.owner_user_id)
+                .cte("employee_cards")
+            )
+            visits = (
+                select(
+                    Card.owner_user_id.label("owner_user_id"),
+                    func.count(Visit.id).label("visits"),
+                    func.count(func.distinct(Visit.visitor_id)).label("unique_visitors"),
+                    func.max(Visit.started_at).label("last_visit_at"),
+                )
+                .select_from(Visit)
+                .join(Card, Card.id == Visit.card_id)
+                .where(
+                    Visit.tenant_id == scope.tenant_id,
+                    Visit.company_id == scope.company_id,
+                    Visit.started_at >= cutoff,
+                    *card_scope,
+                )
+                .group_by(Card.owner_user_id)
+                .cte("employee_visits")
+            )
+            conversations = (
+                select(
+                    Card.owner_user_id.label("owner_user_id"),
+                    func.count(Conversation.id).label("conversations"),
+                    func.max(Conversation.last_activity_at).label("last_conversation_at"),
+                )
+                .select_from(Conversation)
+                .join(Card, Card.id == Conversation.card_id)
+                .where(
+                    Conversation.tenant_id == scope.tenant_id,
+                    Conversation.company_id == scope.company_id,
+                    Conversation.started_at >= cutoff,
+                    *card_scope,
+                )
+                .group_by(Card.owner_user_id)
+                .cte("employee_conversations")
+            )
+            leads = (
+                select(
+                    Card.owner_user_id.label("owner_user_id"),
+                    func.count(Lead.id).label("leads"),
+                    func.max(Lead.created_at).label("last_lead_at"),
+                )
+                .select_from(Lead)
+                .join(Card, Card.id == Lead.card_id)
+                .where(
+                    Lead.tenant_id == scope.tenant_id,
+                    Lead.company_id == scope.company_id,
+                    Lead.created_at >= cutoff,
+                    *card_scope,
+                )
+                .group_by(Card.owner_user_id)
+                .cte("employee_leads")
+            )
+
+            card_count = func.coalesce(cards.c.card_count, 0)
+            visit_count = func.coalesce(visits.c.visits, 0)
+            unique_count = func.coalesce(visits.c.unique_visitors, 0)
+            conversation_count = func.coalesce(conversations.c.conversations, 0)
+            lead_count = func.coalesce(leads.c.leads, 0)
+            conversation_rate = func.coalesce(
+                conversation_count * 1.0 / func.nullif(visit_count, 0), 0.0
+            )
+            lead_rate = func.coalesce(
+                lead_count * 1.0 / func.nullif(conversation_count, 0), 0.0
+            )
+            last_activity = func.greatest(
+                visits.c.last_visit_at,
+                conversations.c.last_conversation_at,
+                leads.c.last_lead_at,
+            )
+            filters = [
+                Membership.tenant_id == scope.tenant_id,
+                Membership.company_id == scope.company_id,
+                Membership.status == LifecycleStatus.ACTIVE,
+                User.status == LifecycleStatus.ACTIVE,
+                User.deleted_at.is_(None),
+            ]
+            if scope.is_card_owner:
+                filters.append(Membership.user_id == scope.actor_user_id)
+            base = (
+                select(
+                    Membership,
+                    User.display_name,
+                    card_count.label("card_count"),
+                    visit_count.label("visits"),
+                    unique_count.label("unique_visitors"),
+                    conversation_count.label("conversations"),
+                    lead_count.label("leads"),
+                    conversation_rate.label("conversation_rate"),
+                    lead_rate.label("lead_rate"),
+                    last_activity.label("last_activity_at"),
+                )
+                .join(User, User.id == Membership.user_id)
+                .outerjoin(cards, cards.c.owner_user_id == Membership.user_id)
+                .outerjoin(visits, visits.c.owner_user_id == Membership.user_id)
+                .outerjoin(conversations, conversations.c.owner_user_id == Membership.user_id)
+                .outerjoin(leads, leads.c.owner_user_id == Membership.user_id)
+                .where(*filters)
+            )
+            total = int(
+                await session.scalar(
+                    select(func.count()).select_from(Membership).join(
+                        User, User.id == Membership.user_id
+                    ).where(*filters)
+                )
+                or 0
+            )
+            sort_columns = {
+                "display_name": User.display_name,
+                "card_count": card_count,
+                "visits": visit_count,
+                "unique_visitors": unique_count,
+                "conversations": conversation_count,
+                "leads": lead_count,
+                "conversation_rate": conversation_rate,
+                "lead_rate": lead_rate,
+                "last_activity_at": last_activity,
+            }
+            sort_column = sort_columns[sort_by]
+            ordering = sort_column.asc() if sort_order == "asc" else sort_column.desc()
+            rows = (
+                await session.execute(
+                    base.order_by(ordering.nulls_last(), Membership.id.asc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).all()
+
+            owner_filter = (
+                (Card.owner_user_id == scope.actor_user_id,) if scope.is_card_owner else ()
+            )
+            reconciliation_row = (
+                await session.execute(
+                    select(
+                        select(func.count(Card.id))
+                        .where(*card_scope, *owner_filter)
+                        .scalar_subquery(),
+                        select(func.count(Visit.id))
+                        .select_from(Visit)
+                        .join(Card, Card.id == Visit.card_id)
+                        .where(
+                            Visit.tenant_id == scope.tenant_id,
+                            Visit.company_id == scope.company_id,
+                            Visit.started_at >= cutoff,
+                            *card_scope,
+                            *owner_filter,
+                        )
+                        .scalar_subquery(),
+                        select(func.count(func.distinct(Visit.visitor_id)))
+                        .select_from(Visit)
+                        .join(Card, Card.id == Visit.card_id)
+                        .where(
+                            Visit.tenant_id == scope.tenant_id,
+                            Visit.company_id == scope.company_id,
+                            Visit.started_at >= cutoff,
+                            *card_scope,
+                            *owner_filter,
+                        )
+                        .scalar_subquery(),
+                        select(func.coalesce(func.sum(visits.c.unique_visitors), 0))
+                        .where(
+                            visits.c.owner_user_id == scope.actor_user_id
+                            if scope.is_card_owner
+                            else text("TRUE")
+                        )
+                        .scalar_subquery(),
+                        select(func.count(Conversation.id))
+                        .select_from(Conversation)
+                        .join(Card, Card.id == Conversation.card_id)
+                        .where(
+                            Conversation.tenant_id == scope.tenant_id,
+                            Conversation.company_id == scope.company_id,
+                            Conversation.started_at >= cutoff,
+                            *card_scope,
+                            *owner_filter,
+                        )
+                        .scalar_subquery(),
+                        select(func.count(Lead.id))
+                        .select_from(Lead)
+                        .join(Card, Card.id == Lead.card_id)
+                        .where(
+                            Lead.tenant_id == scope.tenant_id,
+                            Lead.company_id == scope.company_id,
+                            Lead.created_at >= cutoff,
+                            *card_scope,
+                            *owner_filter,
+                        )
+                        .scalar_subquery(),
+                        func.greatest(
+                            select(func.max(Visit.started_at))
+                            .select_from(Visit)
+                            .join(Card, Card.id == Visit.card_id)
+                            .where(
+                                Visit.tenant_id == scope.tenant_id,
+                                Visit.company_id == scope.company_id,
+                                Visit.started_at >= cutoff,
+                                *card_scope,
+                                *owner_filter,
+                            )
+                            .scalar_subquery(),
+                            select(func.max(Conversation.last_activity_at))
+                            .select_from(Conversation)
+                            .join(Card, Card.id == Conversation.card_id)
+                            .where(
+                                Conversation.tenant_id == scope.tenant_id,
+                                Conversation.company_id == scope.company_id,
+                                Conversation.started_at >= cutoff,
+                                *card_scope,
+                                *owner_filter,
+                            )
+                            .scalar_subquery(),
+                            select(func.max(Lead.created_at))
+                            .select_from(Lead)
+                            .join(Card, Card.id == Lead.card_id)
+                            .where(
+                                Lead.tenant_id == scope.tenant_id,
+                                Lead.company_id == scope.company_id,
+                                Lead.created_at >= cutoff,
+                                *card_scope,
+                                *owner_filter,
+                            )
+                            .scalar_subquery(),
+                        ),
+                    )
+                )
+            ).one()
+
+        records = [
+            EmployeeAnalyticsItem(
+                user_id=membership.user_id,
+                membership_id=membership.id,
+                display_name=display_name,
+                role=membership.role.value,
+                membership_status=membership.status.value,
+                card_count=int(row_card_count),
+                visits=int(row_visits),
+                unique_visitors=int(row_unique_visitors),
+                conversations=int(row_conversations),
+                leads=int(row_leads),
+                conversation_rate=min(1.0, round(float(row_conversation_rate), 4)),
+                lead_rate=min(1.0, round(float(row_lead_rate), 4)),
+                last_activity_at=row_last_activity,
+            )
+            for (
+                membership,
+                display_name,
+                row_card_count,
+                row_visits,
+                row_unique_visitors,
+                row_conversations,
+                row_leads,
+                row_conversation_rate,
+                row_lead_rate,
+                row_last_activity,
+            ) in rows
+        ]
+        (
+            total_cards,
+            total_visits,
+            total_unique_visitors,
+            employee_unique_visitors_sum,
+            total_conversations,
+            total_leads,
+            latest_activity,
+        ) = reconciliation_row
+        total_visits = int(total_visits or 0)
+        total_conversations = int(total_conversations or 0)
+        total_leads = int(total_leads or 0)
+        reconciliation = EmployeeAnalyticsReconciliation(
+            card_count=int(total_cards or 0),
+            visits=total_visits,
+            unique_visitors=int(total_unique_visitors or 0),
+            employee_unique_visitors_sum=int(employee_unique_visitors_sum or 0),
+            conversations=total_conversations,
+            total_leads=total_leads,
+            conversation_rate=(
+                min(1.0, round(total_conversations / total_visits, 4))
+                if total_visits
+                else 0
+            ),
+            lead_rate=(
+                min(1.0, round(total_leads / total_conversations, 4))
+                if total_conversations
+                else 0
+            ),
+            last_activity_at=latest_activity,
+        )
+        return records, reconciliation, total, generated_at
 
     async def list_visits(
         self,
