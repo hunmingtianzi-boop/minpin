@@ -48,6 +48,10 @@ class WorkerSettings(BaseSettings):
     scheduled_publish_batch_size: int = Field(default=10, ge=1, le=100)
     scheduled_publish_lease_seconds: int = Field(default=900, ge=30, le=3_600)
     scheduled_publish_max_attempts: int = Field(default=6, ge=1, le=50)
+    knowledge_import_poll_seconds: float = Field(default=3.0, ge=1, le=300)
+    knowledge_import_batch_size: int = Field(default=10, ge=1, le=100)
+    knowledge_import_lease_seconds: int = Field(default=900, ge=30, le=3_600)
+    knowledge_import_max_attempts: int = Field(default=6, ge=1, le=50)
     embedding_provider: str | None = None
     embedding_base_url: str | None = None
     embedding_api_key: SecretStr | None = None

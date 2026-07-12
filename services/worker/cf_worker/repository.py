@@ -25,6 +25,7 @@ from cf_worker.domain import (
     NotificationIntent,
     OutboxRecord,
 )
+from cf_worker.knowledge_imports import ClaimedKnowledgeImport, create_draft
 
 
 class ClaimedScheduledPublish:
@@ -39,6 +40,7 @@ class ClaimedScheduledPublish:
         self.knowledge_version_id = row["knowledge_version_id"]
         self.scheduled_by = row["scheduled_by"]
         self.attempt = int(row["attempts"])
+
 
 _SET_SCOPE_SQL = text(
     """
@@ -79,10 +81,150 @@ class PostgresOutboxRepository:
     async def purge_expired_visitor_profiles(self) -> int:
         """Physically remove expired derived profile evidence without loading PII."""
         async with self._engine.begin() as connection:
-            deleted = await connection.scalar(
-                text("SELECT app.purge_expired_visitor_profiles()")
-            )
+            deleted = await connection.scalar(text("SELECT app.purge_expired_visitor_profiles()"))
             return max(int(deleted or 0), 0)
+
+    async def claim_knowledge_imports(self) -> tuple[ClaimedKnowledgeImport, ...]:
+        async with self._engine.begin() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT * FROM app.claim_knowledge_import_items("
+                            ":worker_id, :batch_size, :lease_seconds)"
+                        ),
+                        {
+                            "worker_id": self._settings.worker_id,
+                            "batch_size": self._settings.knowledge_import_batch_size,
+                            "lease_seconds": self._settings.knowledge_import_lease_seconds,
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            return tuple(
+                ClaimedKnowledgeImport(
+                    id=row["item_id"],
+                    tenant_id=row["tenant_id"],
+                    company_id=row["company_id"],
+                    batch_id=row["batch_id"],
+                    lock_token=row["lock_token"],
+                    file_name=str(row["file_name"]),
+                    source_type=str(row["source_type"]),
+                    content_type=str(row["content_type"]),
+                    row_number=row["row_number"],
+                    payload_ciphertext=bytes(row["payload_ciphertext"]),
+                    payload_sha256=str(row["payload_sha256"]),
+                    encryption_key_ref=str(row["encryption_key_ref"]),
+                    attempts=int(row["attempts"]),
+                    max_attempts=int(row["max_attempts"]),
+                    requested_by=row["requested_by"],
+                )
+                for row in rows
+            )
+
+    async def create_knowledge_import_draft(
+        self, claim: ClaimedKnowledgeImport, draft: Any, chunks: tuple[str, ...]
+    ) -> None:
+        document_id, version_id, already_completed = await create_draft(
+            self.session_factory, claim, draft, chunks
+        )
+        if already_completed:
+            return
+        async with self._engine.begin() as connection:
+            await self._set_scope(connection, claim.tenant_id, claim.company_id)
+            result = await connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_import_items
+                    SET status='completed', payload_ciphertext=NULL, document_id=:document_id,
+                        version_id=:version_id, completed_at=clock_timestamp(), lock_token=NULL,
+                        locked_by=NULL, lease_expires_at=NULL, error_code=NULL
+                    WHERE id=:item_id AND lock_token=:lock_token AND status='processing'
+                    """
+                ),
+                {
+                    "item_id": claim.id,
+                    "lock_token": claim.lock_token,
+                    "document_id": document_id,
+                    "version_id": version_id,
+                },
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("stale_import_lease")
+            await self._refresh_import_batch(connection, claim.batch_id)
+
+    async def fail_knowledge_import(
+        self, claim: ClaimedKnowledgeImport, *, error_code: str, permanent: bool
+    ) -> str:
+        safe_code = _safe_error_code(error_code)
+        dead_letter = permanent or claim.attempts >= claim.max_attempts
+        async with self._engine.begin() as connection:
+            await self._set_scope(connection, claim.tenant_id, claim.company_id)
+            result = await connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_import_items
+                    SET status=:status,
+                        payload_ciphertext=CASE WHEN :dead_letter THEN NULL
+                          ELSE payload_ciphertext END,
+                        next_attempt_at=CASE WHEN :dead_letter THEN next_attempt_at
+                          ELSE clock_timestamp()+make_interval(secs => :backoff) END,
+                        completed_at=CASE WHEN :dead_letter THEN clock_timestamp() ELSE NULL END,
+                        lock_token=NULL, locked_by=NULL, lease_expires_at=NULL,
+                        error_code=:error_code
+                    WHERE id=:item_id AND lock_token=:lock_token AND status='processing'
+                    """
+                ),
+                {
+                    "status": "dead_letter" if dead_letter else "failed",
+                    "dead_letter": dead_letter,
+                    "backoff": calculate_backoff_seconds(
+                        attempt=claim.attempts,
+                        base_seconds=self._settings.outbox_backoff_base_seconds,
+                        maximum_seconds=self._settings.outbox_backoff_max_seconds,
+                    ),
+                    "error_code": safe_code,
+                    "item_id": claim.id,
+                    "lock_token": claim.lock_token,
+                },
+            )
+            if result.rowcount != 1:
+                return "stale"
+            await self._refresh_import_batch(connection, claim.batch_id)
+            return "dead_letter" if dead_letter else "retry_scheduled"
+
+    @staticmethod
+    async def _refresh_import_batch(connection: AsyncConnection, batch_id: uuid.UUID) -> None:
+        await connection.execute(
+            text(
+                """
+                WITH counts AS (
+                  SELECT count(*) FILTER (
+                           WHERE status IN ('pending','processing','failed')
+                         ) pending,
+                         count(*) FILTER (WHERE status='completed') succeeded,
+                         count(*) FILTER (WHERE status='dead_letter') failed
+                  FROM knowledge_import_items WHERE batch_id=:batch_id
+                )
+                UPDATE knowledge_import_batches AS batch
+                SET pending_items=counts.pending, succeeded_items=counts.succeeded,
+                    failed_items=counts.failed,
+                    status=CASE
+                      WHEN counts.pending > 0 AND (counts.succeeded > 0 OR counts.failed > 0)
+                        THEN 'processing'
+                      WHEN counts.pending > 0 THEN 'pending'
+                      WHEN counts.succeeded > 0 AND counts.failed = 0 THEN 'completed'
+                      WHEN counts.succeeded > 0 AND counts.failed > 0 THEN 'completed_with_errors'
+                      WHEN counts.failed > 0 THEN 'dead_letter'
+                      ELSE 'failed' END,
+                    completed_at=CASE WHEN counts.pending=0 THEN clock_timestamp() ELSE NULL END
+                FROM counts WHERE batch.id=:batch_id
+                """
+            ),
+            {"batch_id": batch_id},
+        )
 
     async def claim_scheduled_publishes(self) -> tuple[ClaimedScheduledPublish, ...]:
         async with self._engine.begin() as connection:
@@ -127,19 +269,23 @@ class PostgresOutboxRepository:
                 {"tenant_id": str(claim.tenant_id), "company_id": str(claim.company_id)},
             )
             row = (
-                await session.execute(
-                    text(
-                        f"SELECT * FROM {table} WHERE id = :resource_id "  # noqa: S608
-                        "AND tenant_id = :tenant_id AND company_id = :company_id "
-                        "AND deleted_at IS NULL FOR UPDATE"
-                    ),
-                    {
-                        "resource_id": claim.resource_id,
-                        "tenant_id": claim.tenant_id,
-                        "company_id": claim.company_id,
-                    },
+                (
+                    await session.execute(
+                        text(
+                            f"SELECT * FROM {table} WHERE id = :resource_id "  # noqa: S608
+                            "AND tenant_id = :tenant_id AND company_id = :company_id "
+                            "AND deleted_at IS NULL FOR UPDATE"
+                        ),
+                        {
+                            "resource_id": claim.resource_id,
+                            "tenant_id": claim.tenant_id,
+                            "company_id": claim.company_id,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 raise RuntimeError("scheduled_resource_not_found")
             if int(row["version"]) != claim.target_version:
@@ -186,9 +332,10 @@ class PostgresOutboxRepository:
         async with self._engine.begin() as connection:
             await self._set_scope(connection, claim.tenant_id, claim.company_id)
             row = (
-                await connection.execute(
-                    text(
-                        """
+                (
+                    await connection.execute(
+                        text(
+                            """
                         SELECT document.version, document.status, version.review_status
                         FROM knowledge_documents AS document
                         JOIN knowledge_versions AS version
@@ -200,15 +347,18 @@ class PostgresOutboxRepository:
                           AND document.tenant_id = :tenant_id
                           AND document.company_id = :company_id
                         """
-                    ),
-                    {
-                        "version_id": claim.knowledge_version_id,
-                        "resource_id": claim.resource_id,
-                        "tenant_id": claim.tenant_id,
-                        "company_id": claim.company_id,
-                    },
+                        ),
+                        {
+                            "version_id": claim.knowledge_version_id,
+                            "resource_id": claim.resource_id,
+                            "tenant_id": claim.tenant_id,
+                            "company_id": claim.company_id,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 raise RuntimeError("scheduled_resource_not_found")
             if int(row["version"]) != claim.target_version:
@@ -315,9 +465,10 @@ class PostgresOutboxRepository:
         async with self._engine.begin() as connection:
             await self._set_scope(connection, claim.tenant_id, claim.company_id)
             row = (
-                await connection.execute(
-                    text(
-                        """
+                (
+                    await connection.execute(
+                        text(
+                            """
                         SELECT id, tenant_id, company_id, lock_token, event_type, attempts,
                                aggregate_type, aggregate_id, payload, headers,
                                deduplication_key, created_at
@@ -328,10 +479,13 @@ class PostgresOutboxRepository:
                           AND status = 'processing'
                           AND lock_token = :lock_token
                         """
-                    ),
-                    _claim_parameters(claim),
+                        ),
+                        _claim_parameters(claim),
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 return None
             return OutboxRecord(
@@ -489,9 +643,10 @@ class PostgresOutboxRepository:
         async with self._engine.begin() as connection:
             await self._set_scope(connection, event.tenant_id, event.company_id)
             request = (
-                await connection.execute(
-                    text(
-                        """
+                (
+                    await connection.execute(
+                        text(
+                            """
                         SELECT id, export_type, status, requested_by, requested_role,
                                scope_kind, owner_user_id, include_sensitive
                         FROM data_export_requests
@@ -500,14 +655,17 @@ class PostgresOutboxRepository:
                           AND company_id = :company_id
                         FOR UPDATE
                         """
-                    ),
-                    {
-                        "export_id": export_id,
-                        "tenant_id": event.tenant_id,
-                        "company_id": event.company_id,
-                    },
+                        ),
+                        {
+                            "export_id": export_id,
+                            "tenant_id": event.tenant_id,
+                            "company_id": event.company_id,
+                        },
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if request is None:
                 raise RuntimeError("export_request_not_found")
             if request["requested_by"] != requested_by:
@@ -687,9 +845,7 @@ class PostgresOutboxRepository:
     ) -> dict[str, Any]:
         if export_type == "conversations":
             if not include_sensitive:
-                row["content"] = _safe_conversation_content(
-                    str(row.get("content") or "")
-                )
+                row["content"] = _safe_conversation_content(str(row.get("content") or ""))
             return row
         encrypted_fields = {
             "name_ciphertext": "name",
@@ -835,9 +991,10 @@ class PostgresOutboxRepository:
         async with self._engine.begin() as connection:
             await self._set_scope(connection, event.tenant_id, event.company_id)
             row = (
-                await connection.execute(
-                    text(
-                        """
+                (
+                    await connection.execute(
+                        text(
+                            """
                         SELECT attempts
                         FROM outbox_events
                         WHERE id = :event_id
@@ -847,10 +1004,13 @@ class PostgresOutboxRepository:
                           AND lock_token = :lock_token
                         FOR UPDATE
                         """
-                    ),
-                    _event_parameters(event),
+                        ),
+                        _event_parameters(event),
+                    )
                 )
-            ).mappings().one_or_none()
+                .mappings()
+                .one_or_none()
+            )
             if row is None:
                 return "stale"
             attempt = int(row["attempts"])

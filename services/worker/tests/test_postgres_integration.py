@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import uuid
 
 import pytest
 from app.core.config import Settings as ApiSettings
+from app.core.pii import PiiCipher
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from cf_worker.config import WorkerSettings
 from cf_worker.domain import ClaimedEvent, HandlerResult, NotificationIntent
+from cf_worker.knowledge_imports import KnowledgeImportExecutor
 from cf_worker.repository import PostgresOutboxRepository
 
 pytestmark = [
@@ -19,6 +23,203 @@ pytestmark = [
         reason="set RUN_WORKER_INTEGRATION=1 against a disposable migrated database",
     ),
 ]
+
+
+@pytest.mark.asyncio
+async def test_real_knowledge_import_rls_lease_draft_cleanup_retry_and_idempotency() -> None:
+    api_settings = ApiSettings()
+    owner = create_async_engine(api_settings.migration_database_url, pool_pre_ping=True)
+    app_engine = create_async_engine(api_settings.database_url, pool_pre_ping=True)
+    worker_settings = WorkerSettings(
+        worker_id="knowledge-import-integration",
+        knowledge_import_batch_size=10,
+        knowledge_import_lease_seconds=30,
+        knowledge_import_max_attempts=2,
+    )
+    repository = PostgresOutboxRepository(worker_settings)
+    cipher = PiiCipher.from_settings(worker_settings)
+    plaintext = json.dumps(
+        {"title": "集成导入", "raw_text": "仅生成待审核草稿", "visibility": "internal"},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    encrypted = cipher.encrypt(plaintext.decode())
+    batch_ids = (uuid.uuid4(), uuid.uuid4())
+    item_ids = (uuid.uuid4(), uuid.uuid4())
+    document_ids: list[uuid.UUID] = []
+    try:
+        async with owner.begin() as connection:
+            scopes = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT company.tenant_id, company.id, membership.user_id
+                        FROM companies AS company
+                        JOIN LATERAL (
+                          SELECT user_id FROM memberships
+                          WHERE tenant_id=company.tenant_id AND company_id=company.id
+                          ORDER BY created_at LIMIT 1
+                        ) AS membership ON true
+                        ORDER BY company.created_at, company.id LIMIT 2
+                        """
+                    )
+                )
+            ).all()
+            assert len(scopes) == 2
+            for index, (tenant_id, company_id, user_id) in enumerate(scopes):
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO knowledge_import_batches (
+                          id, tenant_id, company_id, requested_by, status,
+                          total_items, pending_items, succeeded_items, failed_items
+                        ) VALUES (:batch, :tenant, :company, :user, 'pending', 1, 1, 0, 0)
+                        """
+                    ),
+                    {
+                        "batch": batch_ids[index],
+                        "tenant": tenant_id,
+                        "company": company_id,
+                        "user": user_id,
+                    },
+                )
+                await connection.execute(
+                    text(
+                        """
+                        INSERT INTO knowledge_import_items (
+                          id, tenant_id, company_id, batch_id, file_name, source_type,
+                          content_type, payload_ciphertext, payload_sha256, encryption_key_ref,
+                          status, attempts, max_attempts, next_attempt_at
+                        ) VALUES (
+                          :item, :tenant, :company, :batch, 'bulk.csv', 'csv', 'text/csv',
+                          :payload, :sha, :key_ref, 'pending', 0, 2, clock_timestamp()
+                        )
+                        """
+                    ),
+                    {
+                        "batch": batch_ids[index],
+                        "item": item_ids[index],
+                        "tenant": tenant_id,
+                        "company": company_id,
+                        "payload": encrypted,
+                        "sha": hashlib.sha256(plaintext).hexdigest(),
+                        "key_ref": cipher.key_ref,
+                    },
+                )
+
+        first_scope, second_scope = scopes
+        async with app_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "SELECT set_config('app.tenant_id', :tenant, true), "
+                    "set_config('app.company_id', :company, true)"
+                ),
+                {"tenant": str(first_scope[0]), "company": str(first_scope[1])},
+            )
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM knowledge_import_items WHERE id=:id"),
+                    {"id": item_ids[1]},
+                )
+                == 0
+            )
+
+        claims = await repository.claim_knowledge_imports()
+        claimed = {claim.id: claim for claim in claims}
+        assert item_ids[0] in claimed and item_ids[1] in claimed
+        executor = KnowledgeImportExecutor(repository, worker_settings)
+        await executor.execute(claimed[item_ids[0]])
+        await executor.execute(claimed[item_ids[0]])
+
+        async with owner.connect() as connection:
+            row = (
+                await connection.execute(
+                    text(
+                        """
+                            SELECT item.status AS item_status, item.payload_ciphertext,
+                                   item.document_id, document.status AS document_status,
+                                   version.review_status,
+                               (SELECT count(*) FROM knowledge_chunks
+                                WHERE version_id=item.version_id) AS chunks
+                        FROM knowledge_import_items AS item
+                        JOIN knowledge_documents AS document ON document.id=item.document_id
+                        JOIN knowledge_versions AS version ON version.id=item.version_id
+                        WHERE item.id=:item
+                        """
+                    ),
+                    {"item": item_ids[0]},
+                )
+            ).one()
+            assert row.item_status == "completed"
+            assert row.payload_ciphertext is None
+            assert row.document_status == "draft" and row.review_status == "draft"
+            assert row.chunks > 0
+            document_ids.append(row.document_id)
+            assert (
+                await connection.scalar(
+                    text("SELECT count(*) FROM knowledge_documents WHERE source_id=:source"),
+                    {"source": f"import:{item_ids[0]}"},
+                )
+                == 1
+            )
+
+        assert (
+            await repository.fail_knowledge_import(
+                claimed[item_ids[1]], error_code="temporary", permanent=False
+            )
+            == "retry_scheduled"
+        )
+        async with owner.begin() as connection:
+            retry_row = (
+                await connection.execute(
+                    text(
+                        "SELECT status, payload_ciphertext FROM knowledge_import_items WHERE id=:id"
+                    ),
+                    {"id": item_ids[1]},
+                )
+            ).one()
+            assert retry_row.status == "failed" and retry_row.payload_ciphertext is not None
+            await connection.execute(
+                text(
+                    "UPDATE knowledge_import_items "
+                    "SET next_attempt_at=clock_timestamp(), attempts=1 "
+                    "WHERE id=:id"
+                ),
+                {"id": item_ids[1]},
+            )
+        retry_claim = next(
+            claim for claim in await repository.claim_knowledge_imports() if claim.id == item_ids[1]
+        )
+        assert (
+            await repository.fail_knowledge_import(
+                retry_claim, error_code="exhausted", permanent=False
+            )
+            == "dead_letter"
+        )
+        async with owner.connect() as connection:
+            dead = (
+                await connection.execute(
+                    text(
+                        "SELECT status, payload_ciphertext FROM knowledge_import_items WHERE id=:id"
+                    ),
+                    {"id": item_ids[1]},
+                )
+            ).one()
+            assert dead.status == "dead_letter" and dead.payload_ciphertext is None
+    finally:
+        async with owner.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM knowledge_import_batches WHERE id = ANY(:ids)"),
+                {"ids": list(batch_ids)},
+            )
+            if document_ids:
+                await connection.execute(
+                    text("DELETE FROM knowledge_documents WHERE id = ANY(:ids)"),
+                    {"ids": document_ids},
+                )
+        await repository.close()
+        await app_engine.dispose()
+        await owner.dispose()
 
 
 @pytest.mark.asyncio
@@ -99,11 +300,14 @@ async def test_real_claim_scope_retry_crash_recovery_and_dead_letter() -> None:
 
         loaded = await repository.load_leased(first)
         assert loaded is not None
-        assert await repository.fail(
-            loaded,
-            error_code="integration_transient",
-            permanent=False,
-        ) == "retry_scheduled"
+        assert (
+            await repository.fail(
+                loaded,
+                error_code="integration_transient",
+                permanent=False,
+            )
+            == "retry_scheduled"
+        )
         async with owner.begin() as connection:
             status, delayed = (
                 await connection.execute(
@@ -146,11 +350,14 @@ async def test_real_claim_scope_retry_crash_recovery_and_dead_letter() -> None:
         assert await repository.load_leased(second) is None
         recovered_record = await repository.load_leased(recovered)
         assert recovered_record is not None
-        assert await repository.fail(
-            recovered_record,
-            error_code="integration_transient",
-            permanent=False,
-        ) == "dead_letter"
+        assert (
+            await repository.fail(
+                recovered_record,
+                error_code="integration_transient",
+                permanent=False,
+            )
+            == "dead_letter"
+        )
         async with owner.connect() as connection:
             assert (
                 await connection.scalar(

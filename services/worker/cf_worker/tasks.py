@@ -11,6 +11,7 @@ from cf_worker.config import get_worker_settings
 from cf_worker.domain import ClaimedEvent
 from cf_worker.evaluation import ApiEvaluationRunner
 from cf_worker.handlers import EventHandlerRegistry
+from cf_worker.knowledge_imports import KnowledgeImportError, KnowledgeImportExecutor
 from cf_worker.repository import PostgresOutboxRepository
 from cf_worker.scheduled_publish import ScheduledPublishExecutor
 from cf_worker.service import WorkerService
@@ -153,9 +154,46 @@ def poll_scheduled_publishes() -> int:
     return asyncio.run(run())
 
 
+@shared_task(
+    name="cf_worker.poll_knowledge_imports",
+    ignore_result=True,
+    acks_late=True,
+    reject_on_worker_lost=True,
+)
+def poll_knowledge_imports() -> int:
+    async def run() -> int:
+        settings = get_worker_settings()
+        repository = PostgresOutboxRepository(settings)
+        try:
+            executor = KnowledgeImportExecutor(repository, settings)
+            completed = 0
+            for claim in await repository.claim_knowledge_imports():
+                try:
+                    await executor.execute(claim)
+                    completed += 1
+                except KnowledgeImportError as exc:
+                    await repository.fail_knowledge_import(
+                        claim, error_code=exc.code, permanent=True
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "knowledge import failed",
+                        extra={"item_id": str(claim.id), "error_type": type(exc).__name__},
+                    )
+                    await repository.fail_knowledge_import(
+                        claim, error_code=type(exc).__name__, permanent=False
+                    )
+            return completed
+        finally:
+            await repository.close()
+
+    return asyncio.run(run())
+
+
 __all__ = [
     "poll_outbox",
     "process_outbox_event",
     "purge_expired_visitor_profiles",
     "poll_scheduled_publishes",
+    "poll_knowledge_imports",
 ]

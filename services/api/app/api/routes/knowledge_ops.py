@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import uuid
+from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, status
+import anyio
+from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
 
 from app.api.admin_schemas import (
     CreateKnowledgeDocumentRequest,
@@ -13,6 +15,10 @@ from app.api.admin_schemas import (
 )
 from app.api.dependencies import get_staff_principal
 from app.api.errors import ApiError
+from app.api.knowledge_import_schemas import (
+    KnowledgeImportBatchEnvelope,
+    KnowledgeImportBatchListEnvelope,
+)
 from app.api.knowledge_ops_schemas import (
     EvaluationJobEnvelope,
     FaqEnvelope,
@@ -26,6 +32,19 @@ from app.api.knowledge_ops_schemas import (
 from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
 from app.services.admin_store import AdminScope, AdminStore
+from app.services.knowledge_import import (
+    MAX_BATCH_BYTES,
+    MAX_FILES,
+    KnowledgeImportError,
+    parse_payload,
+    safe_file_name,
+    validate_upload,
+)
+from app.services.knowledge_import_store import (
+    KnowledgeImportScope,
+    KnowledgeImportStore,
+    PendingImport,
+)
 from app.services.knowledge_ops_store import KnowledgeOpsScope, KnowledgeOpsStore
 
 router = APIRouter(tags=["Knowledge Operations"])
@@ -61,6 +80,18 @@ def _admin_store(request: Request) -> AdminStore:
     )
 
 
+def _import_store(request: Request) -> KnowledgeImportStore:
+    return KnowledgeImportStore(request.app.state.session_factory, request.app.state.settings)
+
+
+def _import_scope(principal: StaffPrincipal) -> KnowledgeImportScope:
+    return KnowledgeImportScope(
+        tenant_id=principal.tenant_id,
+        company_id=principal.company_id,
+        actor_user_id=principal.user_id,
+    )
+
+
 def _require_permission(principal: StaffPrincipal, *permissions: str) -> None:
     role = str(getattr(principal.role, "value", principal.role))
     if role in _ADMIN_ROLES:
@@ -69,6 +100,92 @@ def _require_permission(principal: StaffPrincipal, *permissions: str) -> None:
     if granted.intersection(permissions) or granted.intersection({"*", "admin:*"}):
         return
     raise ApiError(403, "FORBIDDEN", "当前账号没有执行此操作的权限")
+
+
+@router.post(
+    "/admin/knowledge/imports",
+    response_model=KnowledgeImportBatchEnvelope,
+    status_code=status.HTTP_202_ACCEPTED,
+    operation_id="createKnowledgeImport",
+)
+async def create_knowledge_import(
+    request: Request,
+    principal: StaffDependency,
+    files: Annotated[list[UploadFile], File(...)],
+) -> KnowledgeImportBatchEnvelope:
+    _require_permission(principal, "knowledge.write")
+    if not files or len(files) > MAX_FILES:
+        raise ApiError(400, "IMPORT_FILE_COUNT", "每批仅允许上传 1 至 5 个文件")
+    pending: list[PendingImport] = []
+    total_bytes = 0
+    try:
+        for upload in files:
+            file_name = safe_file_name(upload.filename)
+            payload = await upload.read(10 * 1024 * 1024 + 1)
+            total_bytes += len(payload)
+            if total_bytes > MAX_BATCH_BYTES:
+                raise KnowledgeImportError("IMPORT_BATCH_TOO_LARGE")
+            source_type = validate_upload(file_name, upload.content_type, payload)
+            try:
+                with anyio.fail_after(15):
+                    drafts = await anyio.to_thread.run_sync(
+                        partial(parse_payload, source_type, file_name, payload),
+                        abandon_on_cancel=True,
+                    )
+            except TimeoutError as exc:
+                raise KnowledgeImportError("IMPORT_PARSE_TIMEOUT") from exc
+            for ordinal, draft in enumerate(drafts, start=1):
+                pending.append(
+                    PendingImport(
+                        file_name=file_name,
+                        source_type=source_type,
+                        content_type=upload.content_type or "application/octet-stream",
+                        row_number=ordinal if source_type == "csv" else None,
+                        draft=draft,
+                    )
+                )
+    except KnowledgeImportError as exc:
+        raise ApiError(400, exc.code, "文件不符合安全导入要求") from exc
+    result = await _import_store(request).create_batch(
+        scope=_import_scope(principal), items=pending, trace_id=request_id_ctx.get()
+    )
+    return KnowledgeImportBatchEnvelope(data=result)
+
+
+@router.get(
+    "/admin/knowledge/imports",
+    response_model=KnowledgeImportBatchListEnvelope,
+    operation_id="listKnowledgeImports",
+)
+async def list_knowledge_imports(
+    request: Request,
+    principal: StaffDependency,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> KnowledgeImportBatchListEnvelope:
+    _require_permission(principal, "knowledge.read")
+    records, total = await _import_store(request).list_batches(
+        scope=_import_scope(principal), limit=limit, offset=offset
+    )
+    return KnowledgeImportBatchListEnvelope(data=records, total=total, limit=limit, offset=offset)
+
+
+@router.get(
+    "/admin/knowledge/imports/{batch_id}",
+    response_model=KnowledgeImportBatchEnvelope,
+    operation_id="getKnowledgeImport",
+)
+async def get_knowledge_import(
+    batch_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+) -> KnowledgeImportBatchEnvelope:
+    _require_permission(principal, "knowledge.read")
+    return KnowledgeImportBatchEnvelope(
+        data=await _import_store(request).get_batch(
+            scope=_import_scope(principal), batch_id=batch_id
+        )
+    )
 
 
 @router.get("/admin/faqs", response_model=FaqListEnvelope, operation_id="listAdminFaqs")

@@ -59,6 +59,8 @@ REQUIRED_TABLES = {
     "data_export_requests",
     "visitor_profile_signals",
     "visitor_profile_signal_sources",
+    "knowledge_import_batches",
+    "knowledge_import_items",
 }
 
 COMPANY_SCOPED_TABLES = REQUIRED_TABLES - {
@@ -204,9 +206,12 @@ def test_immutable_knowledge_and_append_only_audit_guards(migration_sql: str) ->
     assert "alter default privileges in schema public" in migration_sql
     assert "revoke all on tables from cf_ai_card_app" in migration_sql
     assert "lead_followups to cf_ai_card_app" in migration_sql
-    assert "lead_followups" not in migration_sql.split(
-        "grant select, insert, update, delete on table", 1
-    )[1].split("to cf_ai_card_app", 1)[0]
+    assert (
+        "lead_followups"
+        not in migration_sql.split("grant select, insert, update, delete on table", 1)[1].split(
+            "to cf_ai_card_app", 1
+        )[0]
+    )
 
 
 def test_security_events_are_unscoped_and_write_only_for_runtime(migration_sql: str) -> None:
@@ -301,10 +306,35 @@ def test_scheduled_publishing_is_scoped_leased_and_versioned(migration_sql: str)
     assert "for update skip locked" in migration_sql
 
 
+def test_knowledge_imports_are_encrypted_scoped_leased_and_draft_only(
+    migration_sql: str,
+) -> None:
+    batch = Base.metadata.tables["knowledge_import_batches"]
+    item = Base.metadata.tables["knowledge_import_items"]
+    assert {"requested_by", "status", "total_items", "failed_items"} <= set(batch.columns.keys())
+    assert {
+        "payload_ciphertext",
+        "payload_sha256",
+        "lock_token",
+        "lease_expires_at",
+        "document_id",
+        "version_id",
+    } <= set(item.columns.keys())
+    assert "alter table knowledge_import_batches force row level security" in migration_sql
+    assert "alter table knowledge_import_items force row level security" in migration_sql
+    assert "create function app.claim_knowledge_import_items" in migration_sql
+    assert "for update skip locked" in migration_sql
+    assert "grant execute on function" in migration_sql
+    assert "to cf_ai_card_worker" in migration_sql
+    assert "bypassrls" not in migration_sql
+
+
 def test_visitor_profile_downgrade_removes_unsupported_consent_scope() -> None:
     migration = (
-        MIGRATIONS / "versions" / "20260711_0010_visitor_profile_personalization.py"
-    ).read_text(encoding="utf-8").lower()
+        (MIGRATIONS / "versions" / "20260711_0010_visitor_profile_personalization.py")
+        .read_text(encoding="utf-8")
+        .lower()
+    )
     delete_position = migration.index(
         "delete from consent_records where scope = 'profile_personalization'"
     )

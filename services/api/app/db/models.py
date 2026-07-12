@@ -168,6 +168,23 @@ class KnowledgeGapStatus(StrEnum):
     FAILED = "failed"
 
 
+class KnowledgeImportBatchStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
+class KnowledgeImportItemStatus(StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
 class PromptStatus(StrEnum):
     DRAFT = "draft"
     PUBLISHED = "published"
@@ -1290,6 +1307,115 @@ class KnowledgeVersion(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, B
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class KnowledgeImportBatch(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "knowledge_import_batches"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["requested_by"], ["users.id"], ondelete="RESTRICT"),
+        UniqueConstraint(
+            "tenant_id", "company_id", "id", name="uq_knowledge_import_batches_scope_id"
+        ),
+        CheckConstraint("total_items > 0", name="total_items_positive"),
+        CheckConstraint(
+            "pending_items >= 0 AND succeeded_items >= 0 AND failed_items >= 0",
+            name="counts_non_negative",
+        ),
+        CheckConstraint(
+            "pending_items + succeeded_items + failed_items = total_items",
+            name="counts_match_total",
+        ),
+        Index("ix_knowledge_import_batches_company_created", "company_id", "created_at"),
+    )
+
+    requested_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    status: Mapped[KnowledgeImportBatchStatus] = mapped_column(
+        db_enum(KnowledgeImportBatchStatus, "knowledge_import_batch_status"),
+        nullable=False,
+        default=KnowledgeImportBatchStatus.PENDING,
+        server_default=text("'pending'"),
+    )
+    total_items: Mapped[int] = mapped_column(Integer, nullable=False)
+    pending_items: Mapped[int] = mapped_column(Integer, nullable=False)
+    succeeded_items: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    failed_items: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class KnowledgeImportItem(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "knowledge_import_items"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "batch_id"],
+            [
+                "knowledge_import_batches.tenant_id",
+                "knowledge_import_batches.company_id",
+                "knowledge_import_batches.id",
+            ],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "document_id"],
+            [
+                "knowledge_documents.tenant_id",
+                "knowledge_documents.company_id",
+                "knowledge_documents.id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "version_id"],
+            [
+                "knowledge_versions.tenant_id",
+                "knowledge_versions.company_id",
+                "knowledge_versions.id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("source_type IN ('pdf', 'docx', 'csv')", name="source_type_allowed"),
+        CheckConstraint("attempts >= 0 AND max_attempts > 0", name="attempts_valid"),
+        CheckConstraint("char_length(payload_sha256) = 64", name="payload_sha256"),
+        CheckConstraint(
+            "status <> 'processing' OR (lock_token IS NOT NULL AND lease_expires_at IS NOT NULL)",
+            name="processing_lease",
+        ),
+        Index("ix_knowledge_import_items_due", "status", "next_attempt_at", "created_at"),
+        Index("ix_knowledge_import_items_batch", "batch_id", "created_at"),
+    )
+
+    batch_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    file_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    content_type: Mapped[str] = mapped_column(String(120), nullable=False)
+    row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    payload_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    encryption_key_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[KnowledgeImportItemStatus] = mapped_column(
+        db_enum(KnowledgeImportItemStatus, "knowledge_import_item_status"),
+        nullable=False,
+        default=KnowledgeImportItemStatus.PENDING,
+        server_default=text("'pending'"),
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("6"))
+    next_attempt_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    lock_token: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    locked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    document_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    version_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class KnowledgeChunk(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
     __tablename__ = "knowledge_chunks"
     __table_args__ = (
@@ -1522,9 +1648,7 @@ class VisitSummary(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base)
             ["prompt_versions.tenant_id", "prompt_versions.company_id", "prompt_versions.id"],
             ondelete="RESTRICT",
         ),
-        UniqueConstraint(
-            "tenant_id", "company_id", "id", name="uq_visit_summaries_scope_id"
-        ),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_visit_summaries_scope_id"),
         UniqueConstraint(
             "conversation_id",
             "last_message_id",
@@ -1557,9 +1681,7 @@ class VisitSummary(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base)
     )
     stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    approved_by: Mapped[UUID | None] = mapped_column(
-        PG_UUID(as_uuid=True), nullable=True
-    )
+    approved_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
 
 
 class Lead(
@@ -2114,6 +2236,10 @@ __all__ = [
     "KnowledgeChunk",
     "KnowledgeDocument",
     "KnowledgeGap",
+    "KnowledgeImportBatch",
+    "KnowledgeImportBatchStatus",
+    "KnowledgeImportItem",
+    "KnowledgeImportItemStatus",
     "KnowledgeIndexJob",
     "KnowledgeVersion",
     "Lead",

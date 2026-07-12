@@ -1,0 +1,70 @@
+import { FluentProvider } from "@fluentui/react-components";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { knowledgeImportsApi, type KnowledgeImportBatch } from "../api/knowledgeImportsApi";
+import { adminLightTheme } from "../theme";
+import { KnowledgeImportPanel, validateKnowledgeImportFiles } from "./KnowledgeImportPanel";
+
+const batch: KnowledgeImportBatch = {
+  id: "batch-1", status: "completed_with_errors", totalItems: 2, pendingItems: 0,
+  succeededItems: 1, failedItems: 1, createdAt: "2026-07-12T00:00:00Z",
+  completedAt: "2026-07-12T00:01:00Z",
+  items: [
+    { id: "item-1", fileName: "guide.pdf", sourceType: "pdf", status: "completed", documentId: "document-1", versionId: "version-1", createdAt: "2026-07-12T00:00:00Z", completedAt: "2026-07-12T00:01:00Z" },
+    { id: "item-2", fileName: "faq.csv", sourceType: "csv", status: "failed", rowNumber: 3, errorCode: "CSV_RAW_TEXT_REQUIRED", createdAt: "2026-07-12T00:00:00Z", completedAt: "2026-07-12T00:01:00Z" },
+  ],
+};
+
+function renderPanel() {
+  return render(<FluentProvider theme={adminLightTheme}><KnowledgeImportPanel /></FluentProvider>);
+}
+
+describe("validateKnowledgeImportFiles", () => {
+  it("rejects unsupported, oversized and over-count selections before upload", () => {
+    expect(validateKnowledgeImportFiles([new File(["x"], "notes.txt")])).toMatch(/仅可上传/);
+    expect(validateKnowledgeImportFiles([new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.pdf")])).toMatch(/超过 10 MiB/);
+    expect(validateKnowledgeImportFiles(Array.from({ length: 6 }, (_, index) => new File(["x"], `${index}.csv`)))).toMatch(/最多/);
+  });
+});
+
+describe("KnowledgeImportPanel", () => {
+  beforeEach(() => {
+    vi.spyOn(knowledgeImportsApi, "list").mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 });
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("creates a batch and states that imported content remains a draft", async () => {
+    const user = userEvent.setup();
+    const create = vi.spyOn(knowledgeImportsApi, "create").mockResolvedValue(batch);
+    renderPanel();
+    const input = screen.getByLabelText("选择知识文件");
+    await user.upload(input, [new File(["pdf"], "guide.pdf", { type: "application/pdf" }), new File(["raw_text\nanswer"], "faq.csv", { type: "text/csv" })]);
+    await user.click(screen.getByRole("button", { name: "创建导入批次" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: "guide.pdf" })])));
+    expect(await screen.findByText(/内容只会生成草稿/)).toBeInTheDocument();
+    expect(screen.getByText("错误码：CSV_RAW_TEXT_REQUIRED")).toBeInTheDocument();
+    expect(screen.getByText("已生成待审核草稿")).toBeInTheDocument();
+  });
+
+  it("shows validation feedback and does not call the server", async () => {
+    const create = vi.spyOn(knowledgeImportsApi, "create");
+    renderPanel();
+    fireEvent.change(screen.getByLabelText("选择知识文件"), {
+      target: { files: [new File(["x"], "unsafe.exe")] },
+    });
+    expect(await screen.findByText(/仅可上传 PDF/)).toBeInTheDocument();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("loads batch detail on demand and exposes per-file error codes", async () => {
+    const user = userEvent.setup();
+    vi.mocked(knowledgeImportsApi.list).mockResolvedValue({ items: [{ ...batch, items: [] }], total: 1, limit: 20, offset: 0 });
+    vi.spyOn(knowledgeImportsApi, "get").mockResolvedValue(batch);
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "查看结果" }));
+    expect(await screen.findByText("错误码：CSV_RAW_TEXT_REQUIRED")).toBeInTheDocument();
+  });
+});

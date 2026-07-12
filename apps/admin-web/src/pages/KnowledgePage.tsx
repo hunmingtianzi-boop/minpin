@@ -30,6 +30,7 @@ import {
 } from "../api/scheduledPublicationsApi";
 import type { KnowledgeDocument } from "../api/types";
 import { KnowledgeEditor } from "../components/KnowledgeEditor";
+import { KnowledgeImportPanel } from "../components/KnowledgeImportPanel";
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
 import {
@@ -141,6 +142,8 @@ export function KnowledgePage() {
           <MessageBarBody>当前账号无权查看或管理定时发布任务。</MessageBarBody>
         </MessageBar>
       )}
+
+      <KnowledgeImportPanel />
 
       <section className="content-panel knowledge-panel">
         {resource.status !== "ready" && (

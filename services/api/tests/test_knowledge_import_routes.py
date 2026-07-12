@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.dependencies import get_staff_principal
+from app.api.errors import ApiError, api_error_handler
+from app.api.knowledge_import_schemas import KnowledgeImportBatchRecord
+from app.api.routes import knowledge_ops
+from app.core.tokens import StaffPrincipal
+
+
+class _Store:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.record = KnowledgeImportBatchRecord(
+            id=uuid.uuid4(),
+            status="pending",
+            total_items=1,
+            pending_items=1,
+            succeeded_items=0,
+            failed_items=0,
+            created_at=datetime.now(UTC),
+        )
+
+    async def create_batch(self, **kwargs: Any) -> KnowledgeImportBatchRecord:
+        self.calls.append(("create", kwargs))
+        return self.record.model_copy(
+            update={"total_items": len(kwargs["items"]), "pending_items": len(kwargs["items"])}
+        )
+
+    async def get_batch(self, **kwargs: Any) -> KnowledgeImportBatchRecord:
+        self.calls.append(("get", kwargs))
+        return self.record
+
+    async def list_batches(self, **kwargs: Any):
+        self.calls.append(("list", kwargs))
+        return [self.record], 1
+
+
+def _principal(role: str, permissions: tuple[str, ...] = ()) -> StaffPrincipal:
+    return StaffPrincipal(
+        user_id=uuid.uuid4(),
+        membership_id=uuid.uuid4(),
+        tenant_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        role=role,
+        permissions=permissions,
+        session_id=uuid.uuid4(),
+        token_id=uuid.uuid4(),
+    )
+
+
+@pytest.fixture
+def client(monkeypatch: pytest.MonkeyPatch):
+    store = _Store()
+    principal = {"value": _principal("company_admin")}
+    app = FastAPI()
+    app.add_exception_handler(ApiError, api_error_handler)
+    app.include_router(knowledge_ops.router, prefix="/api/v1")
+    app.dependency_overrides[get_staff_principal] = lambda: principal["value"]
+    monkeypatch.setattr(knowledge_ops, "_import_store", lambda _request: store)
+    with TestClient(app) as test_client:
+        yield test_client, store, principal
+
+
+def test_csv_upload_returns_accepted_batch_with_row_items(client) -> None:
+    test_client, store, _ = client
+    response = test_client.post(
+        "/api/v1/admin/knowledge/imports",
+        files={
+            "files": (
+                "bulk.csv",
+                "title,raw_text,visibility\nA,正文一,public\nB,正文二,internal\n",
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 202
+    assert response.json()["data"]["total_items"] == 2
+    assert len(store.calls[0][1]["items"]) == 2
+
+
+def test_upload_rejects_unsupported_file_and_missing_permission(client) -> None:
+    test_client, _, principal = client
+    response = test_client.post(
+        "/api/v1/admin/knowledge/imports",
+        files={"files": ("script.exe", b"MZ", "application/octet-stream")},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "IMPORT_UNSUPPORTED_TYPE"
+
+    principal["value"] = _principal("card_owner", ("knowledge.read",))
+    response = test_client.post(
+        "/api/v1/admin/knowledge/imports",
+        files={"files": ("bulk.csv", b"raw_text\ncontent\n", "text/csv")},
+    )
+    assert response.status_code == 403

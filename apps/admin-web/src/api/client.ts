@@ -208,6 +208,18 @@ export class ApiClient {
     });
   }
 
+  async postForm(
+    path: string,
+    body: FormData,
+    options: VersionRequestOptions = {},
+  ): Promise<unknown> {
+    return this.request(path, {
+      method: "POST",
+      headers: versionHeaders(options),
+      body,
+    });
+  }
+
   async put(
     path: string,
     body: unknown,
@@ -327,7 +339,9 @@ export class ApiClient {
 
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    if (init.body !== undefined) headers.set("Content-Type", "application/json");
+    if (init.body !== undefined && !(init.body instanceof FormData)) {
+      headers.set("Content-Type", "application/json");
+    }
     if (options.authenticated && this.accessToken) {
       headers.set("Authorization", `Bearer ${this.accessToken}`);
     }

@@ -18,9 +18,7 @@ def test_celery_uses_redis_late_ack_and_visibility_larger_than_database_lease() 
         "queue": "outbox.poll",
         "expires": settings.outbox_poll_seconds * 2,
     }
-    retention_schedule = celery_app.conf.beat_schedule[
-        "purge-expired-visitor-profiles"
-    ]
+    retention_schedule = celery_app.conf.beat_schedule["purge-expired-visitor-profiles"]
     assert retention_schedule["task"] == "cf_worker.purge_expired_visitor_profiles"
     assert retention_schedule["schedule"] == settings.profile_retention_purge_seconds
     assert retention_schedule["options"] == {
@@ -34,3 +32,6 @@ def test_celery_uses_redis_late_ack_and_visibility_larger_than_database_lease() 
         "queue": "outbox.poll",
         "expires": settings.scheduled_publish_poll_seconds * 2,
     }
+    imports = celery_app.conf.beat_schedule["poll-knowledge-imports"]
+    assert imports["task"] == "cf_worker.poll_knowledge_imports"
+    assert imports["schedule"] == settings.knowledge_import_poll_seconds

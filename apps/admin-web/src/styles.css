@@ -636,6 +636,55 @@ a:hover {
   overflow: hidden;
 }
 
+.knowledge-import-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.knowledge-import-heading,
+.knowledge-import-picker,
+.knowledge-import-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.knowledge-import-heading h2,
+.knowledge-import-heading p {
+  margin: 0;
+}
+
+.knowledge-import-heading p {
+  margin-top: 6px;
+  color: var(--muted);
+}
+
+.knowledge-import-picker {
+  justify-content: flex-start;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  background: var(--surface-subtle);
+}
+
+.knowledge-import-picker > span {
+  flex: 1;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.knowledge-import-detail {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--border);
+}
+
+.knowledge-import-progress-copy span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .catalog-panel {
   min-height: 340px;
   padding: 0;
@@ -1644,6 +1693,12 @@ a:hover {
 
   .form-section-heading {
     display: grid;
+  }
+
+  .knowledge-import-heading,
+  .knowledge-import-picker {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .form-section-heading > span {

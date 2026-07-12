@@ -6,9 +6,8 @@ from cf_worker.repository import calculate_backoff_seconds, should_dead_letter
 
 ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = ROOT / "services/api/migrations/versions/20260711_0007_worker_outbox.py"
-SCHEDULED_MIGRATION = (
-    ROOT / "services/api/migrations/versions/20260712_0011_scheduled_publish.py"
-)
+SCHEDULED_MIGRATION = ROOT / "services/api/migrations/versions/20260712_0011_scheduled_publish.py"
+IMPORT_MIGRATION = ROOT / "services/api/migrations/versions/20260712_0012_knowledge_imports.py"
 
 
 def test_backoff_is_exponential_and_capped() -> None:
@@ -44,5 +43,16 @@ def test_scheduled_publish_claim_is_leased_scoped_and_least_privilege() -> None:
     assert "force row level security" in sql
     assert "scheduled_publish_jobs_scope_isolation" in sql
     assert "claim_scheduled_publish_jobs" in sql
+    assert "cf_ai_card_worker" in sql
+    assert "bypassrls" not in sql
+
+
+def test_knowledge_import_claim_is_leased_scoped_and_least_privilege() -> None:
+    sql = IMPORT_MIGRATION.read_text(encoding="utf-8").lower()
+    assert "for update skip locked" in sql
+    assert "security definer" in sql
+    assert "force row level security" in sql
+    assert "claim_knowledge_import_items" in sql
+    assert "payload_ciphertext" in sql
     assert "cf_ai_card_worker" in sql
     assert "bypassrls" not in sql
