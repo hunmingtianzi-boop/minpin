@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 export const APP_PATHS = {
   overview: "/",
   visits: "/visits",
+  visitorProfiles: "/visitor-profiles",
   conversations: "/conversations",
   leads: "/leads",
   exports: "/exports",

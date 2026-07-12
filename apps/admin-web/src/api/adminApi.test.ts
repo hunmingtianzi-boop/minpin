@@ -78,6 +78,7 @@ describe("adminApi real contract", () => {
       region: "杭州",
       website: "https://example.test",
       logoUrl: "",
+      profilePersonalizationPolicyVersion: "profile-personalization-v2",
       version: 7,
     });
     await api.updateCard({
@@ -108,6 +109,7 @@ describe("adminApi real contract", () => {
       region: "杭州",
       website: "https://example.test",
       logo_url: null,
+      profile_personalization_policy_version: "profile-personalization-v2",
     });
 
     const cardRequest = fetcher.mock.calls[2];

@@ -15,11 +15,15 @@ from app.api.workflow_schemas import SummaryDraft
 from app.core.config import Settings
 from app.core.redaction import redact_sensitive_text
 
-SUMMARY_PROMPT_VERSION = "visit-summary-v1"
+SUMMARY_PROMPT_VERSION = "visit-summary-v2"
+SUMMARY_PROMPT_VERSION_NUMBER = 2
 SUMMARY_SYSTEM_PROMPT = """
 你是企业数智名片的拜访纪要助手。只根据提供的已脱敏对话生成结构化纪要，绝不补充对话中没有的事实。
-输出必须是单个 JSON 对象，且只能包含：summary、interests、strength、next_step、risk_notes。
+输出必须是单个 JSON 对象，且只能包含：summary、interests、strength、
+primary_intent、next_step、risk_notes。
 strength 只能是 low、medium、high、unknown。interests 最多 12 项。
+primary_intent 只能是 information_research、product_evaluation、cooperation、
+contact_followup、recruitment、unknown。
 不得输出电话、邮箱、微信号、身份证、密钥或其他个人敏感值；如对话中出现，只概括为“访客已主动留资”。
 风险、报价、合同、承诺等信息必须保守表述，并在 risk_notes 中明确需要人工确认。
 """.strip()
@@ -189,6 +193,7 @@ def _redact_summary(value: SummaryDraft) -> SummaryDraft:
         summary=redact_sensitive_text(value.summary).content,
         interests=[redact_sensitive_text(item).content for item in value.interests],
         strength=value.strength,
+        primary_intent=value.primary_intent,
         next_step=(redact_sensitive_text(value.next_step).content if value.next_step else None),
         risk_notes=(redact_sensitive_text(value.risk_notes).content if value.risk_notes else None),
     )
@@ -205,6 +210,7 @@ def _non_negative_int(value: object) -> int:
 __all__ = [
     "DeepSeekSummaryProvider",
     "SUMMARY_PROMPT_VERSION",
+    "SUMMARY_PROMPT_VERSION_NUMBER",
     "SUMMARY_SYSTEM_PROMPT",
     "SummaryMessage",
     "SummaryGeneration",

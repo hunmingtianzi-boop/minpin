@@ -21,6 +21,7 @@ class CompanyProfile(AdminStrictModel):
     region: str | None = None
     website: str | None = None
     logo_url: str | None = None
+    profile_personalization_policy_version: str
     status: str
     version: int = Field(ge=1)
     updated_at: datetime
@@ -37,6 +38,7 @@ class UpdateCompanyProfileRequest(AdminStrictModel):
     region: str | None = Field(default=None, max_length=100)
     website: HttpUrl | None = None
     logo_url: HttpUrl | None = None
+    profile_personalization_policy_version: str = Field(min_length=1, max_length=64)
 
 
 class CardProfile(AdminStrictModel):

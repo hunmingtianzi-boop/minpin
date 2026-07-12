@@ -56,6 +56,67 @@ class VisitListEnvelope(WorkflowModel):
     offset: int = Field(ge=0)
 
 
+class VisitorProfileSignalPreview(WorkflowModel):
+    label: str
+    strength: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    last_seen_at: datetime
+
+
+class VisitorProfileListItem(WorkflowModel):
+    visitor_id: uuid.UUID
+    first_seen_at: datetime
+    last_seen_at: datetime
+    signal_count: int = Field(ge=0)
+    top_interests: list[VisitorProfileSignalPreview]
+
+
+class PaginationMeta(WorkflowModel):
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+
+
+class VisitorProfileListEnvelope(WorkflowModel):
+    data: list[VisitorProfileListItem]
+    meta: PaginationMeta
+
+
+class VisitorProfileSourceView(WorkflowModel):
+    id: uuid.UUID
+    visit_id: uuid.UUID | None = None
+    conversation_id: uuid.UUID | None = None
+    summary_id: uuid.UUID | None = None
+    message_id: uuid.UUID | None = None
+    contribution: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    observed_at: datetime
+
+
+class VisitorProfileSignalView(WorkflowModel):
+    id: uuid.UUID
+    kind: Literal["interest", "intent"]
+    label: str
+    strength: float = Field(ge=0, le=1)
+    confidence: float = Field(ge=0, le=1)
+    first_seen_at: datetime
+    last_seen_at: datetime
+    evidence_count: int = Field(ge=0)
+    retention_expires_at: datetime
+    sources: list[VisitorProfileSourceView]
+
+
+class VisitorProfileDetail(WorkflowModel):
+    visitor_id: uuid.UUID
+    first_seen_at: datetime
+    last_seen_at: datetime
+    signals: list[VisitorProfileSignalView]
+
+
+class VisitorProfileEnvelope(WorkflowModel):
+    data: VisitorProfileDetail
+
+
 class ConversationItem(WorkflowModel):
     id: uuid.UUID
     card_id: uuid.UUID
@@ -122,6 +183,8 @@ class SummaryView(WorkflowModel):
     source_message_ids: list[uuid.UUID]
     is_current: bool
     stale_at: datetime | None = None
+    approved_at: datetime | None = None
+    approved_by: uuid.UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -143,6 +206,14 @@ class SummaryDraft(WorkflowModel):
     summary: str = Field(min_length=1, max_length=4_000)
     interests: list[str] = Field(default_factory=list, max_length=12)
     strength: Literal["low", "medium", "high", "unknown"] = "unknown"
+    primary_intent: Literal[
+        "information_research",
+        "product_evaluation",
+        "cooperation",
+        "contact_followup",
+        "recruitment",
+        "unknown",
+    ] = "unknown"
     next_step: str | None = Field(default=None, max_length=2_000)
     risk_notes: str | None = Field(default=None, max_length=2_000)
 
@@ -348,7 +419,9 @@ class LeadFollowupEnvelope(WorkflowModel):
 class PrivacyRequestCreate(WorkflowModel):
     request_type: Literal["access", "correction", "deletion", "withdraw_consent"]
     note: str | None = Field(default=None, max_length=4_000)
-    consent_scope: Literal["chat_notice", "lead_contact"] | None = None
+    consent_scope: Literal[
+        "chat_notice", "lead_contact", "profile_personalization"
+    ] | None = None
 
     @model_validator(mode="after")
     def validate_withdrawal_scope(self) -> "PrivacyRequestCreate":

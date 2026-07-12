@@ -57,6 +57,8 @@ REQUIRED_TABLES = {
     "outbox_deliveries",
     "worker_job_results",
     "data_export_requests",
+    "visitor_profile_signals",
+    "visitor_profile_signal_sources",
 }
 
 COMPANY_SCOPED_TABLES = REQUIRED_TABLES - {
@@ -255,6 +257,44 @@ def test_async_exports_are_scoped_encrypted_expiring_worker_artifacts(
     assert "grant select, update on data_export_requests to cf_ai_card_worker" in migration_sql
     assert "grant select on visitors, visitor_profiles, visits, leads, messages" in migration_sql
     assert "bypassrls" not in migration_sql.split("create table data_export_requests", 1)[1]
+
+
+def test_long_term_profiles_are_scoped_encrypted_and_physically_purged(
+    migration_sql: str,
+) -> None:
+    signals = Base.metadata.tables["visitor_profile_signals"]
+    sources = Base.metadata.tables["visitor_profile_signal_sources"]
+    assert {
+        "label_ciphertext",
+        "label_hmac",
+        "retention_expires_at",
+    } <= set(signals.columns.keys())
+    assert {"consent_id", "summary_id", "message_id", "retention_expires_at"} <= set(
+        sources.columns.keys()
+    )
+    for table_name in ("visitor_profile_signals", "visitor_profile_signal_sources"):
+        assert f"alter table {table_name} force row level security" in migration_sql
+        assert f"create policy {table_name}_scope_isolation" in migration_sql
+    assert "create or replace function app.purge_expired_visitor_profiles()" in migration_sql
+    assert "revoke all on function app.purge_expired_visitor_profiles()" in migration_sql
+    purge_grant = migration_sql.split(
+        "grant execute on function app.purge_expired_visitor_profiles()", 1
+    )[1].split("end if", 1)[0]
+    assert "to cf_ai_card_worker" in purge_grant
+    assert "to cf_ai_card_app" not in purge_grant
+
+
+def test_visitor_profile_downgrade_removes_unsupported_consent_scope() -> None:
+    migration = (
+        MIGRATIONS / "versions" / "20260711_0010_visitor_profile_personalization.py"
+    ).read_text(encoding="utf-8").lower()
+    delete_position = migration.index(
+        "delete from consent_records where scope = 'profile_personalization'"
+    )
+    old_constraint_position = migration.index(
+        "check (scope in ('browse_notice', 'chat_notice', 'lead_contact'))"
+    )
+    assert delete_position < old_constraint_position
 
 
 def test_ai_runs_support_auditable_non_message_workflows(migration_sql: str) -> None:

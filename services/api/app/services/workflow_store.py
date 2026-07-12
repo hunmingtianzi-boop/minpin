@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import exists, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -27,9 +27,13 @@ from app.api.workflow_schemas import (
     VisitItem,
 )
 from app.core.config import Settings
+from app.core.pii import PiiCipher
 from app.db.models import (
     AIRun,
     Card,
+    Company,
+    ConsentRecord,
+    ConsentScope,
     ContentStatus,
     Conversation,
     KnowledgeChunk,
@@ -48,12 +52,16 @@ from app.db.models import (
     Visit,
     VisitEvent,
     Visitor,
+    VisitorProfileSignal,
+    VisitorProfileSignalKind,
+    VisitorProfileSignalSource,
     VisitSummary,
 )
 from app.db.session import set_rls_context
 from app.services.audit import append_audit
 from app.services.summary_provider import (
     SUMMARY_PROMPT_VERSION,
+    SUMMARY_PROMPT_VERSION_NUMBER,
     SUMMARY_SYSTEM_PROMPT,
     DeepSeekSummaryProvider,
     SummaryGeneration,
@@ -105,6 +113,7 @@ class WorkflowStore:
         self._sessions = session_factory
         self._settings = settings
         self._summary_provider = summary_provider
+        self._cipher = PiiCipher.from_settings(settings)
 
     async def dashboard(self, *, scope: WorkflowScope, period_days: int) -> DashboardOverview:
         now = datetime.now(UTC)
@@ -118,6 +127,7 @@ class WorkflowStore:
                 Visit.started_at >= cutoff,
                 *card_filters,
             )
+
             visits = int(
                 await session.scalar(
                     select(func.count(Visit.id)).select_from(Visit).join(Card).where(*visit_filters)
@@ -561,6 +571,57 @@ class WorkflowStore:
                 trace_id=trace_id,
                 event_data={"conversation_id": summary.conversation_id},
             )
+            return self._summary_view(summary)
+
+    async def approve_summary(
+        self,
+        *,
+        scope: WorkflowScope,
+        summary_id: uuid.UUID,
+        trace_id: str | None,
+    ) -> SummaryView:
+        async with self._sessions() as session, session.begin():
+            await self._set_scope(session, scope)
+            row = (
+                await session.execute(
+                    select(VisitSummary, Conversation)
+                    .join(Conversation, Conversation.id == VisitSummary.conversation_id)
+                    .join(Card, Card.id == Conversation.card_id)
+                    .where(
+                        VisitSummary.id == summary_id,
+                        VisitSummary.tenant_id == scope.tenant_id,
+                        VisitSummary.company_id == scope.company_id,
+                        *self._card_filters(scope),
+                    )
+                    .with_for_update(of=VisitSummary)
+                )
+            ).one_or_none()
+            if row is None:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "拜访纪要不存在或不在当前作用域")
+            summary, conversation = row
+            if not summary.is_current:
+                raise ApiError(409, "SUMMARY_STALE", "仅当前版本纪要可以审核通过")
+            if summary.approved_at is None:
+                summary.approved_at = datetime.now(UTC)
+                summary.approved_by = scope.actor_user_id
+                await self._aggregate_profile_signals(
+                    session,
+                    scope=scope,
+                    conversation=conversation,
+                    summary=summary,
+                )
+                await append_audit(
+                    session,
+                    tenant_id=scope.tenant_id,
+                    company_id=scope.company_id,
+                    actor_user_id=scope.actor_user_id,
+                    action="visit_summary.approve",
+                    resource_type="visit_summary",
+                    resource_id=summary.id,
+                    trace_id=trace_id,
+                    event_data={"conversation_id": summary.conversation_id},
+                )
+                await session.flush()
             return self._summary_view(summary)
 
     async def list_gaps(
@@ -1047,7 +1108,11 @@ class WorkflowStore:
                 source_message_ids=list(prepared.source_message_ids),
                 is_current=True,
             )
+            conversation.primary_intent = (
+                None if draft.primary_intent == "unknown" else draft.primary_intent
+            )
             session.add(summary)
+            await session.flush()
             estimated_cost = (
                 generation.input_tokens * self._settings.llm_input_price_cny_per_million
                 + generation.output_tokens * self._settings.llm_output_price_cny_per_million
@@ -1116,6 +1181,161 @@ class WorkflowStore:
             await session.refresh(summary)
             return self._summary_view(summary)
 
+    async def _aggregate_profile_signals(
+        self,
+        session: AsyncSession,
+        *,
+        scope: WorkflowScope,
+        conversation: Conversation,
+        summary: VisitSummary,
+    ) -> None:
+        """Persist approved summary labels; raw message text never enters the profile."""
+        if summary.approved_at is None or summary.approved_by is None:
+            return
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:visitor_id, 0))"),
+            {"visitor_id": str(conversation.visitor_id)},
+        )
+        consent = await session.scalar(
+            select(ConsentRecord)
+            .where(
+                ConsentRecord.tenant_id == scope.tenant_id,
+                ConsentRecord.company_id == scope.company_id,
+                ConsentRecord.visitor_id == conversation.visitor_id,
+                ConsentRecord.scope == ConsentScope.PROFILE_PERSONALIZATION,
+            )
+            .order_by(ConsentRecord.recorded_at.desc(), ConsentRecord.id.desc())
+            .limit(1)
+        )
+        company = await session.get(Company, scope.company_id)
+        if consent is None or company is None or not consent.granted:
+            return
+        expires_at = consent.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        company_settings = company.settings if isinstance(company.settings, dict) else {}
+        policies = company_settings.get("policy_versions", {})
+        if not isinstance(policies, dict):
+            policies = {}
+        expected_policy = str(
+            policies.get("profile_personalization") or "profile-personalization-v1"
+        )
+        if (
+            consent.policy_version != expected_policy
+            or expires_at is None
+            or expires_at <= datetime.now(UTC)
+        ):
+            return
+
+        interest_labels = list(
+            dict.fromkeys(
+                value.strip()[:160]
+                for value in summary.interests
+                if isinstance(value, str) and value.strip()
+            )
+        )
+        signal_labels: list[tuple[VisitorProfileSignalKind, str]] = [
+            (VisitorProfileSignalKind.INTEREST, label) for label in interest_labels
+        ]
+        if conversation.primary_intent:
+            signal_labels.append(
+                (VisitorProfileSignalKind.INTENT, conversation.primary_intent)
+            )
+        if not signal_labels or not summary.source_message_ids:
+            return
+        valid_source_ids = set(
+            (
+                await session.scalars(
+                    select(Message.id).where(
+                        Message.tenant_id == scope.tenant_id,
+                        Message.company_id == scope.company_id,
+                        Message.conversation_id == conversation.id,
+                        Message.id.in_(summary.source_message_ids),
+                    )
+                )
+            ).all()
+        )
+        if valid_source_ids != set(summary.source_message_ids):
+            raise ApiError(409, "SUMMARY_SOURCE_MISMATCH", "纪要证据链与对话不匹配")
+        strength = _profile_strength(summary.strength)
+        observed_at = summary.created_at or datetime.now(UTC)
+        retention_expires_at = min(
+            expires_at,
+            observed_at + timedelta(days=self._settings.visitor_profile_retention_days),
+        )
+        for kind, label in signal_labels:
+            label_hmac = self._cipher.hmac(
+                f"profile-signal:{scope.tenant_id}:{scope.company_id}:"
+                f"{kind.value}:{label.casefold()}"
+            )
+            signal = await session.scalar(
+                select(VisitorProfileSignal)
+                .where(
+                    VisitorProfileSignal.tenant_id == scope.tenant_id,
+                    VisitorProfileSignal.company_id == scope.company_id,
+                    VisitorProfileSignal.visitor_id == conversation.visitor_id,
+                    VisitorProfileSignal.kind == kind,
+                    VisitorProfileSignal.label_hmac == label_hmac,
+                )
+                .with_for_update()
+            )
+            if signal is None:
+                signal = VisitorProfileSignal(
+                    id=uuid.uuid4(),
+                    tenant_id=scope.tenant_id,
+                    company_id=scope.company_id,
+                    visitor_id=conversation.visitor_id,
+                    kind=kind,
+                    label_ciphertext=self._cipher.encrypt(label),
+                    label_hmac=label_hmac,
+                    strength=strength,
+                    confidence=strength,
+                    first_seen_at=observed_at,
+                    last_seen_at=observed_at,
+                    evidence_count=0,
+                    retention_expires_at=retention_expires_at,
+                    encryption_key_ref=self._cipher.key_ref,
+                )
+                session.add(signal)
+                await session.flush()
+            added = 0
+            for message_id in summary.source_message_ids:
+                exists_source = await session.scalar(
+                    select(VisitorProfileSignalSource.id).where(
+                        VisitorProfileSignalSource.signal_id == signal.id,
+                        VisitorProfileSignalSource.summary_id == summary.id,
+                        VisitorProfileSignalSource.message_id == message_id,
+                    )
+                )
+                if exists_source is not None:
+                    continue
+                session.add(
+                    VisitorProfileSignalSource(
+                        id=uuid.uuid4(),
+                        tenant_id=scope.tenant_id,
+                        company_id=scope.company_id,
+                        signal_id=signal.id,
+                        consent_id=consent.id,
+                        visit_id=conversation.visit_id,
+                        conversation_id=conversation.id,
+                        summary_id=summary.id,
+                        message_id=message_id,
+                        contribution=strength,
+                        confidence=strength,
+                        observed_at=observed_at,
+                        retention_expires_at=retention_expires_at,
+                    )
+                )
+                added += 1
+            if added:
+                signal.evidence_count += added
+                signal.strength = max(signal.strength, strength)
+                signal.confidence = min(1.0, max(signal.confidence, strength))
+                signal.last_seen_at = max(signal.last_seen_at, observed_at)
+                signal.retention_expires_at = max(
+                    signal.retention_expires_at, retention_expires_at
+                )
+
     async def _summary_prompt(
         self, session: AsyncSession, *, scope: WorkflowScope
     ) -> PromptVersion:
@@ -1129,10 +1349,10 @@ class WorkflowStore:
                 company_id=scope.company_id,
                 name="visit-summary",
                 purpose="visit_summary",
-                version_number=1,
+                version_number=SUMMARY_PROMPT_VERSION_NUMBER,
                 content=SUMMARY_SYSTEM_PROMPT,
                 content_hash=prompt_hash,
-                change_summary="V1.0 structured visit summary baseline",
+                change_summary="V2 adds a constrained primary-intent classification",
                 evaluation_result={"schema": "SummaryDraft", "version": SUMMARY_PROMPT_VERSION},
                 status=PromptStatus.PUBLISHED.value,
                 published_by=scope.actor_user_id,
@@ -1145,7 +1365,7 @@ class WorkflowStore:
                 PromptVersion.tenant_id == scope.tenant_id,
                 PromptVersion.company_id == scope.company_id,
                 PromptVersion.name == "visit-summary",
-                PromptVersion.version_number == 1,
+                PromptVersion.version_number == SUMMARY_PROMPT_VERSION_NUMBER,
                 PromptVersion.status == PromptStatus.PUBLISHED,
             )
         )
@@ -1273,6 +1493,8 @@ class WorkflowStore:
             source_message_ids=list(summary.source_message_ids),
             is_current=summary.is_current,
             stale_at=summary.stale_at,
+            approved_at=summary.approved_at,
+            approved_by=summary.approved_by,
             created_at=summary.created_at,
             updated_at=summary.updated_at,
         )
@@ -1306,6 +1528,15 @@ class WorkflowStore:
             read_at=notification.read_at,
             created_at=notification.created_at,
         )
+
+
+def _profile_strength(value: str | None) -> float:
+    normalized = (value or "").strip().casefold()
+    if normalized in {"strong", "high", "高", "强", "强烈"}:
+        return 0.9
+    if normalized in {"medium", "moderate", "中", "中等"}:
+        return 0.65
+    return 0.35
 
 
 __all__ = ["GapDocument", "PreparedSummary", "WorkflowScope", "WorkflowStore"]

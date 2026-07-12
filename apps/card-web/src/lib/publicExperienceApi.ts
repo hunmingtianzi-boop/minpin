@@ -7,6 +7,13 @@ import {
   type PublicPolicyVersions,
   type VisitorSession,
 } from "./assistantApi";
+import {
+  canPersistProfileLink,
+  clearProfileLinkToken,
+  clearProfileRevokePending,
+  markProfileRevokePending,
+  writeProfileLinkToken,
+} from "./profileLink";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -67,7 +74,7 @@ export type PrivacyRequestType =
 export type PrivacyRequestInput = {
   requestType: PrivacyRequestType;
   note?: string;
-  consentScope?: "chat_notice" | "lead_contact";
+  consentScope?: "chat_notice" | "lead_contact" | "profile_personalization";
 };
 
 export type PrivacyRequestResult = {
@@ -75,6 +82,11 @@ export type PrivacyRequestResult = {
   status: string;
   requestType: string;
   createdAt: string;
+};
+
+export type ProfilePersonalizationConsentResult = {
+  granted: boolean;
+  recordedAt: string;
 };
 
 function isRecord(value: unknown): value is JsonRecord {
@@ -319,14 +331,25 @@ async function withCurrentVisitor<T>(
   policyVersions: PublicPolicyVersions,
   signal: AbortSignal | undefined,
   operation: (session: VisitorSession, recovered: boolean) => Promise<T>,
+  companyId?: string,
 ) {
-  let session = await ensurePublicVisitorSession({ cardSlug, policyVersions, signal });
+  let session = await ensurePublicVisitorSession({
+    cardSlug,
+    policyVersions,
+    companyId,
+    signal,
+  });
   try {
     return await operation(session, false);
   } catch (error) {
     if (!(error instanceof AssistantApiError) || error.status !== 401) throw error;
     clearAssistantSession(cardSlug);
-    session = await ensurePublicVisitorSession({ cardSlug, policyVersions, signal });
+    session = await ensurePublicVisitorSession({
+      cardSlug,
+      policyVersions,
+      companyId,
+      signal,
+    });
     return operation(session, true);
   }
 }
@@ -433,6 +456,107 @@ export async function submitPrivacyRequest({
       createdAt: requireString(data.created_at, "创建时间"),
     };
   });
+}
+
+export async function setProfilePersonalizationConsent({
+  cardSlug,
+  companyId,
+  policyVersions,
+  granted,
+  idempotencyKey,
+  signal,
+}: {
+  cardSlug: string;
+  companyId: string;
+  policyVersions: PublicPolicyVersions;
+  granted: boolean;
+  idempotencyKey: string;
+  signal?: AbortSignal;
+}): Promise<ProfilePersonalizationConsentResult> {
+  if (granted && !canPersistProfileLink()) {
+    throw new AssistantApiError(
+      "浏览器当前无法保存长期授权，请允许本地存储后重试。",
+      { code: "PROFILE_STORAGE_UNAVAILABLE", retryable: true },
+    );
+  }
+  if (!granted) {
+    clearProfileLinkToken(companyId);
+    markProfileRevokePending(companyId);
+  }
+
+  try {
+    return await withCurrentVisitor(cardSlug, policyVersions, signal, async (session) => {
+    const slug = encodeURIComponent(cardSlug.trim());
+    const consent = async (nextGranted: boolean, key: string) => {
+      const envelope = requireRecord(
+        await publicRequestJson(
+          `/public/cards/${slug}/consents`,
+          {
+            method: "POST",
+            headers: jsonHeaders(session.token, key),
+            body: JSON.stringify({
+              scope: "profile_personalization",
+              policy_version: policyVersions.profilePersonalization,
+              granted: nextGranted,
+            }),
+          },
+          signal,
+        ),
+        "画像授权结果",
+      );
+      return requireRecord(envelope.data, "画像授权数据");
+    };
+
+    const data = await consent(granted, idempotencyKey);
+    const responseGranted = data.granted === true;
+    if (responseGranted !== granted) {
+      throw new AssistantApiError("公开服务返回了无效的画像授权状态。", {
+        code: "INVALID_API_RESPONSE",
+        retryable: true,
+      });
+    }
+
+    if (granted) {
+      const profileLinkToken = requireString(data.profile_link_token, "长期画像令牌");
+      if (!writeProfileLinkToken(companyId, profileLinkToken)) {
+        clearProfileLinkToken(companyId);
+        markProfileRevokePending(companyId);
+        try {
+          await consent(false, createPublicIdempotencyKey());
+          clearProfileRevokePending(companyId);
+        } catch {
+          throw new AssistantApiError(
+            "长期授权已在服务器开启，但本设备无法保存关联信息，且服务器暂未确认撤回。请重试完成撤回。",
+            { code: "PROFILE_REVOKE_PENDING", retryable: true },
+          );
+        }
+        throw new AssistantApiError(
+          "浏览器未能保存长期授权，已停止在本设备记住兴趣。请调整浏览器设置后重试。",
+          { code: "PROFILE_STORAGE_UNAVAILABLE", retryable: true },
+        );
+      }
+    }
+
+    clearProfileRevokePending(companyId);
+
+    return {
+      granted,
+      recordedAt: requireString(data.recorded_at, "画像授权时间"),
+    };
+    }, companyId);
+  } catch (error) {
+    if (!granted) {
+      markProfileRevokePending(companyId);
+      if (error instanceof AssistantApiError && error.code === "PROFILE_REVOKE_PENDING") {
+        throw error;
+      }
+      throw new AssistantApiError(
+        "本设备上的长期关联已删除，但服务器暂未确认撤回。请重试完成撤回。",
+        { code: "PROFILE_REVOKE_PENDING", retryable: true },
+      );
+    }
+    throw error;
+  }
 }
 
 export function safeContactHref(field: Record<string, string>) {

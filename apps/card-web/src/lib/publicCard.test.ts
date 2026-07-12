@@ -39,6 +39,7 @@ const card: PublicCardData = {
     privacy: "privacy-v1",
     chat_notice: "chat-v1",
     lead_consent: "lead-v1",
+    profile_personalization: "profile-v1",
   },
 };
 

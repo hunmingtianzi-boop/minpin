@@ -239,6 +239,9 @@ async def seed_package(
             settings={
                 "seed_slug": slug,
                 "summary": package.documents[0].content,
+                "policy_versions": {
+                    "profile_personalization": "profile-personalization-2026.07-v1"
+                },
             },
         )
         .on_conflict_do_nothing(index_elements=[Company.id])
@@ -308,6 +311,7 @@ async def seed_package(
                     "privacy": "privacy-2026.07-v1",
                     "chat_notice": "chat-notice-2026.07-v1",
                     "lead_consent": "lead-consent-2026.07-v1",
+                    "profile_personalization": "profile-personalization-2026.07-v1",
                 },
             },
         )

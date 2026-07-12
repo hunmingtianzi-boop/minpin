@@ -35,6 +35,7 @@ export type PublicCardData = {
     privacy: string;
     chat_notice: string;
     lead_consent: string;
+    profile_personalization: string;
   };
 };
 
@@ -134,11 +135,16 @@ function parsePublicCard(value: unknown): PublicCardData {
           privacy: requiredString(data.policy_versions, "privacy"),
           chat_notice: requiredString(data.policy_versions, "chat_notice"),
           lead_consent: requiredString(data.policy_versions, "lead_consent"),
+          profile_personalization: requiredString(
+            data.policy_versions,
+            "profile_personalization",
+          ),
         }
       : {
           privacy: "privacy-v1",
           chat_notice: "chat-notice-v1",
           lead_consent: "lead-v1",
+          profile_personalization: "profile-personalization-v1",
         },
   };
 }

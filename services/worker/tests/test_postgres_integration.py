@@ -22,6 +22,15 @@ pytestmark = [
 
 
 @pytest.mark.asyncio
+async def test_worker_can_execute_global_profile_retention_purge() -> None:
+    repository = PostgresOutboxRepository(WorkerSettings(worker_id="retention-worker"))
+    try:
+        assert await repository.purge_expired_visitor_profiles() >= 0
+    finally:
+        await repository.close()
+
+
+@pytest.mark.asyncio
 async def test_real_claim_scope_retry_crash_recovery_and_dead_letter() -> None:
     owner = create_async_engine(ApiSettings().migration_database_url, pool_pre_ping=True)
     worker_settings = WorkerSettings(

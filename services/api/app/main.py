@@ -26,6 +26,7 @@ from app.api.routes import (
     platform,
     public_catalog,
     public_conversations,
+    visitor_profiles,
     workflow,
 )
 from app.core.config import Settings, get_settings
@@ -173,6 +174,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(public_conversations.router, prefix=runtime_settings.api_prefix)
     app.include_router(public_catalog.router, prefix=runtime_settings.api_prefix)
     app.include_router(workflow.router, prefix=runtime_settings.api_prefix)
+    app.include_router(visitor_profiles.router, prefix=runtime_settings.api_prefix)
     return app
 
 

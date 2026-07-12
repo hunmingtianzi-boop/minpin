@@ -24,6 +24,7 @@ const emptyProfile: CompanyProfileInput = {
   region: "",
   website: "",
   logoUrl: "",
+  profilePersonalizationPolicyVersion: "profile-personalization-v1",
   version: undefined,
 };
 
@@ -174,13 +175,41 @@ export function CompanyProfilePage() {
             />
           </Field>
 
+          <Field
+            label="长期访客画像政策版本"
+            hint="修改版本后，旧同意与旧关联令牌立即失效，访客需要按新版本重新明确同意。"
+            required
+            validationState={
+              attempted && !form.profilePersonalizationPolicyVersion.trim()
+                ? "error"
+                : "none"
+            }
+            validationMessage={
+              attempted && !form.profilePersonalizationPolicyVersion.trim()
+                ? "请输入政策版本。"
+                : undefined
+            }
+          >
+            <Input
+              value={form.profilePersonalizationPolicyVersion}
+              onChange={(_, data) =>
+                update("profilePersonalizationPolicyVersion", data.value)
+              }
+              maxLength={64}
+              disabled={saving}
+            />
+          </Field>
+
           <div className="form-actions">
             <Button
               type="submit"
               appearance="primary"
               icon={<Save24Regular />}
               disabled={
-                saving || !form.name.trim() || form.version === undefined
+                saving ||
+                !form.name.trim() ||
+                !form.profilePersonalizationPolicyVersion.trim() ||
+                form.version === undefined
               }
             >
               {saving ? "正在保存" : "保存企业资料"}

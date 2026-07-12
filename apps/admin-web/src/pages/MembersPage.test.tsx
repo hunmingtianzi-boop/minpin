@@ -83,7 +83,7 @@ describe("MembersPage", () => {
     await user.selectOptions(screen.getByRole("combobox", { name: "角色" }), "card_owner");
     await user.click(screen.getByRole("button", { name: "保存用户" }));
     expect(update).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "确认调整角色" }));
+    await user.click(await screen.findByRole("button", { name: "确认调整角色" }));
     await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
     expect(update).toHaveBeenCalledWith("membership-admin", expect.objectContaining({ role: "card_owner" }));
   });

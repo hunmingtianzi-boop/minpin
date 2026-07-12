@@ -38,7 +38,15 @@ celery_app.conf.update(
             "task": "cf_worker.poll_outbox",
             "schedule": settings.outbox_poll_seconds,
             "options": {"queue": "outbox.poll", "expires": settings.outbox_poll_seconds * 2},
-        }
+        },
+        "purge-expired-visitor-profiles": {
+            "task": "cf_worker.purge_expired_visitor_profiles",
+            "schedule": settings.profile_retention_purge_seconds,
+            "options": {
+                "queue": "outbox.poll",
+                "expires": settings.profile_retention_purge_seconds,
+            },
+        },
     },
 )
 

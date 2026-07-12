@@ -131,6 +131,9 @@ class PlatformStore:
                     "website": None,
                     "logo_url": None,
                     "onboarding_status": "content_pending",
+                    "policy_versions": {
+                        "profile_personalization": "profile-personalization-v1"
+                    },
                 },
             )
             email = account if "@" in account else None
@@ -177,6 +180,7 @@ class PlatformStore:
                         "privacy": "privacy-v1",
                         "chat_notice": "chat-notice-v1",
                         "lead_consent": "lead-consent-v1",
+                        "profile_personalization": "profile-personalization-v1",
                     },
                 },
             }

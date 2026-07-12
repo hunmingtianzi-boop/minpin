@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -35,7 +35,13 @@ from app.api.schemas import (
 )
 from app.core.config import Settings
 from app.core.redaction import redact_sensitive_text
-from app.core.tokens import VisitorPrincipal, issue_visitor_token
+from app.core.tokens import (
+    ProfileLinkTokenError,
+    VisitorPrincipal,
+    decode_profile_link_token,
+    issue_profile_link_token,
+    issue_visitor_token,
+)
 from app.db.models import (
     AIRun,
     Card,
@@ -62,6 +68,7 @@ from app.db.models import (
     Visibility,
     Visit,
     Visitor,
+    VisitorProfileSignal,
     VisitSummary,
 )
 
@@ -244,6 +251,9 @@ class PublicStore:
                     privacy=str(policies.get("privacy") or "privacy-v1"),
                     chat_notice=str(policies.get("chat_notice") or "chat-notice-v1"),
                     lead_consent=str(policies.get("lead_consent") or "lead-consent-v1"),
+                    profile_personalization=str(
+                        _company_profile_policy(company)
+                    ),
                 ),
             )
 
@@ -257,12 +267,19 @@ class PublicStore:
         async with self._sessions() as session, session.begin():
             scope = await self._resolve_public_card(session, slug)
             card = await session.get(Card, scope.card_id)
-            if card is None:
+            company = await session.get(Company, scope.company_id)
+            if card is None or company is None:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "名片不存在")
             if request.privacy_notice_version != _policy_version(
                 card, ConsentScope.BROWSE_NOTICE
             ):
                 raise _policy_version_mismatch()
+            linked_consent = await self._valid_profile_link_consent(
+                session,
+                token=request.profile_link_token,
+                scope=scope,
+                expected_policy=_company_profile_policy(company),
+            )
             claim = await self._claim_idempotency(
                 session,
                 tenant_id=scope.tenant_id,
@@ -279,15 +296,37 @@ class PublicStore:
                     raise ApiError(409, "IDEMPOTENCY_CONFLICT", "幂等记录已失效，请重新请求")
                 visitor_id = visit.visitor_id
                 visit_id = visit.id
-            else:
-                visitor_id = uuid.uuid4()
-                visit_id = uuid.uuid4()
-                visitor = Visitor(
-                    id=visitor_id,
+                latest_profile_consent = await self._latest_profile_consent(
+                    session,
                     tenant_id=scope.tenant_id,
                     company_id=scope.company_id,
-                    anonymous_hash=self._anonymous_visitor_hash(scope.company_id, visitor_id),
+                    visitor_id=visitor_id,
                 )
+                if latest_profile_consent is not None and not latest_profile_consent.granted:
+                    raise ApiError(
+                        409,
+                        "PROFILE_LINK_REPLAY_INVALID",
+                        "画像关联授权已变化，请重新开始访问",
+                    )
+                if request.profile_link_token and (
+                    linked_consent is None or linked_consent.visitor_id != visitor_id
+                ):
+                    raise ApiError(
+                        409,
+                        "PROFILE_LINK_REPLAY_INVALID",
+                        "画像关联授权已变化，请重新开始访问",
+                    )
+            else:
+                visitor_id = linked_consent.visitor_id if linked_consent else uuid.uuid4()
+                visit_id = uuid.uuid4()
+                visitor = None
+                if linked_consent is None:
+                    visitor = Visitor(
+                        id=visitor_id,
+                        tenant_id=scope.tenant_id,
+                        company_id=scope.company_id,
+                        anonymous_hash=self._anonymous_visitor_hash(scope.company_id, visitor_id),
+                    )
                 visit = Visit(
                     id=visit_id,
                     tenant_id=scope.tenant_id,
@@ -303,8 +342,19 @@ class PublicStore:
                 # These models intentionally do not expose ORM relationships.
                 # Flush the parent explicitly so SQLAlchemy cannot schedule the
                 # visit insert ahead of its composite visitor foreign key.
-                session.add(visitor)
-                await session.flush()
+                if visitor is not None:
+                    session.add(visitor)
+                    await session.flush()
+                else:
+                    await session.execute(
+                        update(Visitor)
+                        .where(
+                            Visitor.id == visitor_id,
+                            Visitor.tenant_id == scope.tenant_id,
+                            Visitor.company_id == scope.company_id,
+                        )
+                        .values(last_seen_at=datetime.now(UTC))
+                    )
                 session.add(visit)
                 await session.flush()
                 self._complete_idempotency(
@@ -329,6 +379,11 @@ class PublicStore:
             visit_id=visit_id,
             visitor_session_token=token,
             expires_at=datetime.fromtimestamp(expires_epoch, tz=UTC),
+            profile_link_token=(
+                request.profile_link_token
+                if linked_consent is not None and linked_consent.visitor_id == visitor_id
+                else None
+            ),
         )
 
     async def record_consent(
@@ -342,8 +397,39 @@ class PublicStore:
         async with self._sessions() as session, session.begin():
             await self._set_principal_scope(session, principal, card_slug=slug)
             card = await self._require_principal_card(session, principal, slug)
-            if request.policy_version != _policy_version(card, ConsentScope(request.scope)):
+            requested_scope = ConsentScope(request.scope)
+            company = await session.get(Company, principal.company_id)
+            expected_policy = (
+                _company_profile_policy(company)
+                if requested_scope == ConsentScope.PROFILE_PERSONALIZATION
+                and company is not None
+                else _policy_version(card, requested_scope)
+            )
+            if request.policy_version != expected_policy:
                 raise _policy_version_mismatch()
+            if requested_scope == ConsentScope.PROFILE_PERSONALIZATION:
+                await self._lock_profile_visitor(session, principal.visitor_id)
+            if (
+                request.scope == ConsentScope.PROFILE_PERSONALIZATION.value
+                and request.granted
+            ):
+                latest_profile_consent = await self._latest_profile_consent(
+                    session,
+                    tenant_id=principal.tenant_id,
+                    company_id=principal.company_id,
+                    visitor_id=principal.visitor_id,
+                )
+                if (
+                    latest_profile_consent is not None
+                    and not latest_profile_consent.granted
+                    and principal.issued_at_ms
+                    <= int(latest_profile_consent.recorded_at.timestamp() * 1_000)
+                ):
+                    raise ApiError(
+                        401,
+                        "VISITOR_SESSION_STALE",
+                        "访客会话早于最近撤回记录，请重新开始访问",
+                    )
             claim = await self._claim_idempotency(
                 session,
                 tenant_id=principal.tenant_id,
@@ -359,6 +445,7 @@ class PublicStore:
                 if record is None:
                     raise ApiError(409, "IDEMPOTENCY_CONFLICT", "幂等记录已失效，请重新请求")
             else:
+                granted = bool(request.granted)
                 record = ConsentRecord(
                     id=uuid.uuid4(),
                     tenant_id=principal.tenant_id,
@@ -366,7 +453,13 @@ class PublicStore:
                     visitor_id=principal.visitor_id,
                     scope=ConsentScope(request.scope),
                     policy_version=request.policy_version,
-                    granted=True,
+                    granted=granted,
+                    expires_at=(
+                        datetime.now(UTC)
+                        + timedelta(seconds=self._settings.profile_link_token_ttl_seconds)
+                        if request.scope == ConsentScope.PROFILE_PERSONALIZATION.value and granted
+                        else None
+                    ),
                     evidence={
                         "card_id": str(principal.card_id),
                         "visit_id": str(principal.visit_id),
@@ -377,6 +470,17 @@ class PublicStore:
                 )
                 session.add(record)
                 await session.flush()
+                if (
+                    record.scope == ConsentScope.PROFILE_PERSONALIZATION
+                    and not record.granted
+                ):
+                    await session.execute(
+                        delete(VisitorProfileSignal).where(
+                            VisitorProfileSignal.tenant_id == principal.tenant_id,
+                            VisitorProfileSignal.company_id == principal.company_id,
+                            VisitorProfileSignal.visitor_id == principal.visitor_id,
+                        )
+                    )
                 self._complete_idempotency(
                     claim.record,
                     resource_type="consent_record",
@@ -384,11 +488,16 @@ class PublicStore:
                     status_code=201,
                     response_body={"consent_id": str(record.id)},
                 )
+            profile_link_token = None
+            if record.scope == ConsentScope.PROFILE_PERSONALIZATION and record.granted:
+                profile_link_token, _ = self._issue_profile_link(record)
             return ConsentRecordSchema(
                 id=record.id,
                 scope=record.scope.value,
                 policy_version=record.policy_version,
-                granted_at=record.recorded_at,
+                granted=record.granted,
+                recorded_at=record.recorded_at,
+                profile_link_token=profile_link_token,
             )
 
     async def create_conversation(
@@ -968,6 +1077,98 @@ class PublicStore:
             card_slug=card_slug,
         )
 
+    async def _valid_profile_link_consent(
+        self,
+        session: AsyncSession,
+        *,
+        token: str | None,
+        scope: CardScope,
+        expected_policy: str,
+    ) -> ConsentRecord | None:
+        """Resolve a long-lived link without disclosing why an untrusted token failed."""
+        if not token:
+            return None
+        try:
+            principal = decode_profile_link_token(
+                token,
+                signing_key=self._settings.jwt_signing_key.get_secret_value(),
+                issuer=self._settings.app_name,
+            )
+        except ProfileLinkTokenError:
+            return None
+        if principal.tenant_id != scope.tenant_id or principal.company_id != scope.company_id:
+            return None
+        latest = await session.scalar(
+            select(ConsentRecord)
+            .where(
+                ConsentRecord.tenant_id == scope.tenant_id,
+                ConsentRecord.company_id == scope.company_id,
+                ConsentRecord.visitor_id == principal.visitor_id,
+                ConsentRecord.scope == ConsentScope.PROFILE_PERSONALIZATION,
+            )
+            .order_by(ConsentRecord.recorded_at.desc(), ConsentRecord.id.desc())
+            .limit(1)
+        )
+        if latest is None or latest.id != principal.consent_id or not latest.granted:
+            return None
+        expires_at = latest.expires_at
+        if expires_at is not None and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            latest.policy_version != expected_policy
+            or expires_at is None
+            or expires_at <= datetime.now(UTC)
+        ):
+            return None
+        visitor = await session.scalar(
+            select(Visitor.id).where(
+                Visitor.id == principal.visitor_id,
+                Visitor.tenant_id == scope.tenant_id,
+                Visitor.company_id == scope.company_id,
+            )
+        )
+        return latest if visitor is not None else None
+
+    @staticmethod
+    async def _latest_profile_consent(
+        session: AsyncSession,
+        *,
+        tenant_id: uuid.UUID,
+        company_id: uuid.UUID,
+        visitor_id: uuid.UUID,
+    ) -> ConsentRecord | None:
+        return await session.scalar(
+            select(ConsentRecord)
+            .where(
+                ConsentRecord.tenant_id == tenant_id,
+                ConsentRecord.company_id == company_id,
+                ConsentRecord.visitor_id == visitor_id,
+                ConsentRecord.scope == ConsentScope.PROFILE_PERSONALIZATION,
+            )
+            .order_by(ConsentRecord.recorded_at.desc(), ConsentRecord.id.desc())
+            .limit(1)
+        )
+
+    def _issue_profile_link(self, consent: ConsentRecord) -> tuple[str, int]:
+        return issue_profile_link_token(
+            signing_key=self._settings.jwt_signing_key.get_secret_value(),
+            issuer=self._settings.app_name,
+            ttl_seconds=self._settings.profile_link_token_ttl_seconds,
+            visitor_id=consent.visitor_id,
+            tenant_id=consent.tenant_id,
+            company_id=consent.company_id,
+            consent_id=consent.id,
+        )
+
+    @staticmethod
+    async def _lock_profile_visitor(
+        session: AsyncSession, visitor_id: uuid.UUID
+    ) -> None:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:visitor_id, 0))"),
+            {"visitor_id": str(visitor_id)},
+        )
+
     @staticmethod
     async def _set_scope(
         session: AsyncSession,
@@ -1291,7 +1492,21 @@ def _policy_version(card: Card, scope: ConsentScope) -> str:
         return str(policies.get("privacy") or "privacy-v1")
     if scope == ConsentScope.CHAT_NOTICE:
         return str(policies.get("chat_notice") or "chat-notice-v1")
+    if scope == ConsentScope.PROFILE_PERSONALIZATION:
+        return str(
+            policies.get("profile_personalization") or "profile-personalization-v1"
+        )
     return str(policies.get("lead_consent") or "lead-consent-v1")
+
+
+def _company_profile_policy(company: Company) -> str:
+    settings = company.settings if isinstance(company.settings, dict) else {}
+    policies = settings.get("policy_versions", {})
+    if not isinstance(policies, dict):
+        policies = {}
+    return str(
+        policies.get("profile_personalization") or "profile-personalization-v1"
+    )
 
 
 def _policy_version_mismatch() -> ApiError:

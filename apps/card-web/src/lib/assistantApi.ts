@@ -1,3 +1,9 @@
+import {
+  clearProfileLinkToken,
+  readProfileLinkToken,
+  writeProfileLinkToken,
+} from "./profileLink";
+
 export type AssistantCitation = {
   id: string;
   label: string;
@@ -21,6 +27,7 @@ export type PublicPolicyVersions = {
   privacy: string;
   chatNotice: string;
   leadConsent: string;
+  profilePersonalization: string;
 };
 
 export type VisitorSession = {
@@ -269,11 +276,11 @@ function jsonHeaders(token?: string, idempotencyKey?: string) {
   return headers;
 }
 
-async function getPolicyVersions(
+async function getPublicCardContext(
   baseUrl: string,
   cardSlug: string,
   signal?: AbortSignal,
-): Promise<PublicPolicyVersions> {
+) {
   const envelope = await requestJson<unknown>(
     `${baseUrl}/public/cards/${encodeURIComponent(cardSlug)}`,
     { method: "GET", headers: { Accept: "application/json" } },
@@ -281,10 +288,18 @@ async function getPolicyVersions(
   );
   const data = requireRecord(requireRecord(envelope, "card envelope").data, "card data");
   const versions = requireRecord(data.policy_versions, "policy versions");
+  const company = requireRecord(data.company, "company");
   return {
-    privacy: requireString(versions.privacy, "privacy policy version"),
-    chatNotice: requireString(versions.chat_notice, "chat notice version"),
-    leadConsent: requireString(versions.lead_consent, "lead consent version"),
+    companyId: requireString(company.id, "company id"),
+    policyVersions: {
+      privacy: requireString(versions.privacy, "privacy policy version"),
+      chatNotice: requireString(versions.chat_notice, "chat notice version"),
+      leadConsent: requireString(versions.lead_consent, "lead consent version"),
+      profilePersonalization: requireString(
+        versions.profile_personalization,
+        "profile personalization version",
+      ),
+    },
   };
 }
 
@@ -292,8 +307,12 @@ async function createVisit(
   baseUrl: string,
   cardSlug: string,
   privacyVersion: string,
+  companyId: string | undefined,
   signal?: AbortSignal,
 ) {
+  const storedProfileLinkToken = companyId
+    ? readProfileLinkToken(companyId)
+    : undefined;
   const envelope = await requestJson<unknown>(
     `${baseUrl}/public/cards/${encodeURIComponent(cardSlug)}/visits`,
     {
@@ -302,11 +321,26 @@ async function createVisit(
       body: JSON.stringify({
         source: "card_web",
         privacy_notice_version: privacyVersion,
+        profile_link_token: storedProfileLinkToken,
       }),
     },
     signal,
   );
   const data = requireRecord(requireRecord(envelope, "visit envelope").data, "visit data");
+  const profileLinkToken =
+    typeof data.profile_link_token === "string" && data.profile_link_token.trim()
+      ? data.profile_link_token.trim()
+      : undefined;
+  if (
+    companyId &&
+    profileLinkToken &&
+    !writeProfileLinkToken(companyId, profileLinkToken)
+  ) {
+    clearProfileLinkToken(companyId);
+  }
+  if (companyId && storedProfileLinkToken && !profileLinkToken) {
+    clearProfileLinkToken(companyId);
+  }
   return {
     token: requireString(data.visitor_session_token, "visitor session token"),
     expiresAt: requireString(data.expires_at, "visitor session expiry"),
@@ -368,11 +402,13 @@ async function ensureAssistantSession(
 
   let session = saved;
   if (!session) {
-    const versions = await getPolicyVersions(baseUrl, cardSlug, signal);
+    const context = await getPublicCardContext(baseUrl, cardSlug, signal);
+    const versions = context.policyVersions;
     const visit = await createVisit(
       baseUrl,
       cardSlug,
       versions.privacy,
+      context.companyId,
       signal,
     );
     session = {
@@ -405,10 +441,12 @@ async function ensureAssistantSession(
 export async function ensurePublicVisitorSession({
   cardSlug,
   policyVersions,
+  companyId,
   signal,
 }: {
   cardSlug: string;
   policyVersions?: PublicPolicyVersions;
+  companyId?: string;
   signal?: AbortSignal;
 }): Promise<VisitorSession> {
   const baseUrl = getPublicApiBaseUrl();
@@ -425,12 +463,15 @@ export async function ensurePublicVisitorSession({
   const saved = readSession(normalizedSlug);
   if (saved) return saved;
 
-  const versions =
-    policyVersions ?? (await getPolicyVersions(baseUrl, normalizedSlug, signal));
+  const context = policyVersions
+    ? { policyVersions, companyId }
+    : await getPublicCardContext(baseUrl, normalizedSlug, signal);
+  const versions = policyVersions ?? context.policyVersions;
   const visit = await createVisit(
     baseUrl,
     normalizedSlug,
     versions.privacy,
+    companyId ?? context.companyId,
     signal,
   );
   const session: VisitorSession = {

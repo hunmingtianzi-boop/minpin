@@ -1,0 +1,214 @@
+.visitor-profile-privacy-note {
+  padding: 12px 16px;
+  color: var(--muted);
+  background: #eef4fc;
+  border: 1px solid #c8d9f1;
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.visitor-profile-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.visitor-profile-scope,
+.muted-value {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.visitor-profile-detail {
+  display: grid;
+  gap: 20px;
+  padding: 20px;
+}
+
+.visitor-profile-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.visitor-profile-detail-heading h2 {
+  margin: 4px 0 8px;
+  font-size: 20px;
+}
+
+.visitor-profile-detail-heading code,
+.visitor-profile-source-ids code {
+  overflow-wrap: anywhere;
+}
+
+.visitor-profile-detail-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-subtle);
+}
+
+.visitor-profile-detail-summary > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+}
+
+.visitor-profile-detail-summary > div + div {
+  border-left: 1px solid var(--border);
+}
+
+.visitor-profile-detail-summary span,
+.visitor-profile-scores span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.visitor-profile-signal-list {
+  display: grid;
+  gap: 12px;
+}
+
+.visitor-profile-signal {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.visitor-profile-signal > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visitor-profile-signal > header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.visitor-profile-signal h4 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.visitor-profile-signal > header > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.visitor-profile-scores {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 160px));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.visitor-profile-scores > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 10px;
+  background: var(--surface-subtle);
+  border-radius: 4px;
+}
+
+.visitor-profile-dates,
+.visitor-profile-source-ids {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.visitor-profile-dates {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.visitor-profile-dates > div,
+.visitor-profile-source-ids > div {
+  display: grid;
+  gap: 3px;
+}
+
+.visitor-profile-dates dt,
+.visitor-profile-source-ids dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.visitor-profile-dates dd,
+.visitor-profile-source-ids dd {
+  margin: 0;
+}
+
+.visitor-profile-evidence {
+  margin-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.visitor-profile-evidence summary {
+  padding-top: 12px;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.visitor-profile-evidence ul {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.visitor-profile-evidence li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-subtle);
+}
+
+.visitor-profile-source-ids {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.visitor-profile-source-meta {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .visitor-profile-detail-summary,
+  .visitor-profile-dates {
+    grid-template-columns: 1fr;
+  }
+
+  .visitor-profile-detail-summary > div + div {
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+
+  .visitor-profile-evidence li {
+    grid-template-columns: 1fr;
+  }
+
+  .visitor-profile-source-meta {
+    text-align: left;
+  }
+}

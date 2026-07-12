@@ -9,11 +9,16 @@ import jwt
 from jwt import InvalidTokenError
 
 VISITOR_AUDIENCE = "cf-ai-card-public"
+PROFILE_LINK_AUDIENCE = "cf-ai-card-profile-link"
 STAFF_ACCESS_AUDIENCE = "cf-ai-card-staff-access"
 STAFF_REFRESH_AUDIENCE = "cf-ai-card-staff-refresh"
 
 
 class VisitorTokenError(ValueError):
+    pass
+
+
+class ProfileLinkTokenError(ValueError):
     pass
 
 
@@ -29,11 +34,22 @@ class VisitorPrincipal:
     company_id: uuid.UUID
     card_id: uuid.UUID
     token_id: uuid.UUID
+    issued_at: int = 0
+    issued_at_ms: int = 0
 
     @property
     def rate_limit_subject(self) -> str:
         raw = f"{self.company_id}:{self.token_id}".encode()
         return hashlib.sha256(raw).hexdigest()[:32]
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileLinkPrincipal:
+    visitor_id: uuid.UUID
+    tenant_id: uuid.UUID
+    company_id: uuid.UUID
+    consent_id: uuid.UUID
+    token_id: uuid.UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +93,8 @@ def issue_visitor_token(
     company_id: uuid.UUID,
     card_id: uuid.UUID,
 ) -> tuple[str, int]:
-    now = int(time.time())
+    now_ms = int(time.time() * 1_000)
+    now = now_ms // 1_000
     expires_at = now + ttl_seconds
     payload = {
         "iss": issuer,
@@ -90,6 +107,7 @@ def issue_visitor_token(
         "company_id": str(company_id),
         "card_id": str(card_id),
         "iat": now,
+        "iat_ms": now_ms,
         "nbf": now,
         "exp": expires_at,
     }
@@ -120,9 +138,67 @@ def decode_visitor_token(
             company_id=uuid.UUID(payload["company_id"]),
             card_id=uuid.UUID(payload["card_id"]),
             token_id=uuid.UUID(payload["jti"]),
+            issued_at=int(payload["iat"]),
+            issued_at_ms=int(payload.get("iat_ms", int(payload["iat"]) * 1_000)),
         )
     except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
         raise VisitorTokenError("invalid visitor session token") from exc
+
+
+def issue_profile_link_token(
+    *,
+    signing_key: str,
+    issuer: str,
+    ttl_seconds: int,
+    visitor_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    company_id: uuid.UUID,
+    consent_id: uuid.UUID,
+) -> tuple[str, int]:
+    now = int(time.time())
+    expires_at = now + ttl_seconds
+    payload = {
+        "iss": issuer,
+        "aud": PROFILE_LINK_AUDIENCE,
+        "sub": str(visitor_id),
+        "typ": "profile_link",
+        "jti": str(uuid.uuid4()),
+        "tenant_id": str(tenant_id),
+        "company_id": str(company_id),
+        "consent_id": str(consent_id),
+        "iat": now,
+        "nbf": now,
+        "exp": expires_at,
+    }
+    return jwt.encode(payload, signing_key, algorithm="HS256"), expires_at
+
+
+def decode_profile_link_token(
+    token: str,
+    *,
+    signing_key: str,
+    issuer: str,
+) -> ProfileLinkPrincipal:
+    try:
+        payload = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["HS256"],
+            audience=PROFILE_LINK_AUDIENCE,
+            issuer=issuer,
+            options={"require": ["exp", "iat", "nbf", "iss", "aud", "sub", "jti"]},
+        )
+        if payload.get("typ") != "profile_link":
+            raise ProfileLinkTokenError("wrong token type")
+        return ProfileLinkPrincipal(
+            visitor_id=uuid.UUID(payload["sub"]),
+            tenant_id=uuid.UUID(payload["tenant_id"]),
+            company_id=uuid.UUID(payload["company_id"]),
+            consent_id=uuid.UUID(payload["consent_id"]),
+            token_id=uuid.UUID(payload["jti"]),
+        )
+    except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
+        raise ProfileLinkTokenError("invalid profile link token") from exc
 
 
 def issue_staff_tokens(

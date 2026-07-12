@@ -15,12 +15,14 @@ class CreateVisitRequest(StrictModel):
     source: str = Field(min_length=1, max_length=64)
     campaign: str | None = Field(default=None, max_length=128)
     privacy_notice_version: str = Field(min_length=1, max_length=64)
+    profile_link_token: str | None = Field(default=None, min_length=1, max_length=2_048)
 
 
 class VisitSession(StrictModel):
     visit_id: uuid.UUID
     visitor_session_token: str
     expires_at: datetime
+    profile_link_token: str | None = None
 
 
 class VisitEnvelope(StrictModel):
@@ -56,6 +58,7 @@ class PolicyVersions(StrictModel):
     privacy: str
     chat_notice: str
     lead_consent: str
+    profile_personalization: str
 
 
 class PublicCard(StrictModel):
@@ -78,16 +81,18 @@ class PublicCardEnvelope(StrictModel):
 
 
 class ConsentRequest(StrictModel):
-    scope: Literal["chat_notice", "lead_contact"]
+    scope: Literal["chat_notice", "lead_contact", "profile_personalization"]
     policy_version: str = Field(min_length=1, max_length=64)
-    granted: Literal[True]
+    granted: bool
 
 
 class ConsentRecord(StrictModel):
     id: uuid.UUID
-    scope: Literal["chat_notice", "lead_contact"]
+    scope: Literal["chat_notice", "lead_contact", "profile_personalization"]
     policy_version: str
-    granted_at: datetime
+    granted: bool
+    recorded_at: datetime
+    profile_link_token: str | None = None
 
 
 class ConsentEnvelope(StrictModel):

@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getAssistantSessionStorageKey } from "./assistantApi";
 import {
+  getProfileLinkStorageKey,
+  getProfileRevokePendingStorageKey,
+} from "./profileLink";
+import {
   fetchPublicCaseStudy,
   fetchPublicCatalog,
   fetchPublicProduct,
   safeContactHref,
+  setProfilePersonalizationConsent,
   submitPrivacyRequest,
   submitPublicLead,
 } from "./publicExperienceApi";
@@ -42,6 +47,7 @@ const policies = {
   privacy: "privacy-v4",
   chatNotice: "chat-v3",
   leadConsent: "lead-v7",
+  profilePersonalization: "profile-v2",
 };
 
 function jsonResponse(data: unknown, status = 200, headers?: HeadersInit) {
@@ -68,6 +74,7 @@ describe("public experience API", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1/");
     vi.stubGlobal("sessionStorage", new MemoryStorage());
+    vi.stubGlobal("localStorage", new MemoryStorage());
   });
 
   afterEach(() => {
@@ -331,6 +338,141 @@ describe("public experience API", () => {
       note: "不再需要联系",
       consent_scope: "lead_contact",
     });
+  });
+
+  it("grants profile personalization and persists only the company-scoped link token", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(visitResponse("visitor-session-token"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            id: "consent-1",
+            scope: "profile_personalization",
+            policy_version: "profile-v2",
+            granted: true,
+            recorded_at: "2026-07-12T01:00:00Z",
+            profile_link_token: "long-lived-company-token",
+          },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      setProfilePersonalizationConsent({
+        cardSlug: "tenant-a",
+        companyId: "company-a",
+        policyVersions: policies,
+        granted: true,
+        idempotencyKey: "profile-consent-key-1",
+      }),
+    ).resolves.toEqual({
+      granted: true,
+      recordedAt: "2026-07-12T01:00:00Z",
+    });
+
+    expect(localStorage.getItem(getProfileLinkStorageKey("company-a"))).toBe(
+      "long-lived-company-token",
+    );
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({
+      scope: "profile_personalization",
+      policy_version: "profile-v2",
+      granted: true,
+    });
+    expect(localStorage.getItem(getProfileLinkStorageKey("tenant-a"))).toBeNull();
+    expect(localStorage.getItem(getAssistantSessionStorageKey("tenant-a"))).toBeNull();
+  });
+
+  it("removes the local profile link immediately even when server revocation fails", async () => {
+    localStorage.setItem(getProfileLinkStorageKey("company-a"), "long-lived-token");
+    sessionStorage.setItem(
+      getAssistantSessionStorageKey("tenant-a"),
+      JSON.stringify({
+        token: "visitor-session-token",
+        expiresAt: "2099-01-01T00:00:00Z",
+        privacyVersion: policies.privacy,
+        chatNoticeVersion: policies.chatNotice,
+      }),
+    );
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline")));
+
+    await expect(
+      setProfilePersonalizationConsent({
+        cardSlug: "tenant-a",
+        companyId: "company-a",
+        policyVersions: policies,
+        granted: false,
+        idempotencyKey: "profile-consent-key-2",
+      }),
+    ).rejects.toMatchObject({ code: "PROFILE_REVOKE_PENDING", retryable: true });
+    expect(localStorage.getItem(getProfileLinkStorageKey("company-a"))).toBeNull();
+    expect(sessionStorage.getItem(getProfileRevokePendingStorageKey("company-a"))).toBe("1");
+  });
+
+  it("surfaces failed grant compensation and clears the company pending marker after retry", async () => {
+    const backing = new MemoryStorage();
+    let profileTokenWrites = 0;
+    vi.stubGlobal("localStorage", {
+      get length() { return backing.length; },
+      clear: () => backing.clear(),
+      getItem: (key: string) => backing.getItem(key),
+      key: (index: number) => backing.key(index),
+      removeItem: (key: string) => backing.removeItem(key),
+      setItem: (key: string, value: string) => {
+        if (key === getProfileLinkStorageKey("company-a")) {
+          profileTokenWrites += 1;
+          throw new DOMException("quota", "QuotaExceededError");
+        }
+        backing.setItem(key, value);
+      },
+    } satisfies Storage);
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(visitResponse("visitor-session-token"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            granted: true,
+            recorded_at: "2026-07-12T01:00:00Z",
+            profile_link_token: "server-issued-token",
+          },
+        }),
+      )
+      .mockRejectedValueOnce(new TypeError("offline during compensation"))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: { granted: false, recorded_at: "2026-07-12T01:05:00Z" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      setProfilePersonalizationConsent({
+        cardSlug: "tenant-a",
+        companyId: "company-a",
+        policyVersions: policies,
+        granted: true,
+        idempotencyKey: "profile-grant-key",
+      }),
+    ).rejects.toMatchObject({ code: "PROFILE_REVOKE_PENDING", retryable: true });
+    expect(profileTokenWrites).toBe(1);
+    expect(sessionStorage.getItem(getProfileRevokePendingStorageKey("company-a"))).toBe("1");
+    expect(sessionStorage.getItem(getProfileRevokePendingStorageKey("company-b"))).toBeNull();
+
+    await expect(
+      setProfilePersonalizationConsent({
+        cardSlug: "tenant-a",
+        companyId: "company-a",
+        policyVersions: policies,
+        granted: false,
+        idempotencyKey: "profile-revoke-retry-key",
+      }),
+    ).resolves.toEqual({
+      granted: false,
+      recordedAt: "2026-07-12T01:05:00Z",
+    });
+    expect(sessionStorage.getItem(getProfileRevokePendingStorageKey("company-a"))).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("rejects unsafe contact protocols while inferring safe phone and mail links", () => {

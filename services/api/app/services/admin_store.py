@@ -141,12 +141,20 @@ class AdminStore:
             company.normalized_name = body.name.casefold()
             company.industry = body.industry
             settings = _dict_value(company.settings)
+            policy_versions = _dict_value(settings.get("policy_versions"))
+            previous_profile_policy = _string_value(
+                policy_versions.get("profile_personalization")
+            ) or "profile-personalization-v1"
+            policy_versions["profile_personalization"] = (
+                body.profile_personalization_policy_version
+            )
             settings.update(
                 {
                     "summary": body.summary,
                     "region": body.region,
                     "website": _url_value(body.website),
                     "logo_url": _url_value(body.logo_url),
+                    "policy_versions": policy_versions,
                 }
             )
             company.settings = settings
@@ -158,7 +166,13 @@ class AdminStore:
                 resource_type="company",
                 resource_id=company.id,
                 trace_id=trace_id,
-                event_data={"version": company.version},
+                event_data={
+                    "version": company.version,
+                    "profile_policy_changed": (
+                        previous_profile_policy
+                        != body.profile_personalization_policy_version
+                    ),
+                },
             )
             await session.flush()
             await session.refresh(company)
@@ -1029,6 +1043,7 @@ def validate_embedding_vectors(
 
 def _company_profile(company: Company) -> CompanyProfile:
     settings = _dict_value(company.settings)
+    policy_versions = _dict_value(settings.get("policy_versions"))
     return CompanyProfile(
         id=company.id,
         name=company.name,
@@ -1037,6 +1052,10 @@ def _company_profile(company: Company) -> CompanyProfile:
         region=_string_value(settings.get("region")),
         website=_string_value(settings.get("website")),
         logo_url=_string_value(settings.get("logo_url")),
+        profile_personalization_policy_version=(
+            _string_value(policy_versions.get("profile_personalization"))
+            or "profile-personalization-v1"
+        ),
         status=company.status.value,
         version=company.version,
         updated_at=company.updated_at,

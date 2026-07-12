@@ -4,7 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.errors import ApiError
@@ -25,6 +25,7 @@ from app.core.pii import PiiCipher, mask_value
 from app.core.tokens import VisitorPrincipal
 from app.db.models import (
     Card,
+    Company,
     ConsentRecord,
     ConsentScope,
     ContentStatus,
@@ -39,8 +40,11 @@ from app.db.models import (
     PrivacyRequest,
     PrivacyRequestStatus,
     PrivacyRequestType,
+    Visit,
     Visitor,
     VisitorProfile,
+    VisitorProfileSignal,
+    VisitSummary,
 )
 from app.db.session import set_rls_context
 from app.services.audit import append_audit
@@ -267,6 +271,23 @@ class CrmStore:
             session.add(privacy_request)
             if body.request_type == "withdraw_consent" and body.consent_scope:
                 scope = ConsentScope(body.consent_scope)
+                if scope == ConsentScope.PROFILE_PERSONALIZATION:
+                    await self._lock_visitor(session, principal.visitor_id)
+                    company = await session.get(Company, principal.company_id)
+                    company_settings = (
+                        company.settings
+                        if company is not None and isinstance(company.settings, dict)
+                        else {}
+                    )
+                    policies = company_settings.get("policy_versions", {})
+                    if not isinstance(policies, dict):
+                        policies = {}
+                    policy_version = str(
+                        policies.get("profile_personalization")
+                        or "profile-personalization-v1"
+                    )
+                else:
+                    policy_version = _policy_version(card, scope)
                 session.add(
                     ConsentRecord(
                         id=uuid.uuid4(),
@@ -274,7 +295,7 @@ class CrmStore:
                         company_id=principal.company_id,
                         visitor_id=principal.visitor_id,
                         scope=scope,
-                        policy_version=_policy_version(card, scope),
+                        policy_version=policy_version,
                         granted=False,
                         evidence={
                             "card_id": str(principal.card_id),
@@ -283,6 +304,14 @@ class CrmStore:
                         },
                     )
                 )
+                if scope == ConsentScope.PROFILE_PERSONALIZATION:
+                    await session.execute(
+                        delete(VisitorProfileSignal).where(
+                            VisitorProfileSignal.tenant_id == principal.tenant_id,
+                            VisitorProfileSignal.company_id == principal.company_id,
+                            VisitorProfileSignal.visitor_id == principal.visitor_id,
+                        )
+                    )
             session.add(
                 Notification(
                     id=uuid.uuid4(),
@@ -635,6 +664,73 @@ class CrmStore:
         company_id: uuid.UUID,
         visitor_id: uuid.UUID,
     ) -> None:
+        await self._lock_visitor(session, visitor_id)
+        session.add(
+            ConsentRecord(
+                id=uuid.uuid4(),
+                tenant_id=tenant_id,
+                company_id=company_id,
+                visitor_id=visitor_id,
+                scope=ConsentScope.PROFILE_PERSONALIZATION,
+                policy_version="erasure-tombstone-v1",
+                granted=False,
+                evidence={"reason": "verified_deletion_request"},
+            )
+        )
+        await session.execute(
+            delete(VisitorProfileSignal).where(
+                VisitorProfileSignal.tenant_id == tenant_id,
+                VisitorProfileSignal.company_id == company_id,
+                VisitorProfileSignal.visitor_id == visitor_id,
+            )
+        )
+        summaries = (
+            await session.scalars(
+                select(VisitSummary)
+                .join(Conversation, Conversation.id == VisitSummary.conversation_id)
+                .where(
+                    VisitSummary.tenant_id == tenant_id,
+                    VisitSummary.company_id == company_id,
+                    Conversation.visitor_id == visitor_id,
+                )
+            )
+        ).all()
+        for summary in summaries:
+            summary.summary = "[已根据访客隐私请求删除]"
+            summary.interests = []
+            summary.strength = None
+            summary.next_step = None
+            summary.risk_notes = None
+            summary.source_message_ids = []
+            summary.approved_at = None
+            summary.approved_by = None
+        conversations = (
+            await session.scalars(
+                select(Conversation).where(
+                    Conversation.tenant_id == tenant_id,
+                    Conversation.company_id == company_id,
+                    Conversation.visitor_id == visitor_id,
+                )
+            )
+        ).all()
+        for conversation in conversations:
+            conversation.primary_intent = None
+        visits = (
+            await session.scalars(
+                select(Visit).where(
+                    Visit.tenant_id == tenant_id,
+                    Visit.company_id == company_id,
+                    Visit.visitor_id == visitor_id,
+                )
+            )
+        ).all()
+        for visit in visits:
+            context = visit.context if isinstance(visit.context, dict) else {}
+            visit.context = {
+                key: context[key]
+                for key in ("privacy_notice_version",)
+                if key in context
+            }
         profile = await session.scalar(
             select(VisitorProfile)
             .where(
@@ -699,6 +795,13 @@ class CrmStore:
         )
         if visitor is not None:
             visitor.anonymous_hash = self._cipher.hmac(f"deleted:{uuid.uuid4()}")
+
+    @staticmethod
+    async def _lock_visitor(session: AsyncSession, visitor_id: uuid.UUID) -> None:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:visitor_id, 0))"),
+            {"visitor_id": str(visitor_id)},
+        )
 
     async def _lead(
         self,
@@ -882,6 +985,10 @@ def _policy_version(card: Card, scope: ConsentScope) -> str:
         return str(policies.get("chat_notice") or "chat-notice-v1")
     if scope == ConsentScope.BROWSE_NOTICE:
         return str(policies.get("privacy") or "privacy-v1")
+    if scope == ConsentScope.PROFILE_PERSONALIZATION:
+        return str(
+            policies.get("profile_personalization") or "profile-personalization-v1"
+        )
     return str(policies.get("lead_consent") or "lead-consent-v1")
 
 

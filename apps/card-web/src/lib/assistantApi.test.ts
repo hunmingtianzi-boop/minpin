@@ -2,10 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getAssistantSessionStorageKey,
+  ensurePublicVisitorSession,
   parseAssistantEventStream,
   streamAssistantMessage,
   type AssistantStreamEvent,
 } from "./assistantApi";
+import { getProfileLinkStorageKey } from "./profileLink";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -83,6 +85,7 @@ describe("assistant API", () => {
   beforeEach(() => {
     vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1/");
     vi.stubGlobal("sessionStorage", new MemoryStorage());
+    vi.stubGlobal("localStorage", new MemoryStorage());
   });
 
   afterEach(() => {
@@ -138,7 +141,9 @@ describe("assistant API", () => {
               privacy: "privacy-v3",
               chat_notice: "chat-v5",
               lead_consent: "lead-v2",
+              profile_personalization: "profile-v1",
             },
+            company: { id: "company-a" },
           },
         }),
       )
@@ -235,6 +240,79 @@ describe("assistant API", () => {
     expect(fetchMock.mock.calls[0][0]).toBe(
       "https://api.example.test/api/v1/public/conversations/conversation-1/messages:stream",
     );
+  });
+
+  it("links a new visit only with the matching company token and persists rotation", async () => {
+    localStorage.setItem(getProfileLinkStorageKey("company-a"), "profile-token-a-old");
+    localStorage.setItem(getProfileLinkStorageKey("company-b"), "profile-token-b");
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        data: {
+          visit_id: "visit-linked",
+          visitor_session_token: "short-session-token",
+          profile_link_token: "profile-token-a-rotated",
+          expires_at: "2099-01-01T00:00:00Z",
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ensurePublicVisitorSession({
+      cardSlug: "card-a",
+      companyId: "company-a",
+      policyVersions: {
+        privacy: "privacy-v1",
+        chatNotice: "chat-v1",
+        leadConsent: "lead-v1",
+        profilePersonalization: "profile-v1",
+      },
+    });
+
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
+      source: "card_web",
+      privacy_notice_version: "privacy-v1",
+      profile_link_token: "profile-token-a-old",
+    });
+    expect(localStorage.getItem(getProfileLinkStorageKey("company-a"))).toBe(
+      "profile-token-a-rotated",
+    );
+    expect(localStorage.getItem(getProfileLinkStorageKey("company-b"))).toBe(
+      "profile-token-b",
+    );
+    expect(localStorage.getItem(getAssistantSessionStorageKey("card-a"))).toBeNull();
+    expect(sessionStorage.getItem(getAssistantSessionStorageKey("card-a"))).toContain(
+      "short-session-token",
+    );
+  });
+
+  it("forgets a rejected profile token when visit creation silently degrades", async () => {
+    localStorage.setItem(getProfileLinkStorageKey("company-a"), "rejected-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            visit_id: "visit-new",
+            visitor_session_token: "new-short-session",
+            profile_link_token: null,
+            expires_at: "2099-01-01T00:00:00Z",
+          },
+        }),
+      ),
+    );
+
+    await ensurePublicVisitorSession({
+      cardSlug: "card-a",
+      companyId: "company-a",
+      policyVersions: {
+        privacy: "privacy-v1",
+        chatNotice: "chat-v1",
+        leadConsent: "lead-v1",
+        profilePersonalization: "profile-v1",
+      },
+    });
+
+    expect(localStorage.getItem(getProfileLinkStorageKey("company-a"))).toBeNull();
   });
 
   it("surfaces retryable message.error frames after notifying the consumer", async () => {

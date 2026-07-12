@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AssistantApiError } from "../lib/assistantApi";
 import type { PublicCardData } from "../lib/publicCardApi";
 import type { PublicCatalog, PublicProduct } from "../lib/publicExperienceApi";
+import { getProfileLinkStorageKey } from "../lib/profileLink";
 import { PublicExperience } from "./PublicExperience";
 
 const mocks = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   fetchCase: vi.fn(),
   submitLead: vi.fn(),
   submitPrivacy: vi.fn(),
+  setProfileConsent: vi.fn(),
   fetchCard: vi.fn(),
 }));
 
@@ -29,6 +31,7 @@ vi.mock("../lib/publicExperienceApi", async () => {
     fetchPublicCaseStudy: mocks.fetchCase,
     submitPublicLead: mocks.submitLead,
     submitPrivacyRequest: mocks.submitPrivacy,
+    setProfilePersonalizationConsent: mocks.setProfileConsent,
     createPublicIdempotencyKey: vi
       .fn()
       .mockReturnValueOnce("consent-key-0001")
@@ -86,6 +89,7 @@ const card: PublicCardData = {
     privacy: "privacy-v1",
     chat_notice: "chat-v1",
     lead_consent: "lead-v1",
+    profile_personalization: "profile-v1",
   },
 };
 
@@ -120,6 +124,13 @@ describe("PublicExperience", () => {
     mocks.fetchCase.mockReset();
     mocks.submitLead.mockReset();
     mocks.submitPrivacy.mockReset();
+    mocks.setProfileConsent.mockReset();
+    mocks.setProfileConsent.mockResolvedValue({
+      granted: true,
+      recordedAt: "2026-07-12T01:00:00Z",
+    });
+    window.localStorage.clear();
+    window.sessionStorage.clear();
     mocks.fetchCard.mockReset().mockResolvedValue(card);
     vi.stubGlobal(
       "matchMedia",
@@ -241,5 +252,81 @@ describe("PublicExperience", () => {
       await screen.findByRole("img", { name: "示例企业名片二维码" }),
     ).toBeInTheDocument();
     expect(screen.getByText(`${window.location.origin}${window.location.pathname}`)).toBeInTheDocument();
+  });
+
+  it("keeps long-term personalization off by default and requires explicit consent", async () => {
+    renderExperience();
+
+    expect(screen.getByText("仅在本企业内记住兴趣")).toBeInTheDocument();
+    expect(screen.getByText(/不会跨企业关联，默认不开启，且可随时撤回/)).toBeInTheDocument();
+    const grant = screen.getByRole("button", { name: "同意并开启" });
+    expect(grant).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(grant);
+    await waitFor(() =>
+      expect(mocks.setProfileConsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cardSlug: "tenant-a",
+          companyId: "22222222-2222-2222-2222-222222222222",
+          granted: true,
+          policyVersions: expect.objectContaining({
+            profilePersonalization: "profile-v1",
+          }),
+        }),
+      ),
+    );
+    expect(await screen.findByRole("button", { name: "撤回并停止记住" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("shows a recoverable state when server revocation is temporarily unavailable", async () => {
+    window.localStorage.setItem(
+      getProfileLinkStorageKey(card.company.id),
+      "existing-profile-token",
+    );
+    mocks.setProfileConsent.mockRejectedValueOnce(
+      new AssistantApiError("网络不可用", { code: "NETWORK_ERROR", retryable: true }),
+    );
+    renderExperience();
+
+    fireEvent.click(screen.getByRole("button", { name: "撤回并停止记住" }));
+
+    expect(
+      await screen.findByText(/服务器可能仍处于开启状态/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试完成撤回" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重试完成撤回" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("never claims revocation after failed grant compensation and retries it", async () => {
+    mocks.setProfileConsent
+      .mockRejectedValueOnce(
+        new AssistantApiError("服务器暂未确认撤回", {
+          code: "PROFILE_REVOKE_PENDING",
+          retryable: true,
+        }),
+      )
+      .mockResolvedValueOnce({
+        granted: false,
+        recordedAt: "2026-07-12T01:05:00Z",
+      });
+    renderExperience();
+
+    fireEvent.click(screen.getByRole("button", { name: "同意并开启" }));
+
+    expect(await screen.findByText(/服务器可能仍处于开启状态/)).toBeInTheDocument();
+    expect(screen.queryByText(/已撤回并删除/)).not.toBeInTheDocument();
+    const retry = screen.getByRole("button", { name: "重试完成撤回" });
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("已撤回并删除本设备上的长期关联信息。")).toBeInTheDocument();
+    expect(mocks.setProfileConsent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ granted: false, companyId: card.company.id }),
+    );
   });
 });

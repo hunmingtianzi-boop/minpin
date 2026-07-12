@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     field_encryption_previous_keys: SecretStr | None = None
     trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     visitor_token_ttl_seconds: int = Field(default=7_200, ge=300, le=86_400)
+    profile_link_token_ttl_seconds: int = Field(
+        default=15_552_000, ge=86_400, le=31_536_000
+    )
+    visitor_profile_retention_days: int = Field(default=365, ge=1, le=730)
     access_token_ttl_seconds: int = Field(default=900, ge=300, le=3_600)
     refresh_token_ttl_seconds: int = Field(default=604_800, ge=3_600, le=7_776_000)
     staff_login_max_failures: int = Field(default=5, ge=3, le=20)

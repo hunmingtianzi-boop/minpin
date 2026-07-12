@@ -90,6 +90,9 @@ function normalizeCompany(payload: unknown): CompanyProfile {
     region: optionalString(raw.region),
     website: optionalString(raw.website),
     logoUrl: optionalString(raw.logo_url),
+    profilePersonalizationPolicyVersion:
+      optionalString(raw.profile_personalization_policy_version) ||
+      "profile-personalization-v1",
     version: optionalNumber(raw.version),
     updatedAt: optionalString(raw.updated_at) || undefined,
   };
@@ -341,6 +344,8 @@ function companyPayload(input: CompanyProfileInput) {
     region: nullableString(input.region),
     website: nullableString(input.website),
     logo_url: nullableString(input.logoUrl),
+    profile_personalization_policy_version:
+      input.profilePersonalizationPolicyVersion.trim(),
   };
 }
 

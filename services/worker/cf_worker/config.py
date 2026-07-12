@@ -43,6 +43,7 @@ class WorkerSettings(BaseSettings):
     outbox_backoff_max_seconds: int = Field(default=900, ge=1, le=86_400)
     export_retention_hours: int = Field(default=24, ge=1, le=168)
     export_max_rows: int = Field(default=100_000, ge=1, le=1_000_000)
+    profile_retention_purge_seconds: int = Field(default=3_600, ge=60, le=86_400)
 
     worker_health_host: str = "0.0.0.0"  # noqa: S104 - container health endpoint
     worker_health_port: int = Field(default=8020, ge=1, le=65_535)

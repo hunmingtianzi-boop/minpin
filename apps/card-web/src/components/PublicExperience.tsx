@@ -43,6 +43,7 @@ import {
   fetchPublicProduct,
   isPublicExperienceConfigured,
   safeContactHref,
+  setProfilePersonalizationConsent,
   submitPrivacyRequest,
   submitPublicLead,
   type PrivacyRequestType,
@@ -50,6 +51,10 @@ import {
   type PublicCatalog,
   type PublicProduct,
 } from "../lib/publicExperienceApi";
+import {
+  readProfileLinkToken,
+  readProfileRevokePending,
+} from "../lib/profileLink";
 import { encodeQrMatrix, qrPathData } from "../lib/qrCode";
 
 type DialogState =
@@ -91,6 +96,7 @@ function policyVersions(card: PublicCardData): PublicPolicyVersions {
     privacy: card.policy_versions.privacy,
     chatNotice: card.policy_versions.chat_notice,
     leadConsent: card.policy_versions.lead_consent,
+    profilePersonalization: card.policy_versions.profile_personalization,
   };
 }
 
@@ -659,6 +665,13 @@ export const PublicExperience = forwardRef<
               访问、更正、删除数据或撤回授权
               <ArrowRight size={16} aria-hidden="true" />
             </button>
+            <ProfilePersonalizationControl
+              cardSlug={card.slug}
+              companyId={card.company.id}
+              policies={policies}
+              refreshPolicies={refreshPolicies}
+              configured={configured}
+            />
           </div>
         </div>
       </section>
@@ -712,6 +725,138 @@ export const PublicExperience = forwardRef<
     </>
   );
 });
+
+function ProfilePersonalizationControl({
+  cardSlug,
+  companyId,
+  policies,
+  refreshPolicies,
+  configured,
+}: {
+  cardSlug: string;
+  companyId: string;
+  policies: PublicPolicyVersions;
+  refreshPolicies: () => Promise<PublicPolicyVersions>;
+  configured: boolean;
+}) {
+  const [enabled, setEnabled] = useState(() => Boolean(readProfileLinkToken(companyId)));
+  const [status, setStatus] = useState<
+    | { type: "idle" | "submitting" | "revoke-pending" }
+    | { type: "success" | "error"; message: string }
+  >(() => readProfileRevokePending(companyId) ? { type: "revoke-pending" } : { type: "idle" });
+  const controller = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setEnabled(Boolean(readProfileLinkToken(companyId)));
+    setStatus(
+      readProfileRevokePending(companyId)
+        ? { type: "revoke-pending" }
+        : { type: "idle" },
+    );
+  }, [companyId]);
+  useEffect(() => () => controller.current?.abort(), []);
+
+  const updateConsent = async () => {
+    if (status.type === "submitting") return;
+    const granted = status.type === "revoke-pending" ? false : !enabled;
+    if (!granted) setEnabled(false);
+    setStatus({ type: "submitting" });
+    controller.current?.abort();
+    const nextController = new AbortController();
+    controller.current = nextController;
+    try {
+      await setProfilePersonalizationConsent({
+        cardSlug,
+        companyId,
+        policyVersions: policies,
+        granted,
+        idempotencyKey: createPublicIdempotencyKey(),
+        signal: nextController.signal,
+      });
+      setEnabled(granted);
+      setStatus({
+        type: "success",
+        message: granted
+          ? "已开启。之后访问本企业的名片时可继续使用已形成的兴趣偏好。"
+          : "已撤回并删除本设备上的长期关联信息。",
+      });
+    } catch (error) {
+      if (nextController.signal.aborted) return;
+      if (error instanceof AssistantApiError && error.code === "POLICY_VERSION_MISMATCH") {
+        try {
+          await refreshPolicies();
+        } catch {
+          // The next explicit action will try fetching the latest policy again.
+        }
+      }
+      if (
+        !granted ||
+        (error instanceof AssistantApiError && error.code === "PROFILE_REVOKE_PENDING")
+      ) {
+        setEnabled(false);
+        setStatus({
+          type: "revoke-pending",
+        });
+      } else {
+        setStatus({
+          type: "error",
+          message: publicErrorMessage(error, "开启失败，请稍后重试。"),
+        });
+      }
+    } finally {
+      if (controller.current === nextController) controller.current = null;
+    }
+  };
+
+  const revokePending = status.type === "revoke-pending";
+  return (
+    <aside className="profile-personalization" aria-labelledby="profile-personalization-title">
+      <div>
+        <span className="profile-personalization-icon" aria-hidden="true">
+          <ShieldCheck size={19} weight="duotone" />
+        </span>
+        <div>
+          <h3 id="profile-personalization-title">仅在本企业内记住兴趣</h3>
+          <p>
+            开启后，本企业可在你下次访问时延续兴趣偏好；不会跨企业关联，默认不开启，且可随时撤回。
+          </p>
+          <small>授权版本：{policies.profilePersonalization}</small>
+        </div>
+      </div>
+      <button
+        className={`button ${enabled ? "button-secondary" : "button-primary"}`}
+        type="button"
+        disabled={!configured || status.type === "submitting"}
+        aria-pressed={enabled}
+        onClick={() => void updateConsent()}
+      >
+        {status.type === "submitting" ? (
+          <><SpinnerGap className="spin" size={17} aria-hidden="true" />正在处理</>
+        ) : revokePending ? (
+          "重试完成撤回"
+        ) : enabled ? (
+          "撤回并停止记住"
+        ) : (
+          "同意并开启"
+        )}
+      </button>
+      {!configured && <p className="profile-personalization-status">公开服务未配置，当前无法开启。</p>}
+      {revokePending && (
+        <p className="profile-personalization-status profile-personalization-warning" role="alert">
+          本设备未保存长期关联信息，但服务器可能仍处于开启状态；请联网后重试完成撤回。
+        </p>
+      )}
+      {(status.type === "success" || status.type === "error") && (
+        <p
+          className={`profile-personalization-status${status.type === "error" ? " profile-personalization-warning" : ""}`}
+          role={status.type === "error" ? "alert" : "status"}
+        >
+          {status.message}
+        </p>
+      )}
+    </aside>
+  );
+}
 
 function LeadForm({
   cardSlug,

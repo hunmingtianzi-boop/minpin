@@ -36,6 +36,8 @@ from app.db.models import (
     VisitEvent,
     Visitor,
     VisitorProfile,
+    VisitorProfileSignal,
+    VisitorProfileSignalSource,
     VisitSummary,
     WorkerJobResult,
 )
@@ -88,6 +90,8 @@ __all__ = [
     "VisitEvent",
     "Visitor",
     "VisitorProfile",
+    "VisitorProfileSignal",
+    "VisitorProfileSignalSource",
     "VisitSummary",
     "WorkerJobResult",
     "async_session_factory",

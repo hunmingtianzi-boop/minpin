@@ -224,6 +224,28 @@ async def get_summary(
     return SummaryEnvelope(data=summary)
 
 
+@router.post(
+    "/admin/summaries/{summary_id}:approve",
+    response_model=SummaryEnvelope,
+    operation_id="approveVisitSummary",
+)
+async def approve_summary(
+    summary_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+) -> SummaryEnvelope:
+    _require_access(
+        principal, "summaries.write", "conversations.write", allow_card_owner=True
+    )
+    return SummaryEnvelope(
+        data=await _store(request).approve_summary(
+            scope=_scope(principal),
+            summary_id=summary_id,
+            trace_id=request_id_ctx.get(),
+        )
+    )
+
+
 @router.get(
     "/admin/knowledge/gaps",
     response_model=KnowledgeGapListEnvelope,

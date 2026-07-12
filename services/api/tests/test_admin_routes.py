@@ -123,6 +123,7 @@ def _company_profile(*, version: int) -> CompanyProfile:
         industry="软件",
         region="杭州",
         website="https://example.com",
+        profile_personalization_policy_version="profile-personalization-v1",
         status="active",
         version=version,
         updated_at=datetime.now(UTC),
@@ -226,6 +227,7 @@ def test_company_profile_uses_etag_and_if_match_version(
             "region": "上海",
             "website": "https://example.org",
             "logo_url": None,
+            "profile_personalization_policy_version": "profile-personalization-v2",
         },
     )
 

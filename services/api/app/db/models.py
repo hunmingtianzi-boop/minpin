@@ -114,6 +114,12 @@ class ConsentScope(StrEnum):
     BROWSE_NOTICE = "browse_notice"
     CHAT_NOTICE = "chat_notice"
     LEAD_CONTACT = "lead_contact"
+    PROFILE_PERSONALIZATION = "profile_personalization"
+
+
+class VisitorProfileSignalKind(StrEnum):
+    INTEREST = "interest"
+    INTENT = "intent"
 
 
 class ConversationStatus(StrEnum):
@@ -707,6 +713,7 @@ class ConsentRecord(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
             ["visitors.tenant_id", "visitors.company_id", "visitors.id"],
             ondelete="CASCADE",
         ),
+        UniqueConstraint("tenant_id", "company_id", "id", name="uq_consent_records_scope_id"),
         Index("ix_consent_records_visitor_scope_recorded", "visitor_id", "scope", "recorded_at"),
     )
 
@@ -726,6 +733,113 @@ class ConsentRecord(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+
+
+class VisitorProfileSignal(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    __tablename__ = "visitor_profile_signals"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "visitor_id"],
+            ["visitors.tenant_id", "visitors.company_id", "visitors.id"],
+            ondelete="CASCADE",
+            name="fk_visitor_profile_signals_visitor",
+        ),
+        UniqueConstraint(
+            "tenant_id", "company_id", "id", name="uq_visitor_profile_signals_scope_id"
+        ),
+        UniqueConstraint(
+            "visitor_id", "kind", "label_hmac", name="uq_visitor_profile_signals_identity"
+        ),
+        CheckConstraint("strength >= 0 AND strength <= 1", name="strength_range"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_range"),
+        CheckConstraint("evidence_count >= 0", name="evidence_count_non_negative"),
+        CheckConstraint("char_length(label_hmac) = 64", name="label_hmac_sha256"),
+        Index("ix_visitor_profile_signals_visitor_last_seen", "visitor_id", "last_seen_at"),
+        Index("ix_visitor_profile_signals_retention", "retention_expires_at"),
+    )
+
+    visitor_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    kind: Mapped[VisitorProfileSignalKind] = mapped_column(
+        db_enum(VisitorProfileSignalKind, "visitor_profile_signal_kind"), nullable=False
+    )
+    label_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    label_hmac: Mapped[str] = mapped_column(String(64), nullable=False)
+    strength: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    encryption_key_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
+class VisitorProfileSignalSource(UUIDPrimaryKeyMixin, CompanyScopeMixin, Base):
+    __tablename__ = "visitor_profile_signal_sources"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "signal_id"],
+            [
+                "visitor_profile_signals.tenant_id",
+                "visitor_profile_signals.company_id",
+                "visitor_profile_signals.id",
+            ],
+            ondelete="CASCADE",
+            name="fk_profile_signal_sources_signal",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "consent_id"],
+            ["consent_records.tenant_id", "consent_records.company_id", "consent_records.id"],
+            ondelete="RESTRICT",
+            name="fk_profile_signal_sources_consent",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "visit_id"],
+            ["visits.tenant_id", "visits.company_id", "visits.id"],
+            ondelete="RESTRICT",
+            name="fk_profile_signal_sources_visit",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "conversation_id"],
+            ["conversations.tenant_id", "conversations.company_id", "conversations.id"],
+            ondelete="RESTRICT",
+            name="fk_profile_signal_sources_conversation",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "summary_id"],
+            ["visit_summaries.tenant_id", "visit_summaries.company_id", "visit_summaries.id"],
+            ondelete="RESTRICT",
+            name="fk_profile_signal_sources_summary",
+        ),
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "message_id"],
+            ["messages.tenant_id", "messages.company_id", "messages.id"],
+            ondelete="RESTRICT",
+            name="fk_profile_signal_sources_message",
+        ),
+        UniqueConstraint(
+            "signal_id", "summary_id", "message_id", name="uq_profile_signal_source_evidence"
+        ),
+        CheckConstraint("contribution >= 0 AND contribution <= 1", name="contribution_range"),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="source_confidence_range"),
+        Index("ix_profile_signal_sources_signal_observed", "signal_id", "observed_at"),
+    )
+
+    signal_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    consent_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    visit_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    conversation_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    summary_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    message_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    contribution: Mapped[float] = mapped_column(Float, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    retention_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Visit(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
@@ -1394,6 +1508,9 @@ class VisitSummary(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base)
             ondelete="RESTRICT",
         ),
         UniqueConstraint(
+            "tenant_id", "company_id", "id", name="uq_visit_summaries_scope_id"
+        ),
+        UniqueConstraint(
             "conversation_id",
             "last_message_id",
             "prompt_version_id",
@@ -1424,6 +1541,10 @@ class VisitSummary(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base)
         Boolean, nullable=False, default=True, server_default=text("true")
     )
     stale_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_by: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True), nullable=True
+    )
 
 
 class Lead(

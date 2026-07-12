@@ -90,6 +90,9 @@ function SummaryBlock({ summary }: { summary?: ConversationSummary }) {
       <span className="detail-meta">
         基于 {summary.sourceMessageIds.length} 条消息，更新于 {formatTimestamp(summary.updatedAt)}
       </span>
+      <Badge appearance="outline" color={summary.approvedAt ? "success" : "warning"}>
+        {summary.approvedAt ? "已审核并可用于授权画像" : "待人工审核，不进入画像"}
+      </Badge>
     </div>
   );
 }
@@ -166,6 +169,7 @@ function ConversationDrawer({ id, onClose }: { id: string; onClose: () => void }
   });
   const resource = useResource(() => workflowApi.getConversation(id), id);
   const [generating, setGenerating] = useState(false);
+  const [approving, setApproving] = useState(false);
   const [error, setError] = useState<ApiError>();
   const [notice, setNotice] = useState<string>();
 
@@ -182,6 +186,23 @@ function ConversationDrawer({ id, onClose }: { id: string; onClose: () => void }
       setError(asApiError(caught));
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const approve = async () => {
+    const summary = resource.data?.currentSummary;
+    if (!summary || summary.approvedAt || approving) return;
+    setApproving(true);
+    setError(undefined);
+    setNotice(undefined);
+    try {
+      await workflowApi.approveSummary(summary.id);
+      setNotice("纪要已人工审核；仅在访客仍有效授权时更新长期画像。");
+      resource.reload();
+    } catch (caught) {
+      setError(asApiError(caught));
+    } finally {
+      setApproving(false);
     }
   };
 
@@ -212,6 +233,15 @@ function ConversationDrawer({ id, onClose }: { id: string; onClose: () => void }
               onClick={() => void generate()}
             >
               {generating ? "正在生成" : "生成纪要"}
+            </Button>
+          )}
+          {canSummarize && resource.data?.currentSummary && !resource.data.currentSummary.approvedAt && (
+            <Button
+              appearance="secondary"
+              disabled={approving || generating}
+              onClick={() => void approve()}
+            >
+              {approving ? "正在审核" : "审核通过并用于画像"}
             </Button>
           )}
         </div>

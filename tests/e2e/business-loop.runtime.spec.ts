@@ -17,9 +17,9 @@ test("tuotu real runtime serves readable content and a grounded AI answer", asyn
   await expect(page.locator("body")).not.toContainText("ä¼");
 
   await page
-    .getByRole("button", { name: "打开拓浙 AI 集团 AI 助手", exact: true })
+    .getByRole("button", { name: "打开拓浙 AI 集团资料助手", exact: true })
     .click();
-  const dialog = page.getByRole("dialog", { name: "拓浙 AI 集团 AI 助手" });
+  const dialog = page.getByRole("dialog", { name: "拓浙 AI 集团资料助手" });
   await dialog.getByLabel("向资料助手提问").fill("拓浙 AI 集团主要做什么？");
   await dialog.getByRole("button", { name: "发送问题", exact: true }).click();
 

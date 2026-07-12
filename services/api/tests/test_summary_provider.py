@@ -41,6 +41,7 @@ async def test_summary_provider_redacts_input_output_and_records_metadata() -> N
                                     "summary": "客户电话 13800138000，想了解方案",
                                     "interests": ["AI 接待"],
                                     "strength": "high",
+                                    "primary_intent": "product_evaluation",
                                     "next_step": "发邮件到 visitor@example.com",
                                     "risk_notes": None,
                                 },
@@ -73,6 +74,7 @@ async def test_summary_provider_redacts_input_output_and_records_metadata() -> N
     assert calls[0].headers["x-request-id"] == "trace-summary-1"
     assert "13800138000" not in result.draft.summary
     assert "visitor@example.com" not in (result.draft.next_step or "")
+    assert result.draft.primary_intent == "product_evaluation"
     assert result.request_id == "provider-request-1"
     assert result.model == "deepseek-test"
     assert result.input_tokens == 120
@@ -102,6 +104,7 @@ async def test_summary_provider_retries_retryable_status_without_leaking_body() 
                                     "summary": "访客关注产品能力",
                                     "interests": ["产品能力"],
                                     "strength": "medium",
+                                    "primary_intent": "information_research",
                                     "next_step": "安排人工沟通",
                                     "risk_notes": None,
                                 },

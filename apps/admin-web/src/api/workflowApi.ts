@@ -214,6 +214,8 @@ function normalizeSummaryValue(value: unknown): ConversationSummary {
     sourceMessageIds: stringArray(raw.source_message_ids),
     isCurrent: raw.is_current === true,
     staleAt: optionalString(raw.stale_at),
+    approvedAt: optionalString(raw.approved_at),
+    approvedBy: optionalString(raw.approved_by),
     createdAt: requiredString(raw.created_at, "纪要创建时间"),
     updatedAt: requiredString(raw.updated_at, "纪要更新时间"),
   };
@@ -402,6 +404,12 @@ export function createWorkflowApi(client: ApiClient) {
     async getSummary(id: string): Promise<ConversationSummary> {
       return normalizeSummary(
         await client.get(`/admin/summaries/${encodeURIComponent(id)}`),
+      );
+    },
+
+    async approveSummary(id: string): Promise<ConversationSummary> {
+      return normalizeSummary(
+        await client.post(`/admin/summaries/${encodeURIComponent(id)}:approve`),
       );
     },
 

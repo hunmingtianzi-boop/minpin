@@ -32,6 +32,12 @@ def test_heartbeat_must_fit_inside_lease() -> None:
         WorkerSettings(outbox_lease_seconds=60, outbox_heartbeat_seconds=30)
 
 
+def test_profile_retention_purge_interval_is_bounded() -> None:
+    assert WorkerSettings(_env_file=None).profile_retention_purge_seconds == 3_600
+    with pytest.raises(ValidationError):
+        WorkerSettings(profile_retention_purge_seconds=59)
+
+
 def test_production_rejects_local_worker_identity() -> None:
     with pytest.raises(ValidationError):
         WorkerSettings(app_env="production")

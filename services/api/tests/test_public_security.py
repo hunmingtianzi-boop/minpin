@@ -14,7 +14,7 @@ from app.api.routes.public_conversations import create_visit as create_visit_rou
 from app.api.routes.public_conversations import stream_message
 from app.api.schemas import ConsentRequest, CreateMessageRequest, CreateVisitRequest
 from app.core.config import Settings
-from app.core.tokens import VisitorPrincipal
+from app.core.tokens import VisitorPrincipal, issue_profile_link_token
 from app.db.models import (
     Card,
     ConsentRecord,
@@ -109,6 +109,7 @@ def _card(*, chat_notice: str = "chat-v2", privacy: str = "privacy-v2") -> Card:
                 "privacy": privacy,
                 "chat_notice": chat_notice,
                 "lead_consent": "lead-v2",
+                "profile_personalization": "profile-v2",
             }
         },
     )
@@ -238,6 +239,90 @@ async def test_visit_and_consent_reject_client_supplied_non_current_policy(
             idempotency_key="consent-1",
         )
     assert consent_error.value.code == "POLICY_VERSION_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_profile_link_requires_exact_latest_active_consent_and_company() -> None:
+    card = _card()
+    scope = CardScope(
+        card_id=card.id,
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        slug=card.slug,
+    )
+    visitor_id = uuid.uuid4()
+    consent = ConsentRecord(
+        id=uuid.uuid4(),
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        visitor_id=visitor_id,
+        scope=ConsentScope.PROFILE_PERSONALIZATION,
+        policy_version="profile-v2",
+        granted=True,
+        recorded_at=datetime.now(UTC),
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+        evidence={},
+    )
+    token, _ = issue_profile_link_token(
+        signing_key=_settings().jwt_signing_key.get_secret_value(),
+        issuer=_settings().app_name,
+        ttl_seconds=86_400,
+        visitor_id=visitor_id,
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        consent_id=consent.id,
+    )
+    store = PublicStore(None, _settings())  # type: ignore[arg-type]
+    session = AsyncMock()
+    session.scalar.side_effect = [consent, visitor_id]
+    assert (
+        await store._valid_profile_link_consent(  # noqa: SLF001
+            session, token=token, scope=scope, expected_policy="profile-v2"
+        )
+        is consent
+    )
+
+    session.scalar.side_effect = [consent]
+    assert (
+        await store._valid_profile_link_consent(  # noqa: SLF001
+            session, token=token, scope=scope, expected_policy="profile-v3"
+        )
+        is None
+    )
+
+    revoked = ConsentRecord(
+        id=uuid.uuid4(),
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        visitor_id=visitor_id,
+        scope=ConsentScope.PROFILE_PERSONALIZATION,
+        policy_version="profile-v2",
+        granted=False,
+        recorded_at=datetime.now(UTC) + timedelta(seconds=1),
+        evidence={},
+    )
+    session.scalar.side_effect = [revoked]
+    assert (
+        await store._valid_profile_link_consent(  # noqa: SLF001
+            session, token=token, scope=scope, expected_policy="profile-v2"
+        )
+        is None
+    )
+
+    cross_scope = CardScope(
+        card_id=uuid.uuid4(),
+        tenant_id=card.tenant_id,
+        company_id=uuid.uuid4(),
+        slug="other-company",
+    )
+    session.scalar.reset_mock()
+    assert (
+        await store._valid_profile_link_consent(  # noqa: SLF001
+            session, token=token, scope=cross_scope, expected_policy="profile-v2"
+        )
+        is None
+    )
+    session.scalar.assert_not_awaited()
 
 
 @pytest.mark.asyncio

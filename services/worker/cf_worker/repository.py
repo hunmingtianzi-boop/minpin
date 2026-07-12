@@ -52,6 +52,14 @@ class PostgresOutboxRepository:
     async def close(self) -> None:
         await self._engine.dispose()
 
+    async def purge_expired_visitor_profiles(self) -> int:
+        """Physically remove expired derived profile evidence without loading PII."""
+        async with self._engine.begin() as connection:
+            deleted = await connection.scalar(
+                text("SELECT app.purge_expired_visitor_profiles()")
+            )
+            return max(int(deleted or 0), 0)
+
     async def claim(self) -> tuple[ClaimedEvent, ...]:
         async with self._engine.begin() as connection:
             rows = (

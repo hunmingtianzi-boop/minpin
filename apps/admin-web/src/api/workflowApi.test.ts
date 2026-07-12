@@ -57,6 +57,8 @@ const summary = {
   source_message_ids: ["message-1", "message-2"],
   is_current: true,
   stale_at: null,
+  approved_at: null,
+  approved_by: null,
   created_at: "2026-07-11T01:06:00Z",
   updated_at: "2026-07-11T01:06:00Z",
 };
@@ -221,7 +223,16 @@ describe("workflowApi production contracts", () => {
           },
         }),
       )
-      .mockResolvedValueOnce(jsonResponse({ data: summary }));
+      .mockResolvedValueOnce(jsonResponse({ data: summary }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            ...summary,
+            approved_at: "2026-07-11T01:07:00Z",
+            approved_by: "user-admin",
+          },
+        }),
+      );
     const api = await authenticatedApi(fetcher);
 
     await expect(api.getConversation("conversation-1")).resolves.toMatchObject({
@@ -238,6 +249,14 @@ describe("workflowApi production contracts", () => {
     );
     expect(summarize[1]?.method).toBe("POST");
     expect(summarize[1]?.body).toBeUndefined();
+    await expect(api.approveSummary("summary-1")).resolves.toMatchObject({
+      id: "summary-1",
+      approvedAt: "2026-07-11T01:07:00Z",
+      approvedBy: "user-admin",
+    });
+    expect(fetcher.mock.calls[3][0]).toBe(
+      "https://api.example.test/api/v1/admin/summaries/summary-1:approve",
+    );
   });
 
   it("protects lead status with If-Match and records followups", async () => {

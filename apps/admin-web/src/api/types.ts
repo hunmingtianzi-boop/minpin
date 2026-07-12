@@ -92,6 +92,7 @@ export type CompanyProfile = {
   region: string;
   website: string;
   logoUrl: string;
+  profilePersonalizationPolicyVersion: string;
   version?: number;
   updatedAt?: string;
 };
@@ -404,6 +405,8 @@ export type ConversationSummary = {
   sourceMessageIds: string[];
   isCurrent: boolean;
   staleAt?: string;
+  approvedAt?: string;
+  approvedBy?: string;
   createdAt: string;
   updatedAt: string;
 };
