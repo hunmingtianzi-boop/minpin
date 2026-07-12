@@ -13,6 +13,7 @@ from app.api.errors import ApiError, api_error_handler
 from app.api.knowledge_import_schemas import KnowledgeImportBatchRecord
 from app.api.routes import knowledge_ops
 from app.core.tokens import StaffPrincipal
+from app.services.knowledge_import_store import KnowledgeImportScope, KnowledgeImportStore
 
 
 class _Store:
@@ -101,3 +102,25 @@ def test_upload_rejects_unsupported_file_and_missing_permission(client) -> None:
         files={"files": ("bulk.csv", b"raw_text\ncontent\n", "text/csv")},
     )
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_import_store_sets_actor_in_rls_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    async def capture_scope(_session: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("app.services.knowledge_import_store.set_rls_context", capture_scope)
+    scope = KnowledgeImportScope(
+        tenant_id=uuid.uuid4(),
+        company_id=uuid.uuid4(),
+        actor_user_id=uuid.uuid4(),
+    )
+    await KnowledgeImportStore._set_scope(object(), scope)  # type: ignore[arg-type]
+
+    assert captured == {
+        "tenant_id": scope.tenant_id,
+        "company_id": scope.company_id,
+        "actor_user_id": scope.actor_user_id,
+    }

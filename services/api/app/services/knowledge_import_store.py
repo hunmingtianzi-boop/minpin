@@ -188,7 +188,7 @@ class KnowledgeImportStore:
             session,
             tenant_id=scope.tenant_id,
             company_id=scope.company_id,
-            user_id=scope.actor_user_id,
+            actor_user_id=scope.actor_user_id,
         )
 
 
