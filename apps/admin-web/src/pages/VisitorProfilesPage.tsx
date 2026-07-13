@@ -103,8 +103,9 @@ function SignalCard({ signal }: { signal: VisitorProfileSignal }) {
 }
 
 function ProfileDetail({ visitorId, onClose }: { visitorId: string; onClose: () => void }) {
-  const resource = useResource(() => visitorProfilesApi.get(visitorId), visitorId);
-  const detail: VisitorProfileDetail | undefined = resource.data;
+  const resource = useResource(() => visitorProfilesApi.getOverview(visitorId), visitorId);
+  const overview = resource.data;
+  const detail: VisitorProfileDetail | undefined = overview?.profile;
 
   return (
     <aside className="content-panel visitor-profile-detail" aria-label="访客画像详情">
@@ -118,7 +119,7 @@ function ProfileDetail({ visitorId, onClose }: { visitorId: string; onClose: () 
           关闭
         </Button>
       </div>
-      {resource.status === "ready" && detail ? (
+      {resource.status === "ready" && overview && detail ? (
         <>
           <div className="visitor-profile-detail-summary">
             <div><span>首次识别</span><strong>{formatTimestamp(detail.firstSeenAt)}</strong></div>
@@ -137,6 +138,58 @@ function ProfileDetail({ visitorId, onClose }: { visitorId: string; onClose: () 
               {detail.signals.map((signal) => <SignalCard key={signal.id} signal={signal} />)}
             </div>
           )}
+          <section className="visitor-profile-overview-section">
+            <h3>已授权留资</h3>
+            <p className="visitor-profile-overview-note">仅显示已脱敏的联系方式；原始联系方式仍在受权限控制的线索页面内。</p>
+            {overview.leads.length === 0 ? (
+              <p className="muted-value">该访客尚未主动留资。</p>
+            ) : (
+              <div className="visitor-profile-overview-list">
+                {overview.leads.map((lead) => (
+                  <article key={lead.id}>
+                    <strong>{lead.maskedName} · {lead.maskedContact}</strong>
+                    <span>{lead.cardDisplayName} · {lead.status} / {lead.priority}</span>
+                    <time>{formatTimestamp(lead.createdAt)}</time>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="visitor-profile-overview-section">
+            <div className="visitor-profile-overview-heading">
+              <h3>关联 AI 对话</h3>
+              <a href={`/conversations?visitorId=${encodeURIComponent(visitorId)}`}>查看完整消息与引用</a>
+            </div>
+            {overview.conversations.length === 0 ? (
+              <p className="muted-value">暂无可见对话。</p>
+            ) : (
+              <div className="visitor-profile-overview-list">
+                {overview.conversations.map((conversation) => (
+                  <article key={conversation.id}>
+                    <strong>{conversation.cardDisplayName} · {conversation.primaryIntent || "未识别意图"}</strong>
+                    <span>{conversation.messageCount} 条消息 · {conversation.status} · 风险 {conversation.riskLevel}</span>
+                    <time>{formatTimestamp(conversation.lastActivityAt)}</time>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+          <section className="visitor-profile-overview-section">
+            <h3>该访客触发的知识缺口</h3>
+            {overview.knowledgeGaps.length === 0 ? (
+              <p className="muted-value">当前没有待处理或历史知识缺口。</p>
+            ) : (
+              <div className="visitor-profile-overview-list">
+                {overview.knowledgeGaps.map((gap) => (
+                  <article key={gap.id}>
+                    <strong>{gap.question}</strong>
+                    <span>{gap.reason} · {gap.status} · 已出现 {gap.occurrenceCount} 次</span>
+                    <time>{formatTimestamp(gap.lastSeenAt)}</time>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
         </>
       ) : (
         <ResourceState
@@ -192,7 +245,7 @@ export function VisitorProfilesPage() {
         }
       />
       <section className="visitor-profile-privacy-note" aria-label="画像隐私说明">
-        页面不展示联系方式、消息正文或摘要正文。证据仅提供受租户隔离的记录 ID，便于审计来源。
+        页面不展示原始联系方式、消息正文或摘要正文；360° 视图仅展示已脱敏留资和受租户隔离的关联记录。
       </section>
       <section className="content-panel data-panel">
         {resource.status === "ready" && resource.data ? (

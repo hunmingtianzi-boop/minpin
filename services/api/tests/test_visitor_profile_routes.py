@@ -14,6 +14,7 @@ from app.api.routes import visitor_profiles as profile_routes
 from app.api.workflow_schemas import (
     VisitorProfileDetail,
     VisitorProfileListItem,
+    VisitorProfileOverview,
     VisitorProfileSignalPreview,
 )
 from app.core.tokens import StaffPrincipal
@@ -52,6 +53,10 @@ class _ProfileStore:
             signals=[],
         )
 
+    async def overview(self, **kwargs: Any) -> VisitorProfileOverview:
+        self.calls.append(("overview", kwargs))
+        return VisitorProfileOverview(profile=await self.get(**kwargs))
+
 
 @pytest.fixture
 def profile_client(
@@ -84,6 +89,12 @@ def test_profile_routes_forward_server_derived_scope(
     )
     assert detail.status_code == 200
     assert detail.json()["data"]["visitor_id"] == str(store.visitor_id)
+
+    overview = client.get(f"/api/v1/admin/visitor-profiles/{store.visitor_id}/overview")
+    assert overview.status_code == 200
+    assert overview.json()["data"]["profile"]["visitor_id"] == str(store.visitor_id)
+    assert store.calls[-2][0] == "overview"
+    assert "trace_id" in store.calls[-2][1]
 
 
 def test_profile_routes_allow_conversation_read_but_deny_unrelated_staff(

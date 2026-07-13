@@ -8567,6 +8567,23 @@
             }
           },
           {
+            "name": "visitor_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Visitor Id"
+            }
+          },
+          {
             "name": "authorization",
             "in": "header",
             "required": false,
@@ -9618,6 +9635,65 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/VisitorProfileEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/visitor-profiles/{visitor_id}/overview": {
+      "get": {
+        "tags": [
+          "Visitor Profiles"
+        ],
+        "summary": "Get Visitor Profile Overview",
+        "operationId": "getAdminVisitorProfileOverview",
+        "parameters": [
+          {
+            "name": "visitor_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Visitor Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VisitorProfileOverviewEnvelope"
                 }
               }
             }
@@ -17962,6 +18038,243 @@
           "top_interests"
         ],
         "title": "VisitorProfileListItem"
+      },
+      "VisitorProfileOverview": {
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/VisitorProfileDetail"
+          },
+          "leads": {
+            "items": {
+              "$ref": "#/components/schemas/VisitorProfileOverviewLead"
+            },
+            "type": "array",
+            "title": "Leads"
+          },
+          "conversations": {
+            "items": {
+              "$ref": "#/components/schemas/VisitorProfileOverviewConversation"
+            },
+            "type": "array",
+            "title": "Conversations"
+          },
+          "knowledge_gaps": {
+            "items": {
+              "$ref": "#/components/schemas/VisitorProfileOverviewGap"
+            },
+            "type": "array",
+            "title": "Knowledge Gaps"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "title": "VisitorProfileOverview",
+        "description": "Consent-gated profile context; raw IP and unmasked contact are excluded."
+      },
+      "VisitorProfileOverviewConversation": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "card_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Card Id"
+          },
+          "card_display_name": {
+            "type": "string",
+            "title": "Card Display Name"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "primary_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Intent"
+          },
+          "risk_level": {
+            "type": "string",
+            "title": "Risk Level"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "last_activity_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Activity At"
+          },
+          "message_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Message Count"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "card_id",
+          "card_display_name",
+          "status",
+          "risk_level",
+          "started_at",
+          "last_activity_at",
+          "message_count"
+        ],
+        "title": "VisitorProfileOverviewConversation"
+      },
+      "VisitorProfileOverviewEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/VisitorProfileOverview"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "VisitorProfileOverviewEnvelope"
+      },
+      "VisitorProfileOverviewGap": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Conversation Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "occurrence_count": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Occurrence Count"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "conversation_id",
+          "question",
+          "reason",
+          "status",
+          "occurrence_count",
+          "last_seen_at"
+        ],
+        "title": "VisitorProfileOverviewGap"
+      },
+      "VisitorProfileOverviewLead": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "card_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Card Id"
+          },
+          "card_display_name": {
+            "type": "string",
+            "title": "Card Display Name"
+          },
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conversation Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "priority": {
+            "type": "string",
+            "title": "Priority"
+          },
+          "masked_name": {
+            "type": "string",
+            "title": "Masked Name"
+          },
+          "masked_contact": {
+            "type": "string",
+            "title": "Masked Contact"
+          },
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "id",
+          "card_id",
+          "card_display_name",
+          "status",
+          "priority",
+          "masked_name",
+          "masked_contact",
+          "created_at"
+        ],
+        "title": "VisitorProfileOverviewLead",
+        "description": "A consented lead, limited to masked contact data in the 360 view."
       },
       "VisitorProfileSignalPreview": {
         "properties": {

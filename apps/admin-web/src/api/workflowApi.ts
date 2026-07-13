@@ -443,6 +443,7 @@ export function createWorkflowApi(client: ApiClient) {
       offset?: number;
       status?: ConversationStatus;
       cardId?: string;
+      visitorId?: string;
     } = {}): Promise<PageResult<Conversation>> {
       return normalizePage(
         await client.get(
@@ -451,6 +452,7 @@ export function createWorkflowApi(client: ApiClient) {
             offset: options.offset ?? 0,
             status: options.status,
             card_id: options.cardId,
+            visitor_id: options.visitorId,
           })}`,
         ),
         "对话列表",

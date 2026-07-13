@@ -192,6 +192,7 @@ async def list_conversations(
         Query(alias="status", pattern=r"^(active|closed|expired|blocked)$"),
     ] = None,
     card_id: uuid.UUID | None = None,
+    visitor_id: uuid.UUID | None = None,
 ) -> ConversationListEnvelope:
     _require_access(principal, "conversations.read", allow_card_owner=True)
     records, total = await _store(request).list_conversations(
@@ -200,6 +201,7 @@ async def list_conversations(
         offset=offset,
         status=conversation_status,
         card_id=card_id,
+        visitor_id=visitor_id,
     )
     return ConversationListEnvelope(data=records, total=total, limit=limit, offset=offset)
 

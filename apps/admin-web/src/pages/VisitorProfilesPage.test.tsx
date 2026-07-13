@@ -53,6 +53,25 @@ const detail = {
   }],
 };
 
+const overview = {
+  profile: detail,
+  leads: [{
+    id: "lead-1", cardId: "card-1", cardDisplayName: "拓浙 AI 集团", conversationId: "conversation-1",
+    status: "new", priority: "high", maskedName: "张*", maskedContact: "138****0000",
+    createdAt: "2026-07-12T02:00:00Z",
+  }],
+  conversations: [{
+    id: "conversation-1", cardId: "card-1", cardDisplayName: "拓浙 AI 集团", status: "active",
+    primaryIntent: "cooperation", riskLevel: "low", startedAt: "2026-07-12T01:00:00Z",
+    lastActivityAt: "2026-07-12T02:00:00Z", messageCount: 4,
+  }],
+  knowledgeGaps: [{
+    id: "gap-1", conversationId: "conversation-1", question: "有没有最新合作报价？",
+    reason: "insufficient_evidence", status: "pending", occurrenceCount: 2,
+    lastSeenAt: "2026-07-12T02:00:00Z",
+  }],
+};
+
 function renderPage(user: AdminUser = admin) {
   return render(
     <FluentProvider theme={adminLightTheme}>
@@ -75,18 +94,18 @@ describe("VisitorProfilesPage", () => {
     vi.spyOn(visitorProfilesApi, "list").mockResolvedValue({
       items: [listItem], total: 1, limit: 20, offset: 0,
     });
-    vi.spyOn(visitorProfilesApi, "get").mockResolvedValue(detail);
+    vi.spyOn(visitorProfilesApi, "getOverview").mockResolvedValue(overview);
   });
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("shows authorized profiles and auditable detail identifiers without raw content", async () => {
+  it("shows authorized profiles, masked 360 context and auditable detail identifiers", async () => {
     const user = userEvent.setup();
     renderPage();
 
     expect(screen.getByRole("status", { name: "正在加载" })).toBeInTheDocument();
     expect(await screen.findByText("智能名片 · 90%")).toBeInTheDocument();
-    expect(screen.getByText(/不展示联系方式、消息正文或摘要正文/)).toBeInTheDocument();
+    expect(screen.getByText(/不展示原始联系方式、消息正文或摘要正文/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /查看访客 visitor-1 画像详情/ }));
 
     expect(await screen.findByText("咨询合作")).toBeInTheDocument();
@@ -96,6 +115,11 @@ describe("VisitorProfilesPage", () => {
     expect(screen.getByText("conversation-1")).toBeInTheDocument();
     expect(screen.getByText("summary-1")).toBeInTheDocument();
     expect(screen.getByText("message-1")).toBeInTheDocument();
+    expect(screen.getByText("张* · 138****0000")).toBeInTheDocument();
+    expect(screen.getByText("有没有最新合作报价？")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "查看完整消息与引用" })).toHaveAttribute(
+      "href", "/conversations?visitorId=visitor-1",
+    );
     expect(document.body).not.toHaveTextContent("message_content");
   });
 

@@ -677,6 +677,7 @@ class WorkflowStore:
         offset: int,
         status: str | None,
         card_id: uuid.UUID | None,
+        visitor_id: uuid.UUID | None = None,
     ) -> tuple[list[ConversationItem], int]:
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
@@ -689,6 +690,8 @@ class WorkflowStore:
                 filters.append(Conversation.status == status)
             if card_id is not None:
                 filters.append(Conversation.card_id == card_id)
+            if visitor_id is not None:
+                filters.append(Conversation.visitor_id == visitor_id)
             total = int(
                 await session.scalar(
                     select(func.count(Conversation.id))

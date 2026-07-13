@@ -162,6 +162,56 @@ class VisitorProfileEnvelope(WorkflowModel):
     data: VisitorProfileDetail
 
 
+class VisitorProfileOverviewLead(WorkflowModel):
+    """A consented lead, limited to masked contact data in the 360 view."""
+
+    id: uuid.UUID
+    card_id: uuid.UUID
+    card_display_name: str
+    conversation_id: uuid.UUID | None = None
+    status: str
+    priority: str
+    masked_name: str
+    masked_contact: str
+    company_name: str | None = None
+    created_at: datetime
+
+
+class VisitorProfileOverviewConversation(WorkflowModel):
+    id: uuid.UUID
+    card_id: uuid.UUID
+    card_display_name: str
+    status: str
+    primary_intent: str | None = None
+    risk_level: str
+    started_at: datetime
+    last_activity_at: datetime
+    message_count: int = Field(ge=0)
+
+
+class VisitorProfileOverviewGap(WorkflowModel):
+    id: uuid.UUID
+    conversation_id: uuid.UUID
+    question: str
+    reason: str
+    status: str
+    occurrence_count: int = Field(ge=1)
+    last_seen_at: datetime
+
+
+class VisitorProfileOverview(WorkflowModel):
+    """Consent-gated profile context; raw IP and unmasked contact are excluded."""
+
+    profile: VisitorProfileDetail
+    leads: list[VisitorProfileOverviewLead] = Field(default_factory=list)
+    conversations: list[VisitorProfileOverviewConversation] = Field(default_factory=list)
+    knowledge_gaps: list[VisitorProfileOverviewGap] = Field(default_factory=list)
+
+
+class VisitorProfileOverviewEnvelope(WorkflowModel):
+    data: VisitorProfileOverview
+
+
 class ConversationItem(WorkflowModel):
     id: uuid.UUID
     card_id: uuid.UUID

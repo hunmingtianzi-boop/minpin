@@ -57,6 +57,48 @@ export type VisitorProfileDetail = {
   signals: VisitorProfileSignal[];
 };
 
+export type VisitorProfileOverviewLead = {
+  id: string;
+  cardId: string;
+  cardDisplayName: string;
+  conversationId?: string;
+  status: string;
+  priority: string;
+  maskedName: string;
+  maskedContact: string;
+  companyName?: string;
+  createdAt: string;
+};
+
+export type VisitorProfileOverviewConversation = {
+  id: string;
+  cardId: string;
+  cardDisplayName: string;
+  status: string;
+  primaryIntent?: string;
+  riskLevel: string;
+  startedAt: string;
+  lastActivityAt: string;
+  messageCount: number;
+};
+
+export type VisitorProfileOverviewGap = {
+  id: string;
+  conversationId: string;
+  question: string;
+  reason: string;
+  status: string;
+  occurrenceCount: number;
+  lastSeenAt: string;
+};
+
+export type VisitorProfileOverview = {
+  profile: VisitorProfileDetail;
+  leads: VisitorProfileOverviewLead[];
+  conversations: VisitorProfileOverviewConversation[];
+  knowledgeGaps: VisitorProfileOverviewGap[];
+};
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -180,6 +222,60 @@ function normalizeDetail(value: unknown): VisitorProfileDetail {
   };
 }
 
+function normalizeOverviewLead(value: unknown): VisitorProfileOverviewLead {
+  if (!isRecord(value)) throw new ApiError("访客线索数据无法识别。", { code: "INVALID_API_RESPONSE" });
+  return {
+    id: requiredString(value.id, "leads.id"),
+    cardId: requiredString(value.card_id, "leads.card_id"),
+    cardDisplayName: requiredString(value.card_display_name, "leads.card_display_name"),
+    conversationId: optionalString(value.conversation_id),
+    status: requiredString(value.status, "leads.status"),
+    priority: requiredString(value.priority, "leads.priority"),
+    maskedName: optionalString(value.masked_name) || "未提供",
+    maskedContact: optionalString(value.masked_contact) || "未提供",
+    companyName: optionalString(value.company_name),
+    createdAt: requiredString(value.created_at, "leads.created_at"),
+  };
+}
+
+function normalizeOverviewConversation(value: unknown): VisitorProfileOverviewConversation {
+  if (!isRecord(value)) throw new ApiError("访客对话数据无法识别。", { code: "INVALID_API_RESPONSE" });
+  return {
+    id: requiredString(value.id, "conversations.id"),
+    cardId: requiredString(value.card_id, "conversations.card_id"),
+    cardDisplayName: requiredString(value.card_display_name, "conversations.card_display_name"),
+    status: requiredString(value.status, "conversations.status"),
+    primaryIntent: optionalString(value.primary_intent),
+    riskLevel: requiredString(value.risk_level, "conversations.risk_level"),
+    startedAt: requiredString(value.started_at, "conversations.started_at"),
+    lastActivityAt: requiredString(value.last_activity_at, "conversations.last_activity_at"),
+    messageCount: nonNegativeInteger(value.message_count, "conversations.message_count"),
+  };
+}
+
+function normalizeOverviewGap(value: unknown): VisitorProfileOverviewGap {
+  if (!isRecord(value)) throw new ApiError("访客知识缺口数据无法识别。", { code: "INVALID_API_RESPONSE" });
+  return {
+    id: requiredString(value.id, "knowledge_gaps.id"),
+    conversationId: requiredString(value.conversation_id, "knowledge_gaps.conversation_id"),
+    question: requiredString(value.question, "knowledge_gaps.question"),
+    reason: requiredString(value.reason, "knowledge_gaps.reason"),
+    status: requiredString(value.status, "knowledge_gaps.status"),
+    occurrenceCount: nonNegativeInteger(value.occurrence_count, "knowledge_gaps.occurrence_count"),
+    lastSeenAt: requiredString(value.last_seen_at, "knowledge_gaps.last_seen_at"),
+  };
+}
+
+function normalizeOverview(value: unknown): VisitorProfileOverview {
+  if (!isRecord(value)) throw new ApiError("访客 360° 数据无法识别。", { code: "INVALID_API_RESPONSE" });
+  return {
+    profile: normalizeDetail(value.profile),
+    leads: arrayField(value.leads, "leads").map(normalizeOverviewLead),
+    conversations: arrayField(value.conversations, "conversations").map(normalizeOverviewConversation),
+    knowledgeGaps: arrayField(value.knowledge_gaps, "knowledge_gaps").map(normalizeOverviewGap),
+  };
+}
+
 export function createVisitorProfilesApi(client: ApiClient = apiClient) {
   return {
     async list(options: { limit?: number; offset?: number } = {}): Promise<VisitorProfileList> {
@@ -204,6 +300,13 @@ export function createVisitorProfilesApi(client: ApiClient = apiClient) {
         await client.get(`/admin/visitor-profiles/${encodeURIComponent(visitorId)}`),
       );
       return normalizeDetail(payload);
+    },
+
+    async getOverview(visitorId: string): Promise<VisitorProfileOverview> {
+      const payload = unwrapData(
+        await client.get(`/admin/visitor-profiles/${encodeURIComponent(visitorId)}/overview`),
+      );
+      return normalizeOverview(payload);
     },
   };
 }

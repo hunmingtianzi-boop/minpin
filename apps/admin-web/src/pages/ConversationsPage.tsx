@@ -263,10 +263,13 @@ function ConversationDrawer({ id, onClose }: { id: string; onClose: () => void }
 }
 
 export function ConversationsPage() {
+  const initialVisitorId = new URLSearchParams(window.location.search).get("visitorId")?.trim() || "";
   const [offset, setOffset] = useState(0);
   const [status, setStatus] = useState<ConversationStatus | "">("");
   const [cardDraft, setCardDraft] = useState("");
   const [cardId, setCardId] = useState("");
+  const [visitorDraft, setVisitorDraft] = useState(initialVisitorId);
+  const [visitorId, setVisitorId] = useState(initialVisitorId);
   const [selectedId, setSelectedId] = useState<string>();
   const resource = useResource(
     () =>
@@ -275,15 +278,18 @@ export function ConversationsPage() {
         offset,
         status: status || undefined,
         cardId: cardId || undefined,
+        visitorId: visitorId || undefined,
       }),
-    `${offset}:${status}:${cardId}`,
+    `${offset}:${status}:${cardId}:${visitorId}`,
   );
 
-  const applyCard = () => {
-    const next = cardDraft.trim();
-    if (next === cardId && offset === 0) resource.reload();
+  const applyFilters = () => {
+    const nextCard = cardDraft.trim();
+    const nextVisitor = visitorDraft.trim();
+    if (nextCard === cardId && nextVisitor === visitorId && offset === 0) resource.reload();
     setOffset(0);
-    setCardId(next);
+    setCardId(nextCard);
+    setVisitorId(nextVisitor);
   };
 
   return (
@@ -318,12 +324,19 @@ export function ConversationsPage() {
           placeholder="按名片 ID 筛选"
           value={cardDraft}
           onChange={(_, data) => setCardDraft(data.value)}
-          onKeyDown={(event) => event.key === "Enter" && applyCard()}
+          onKeyDown={(event) => event.key === "Enter" && applyFilters()}
         />
-        <Button icon={<Filter24Regular />} onClick={applyCard}>
+        <Input
+          aria-label="访客 ID"
+          placeholder="按访客 ID 筛选"
+          value={visitorDraft}
+          onChange={(_, data) => setVisitorDraft(data.value)}
+          onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+        />
+        <Button icon={<Filter24Regular />} onClick={applyFilters}>
           应用
         </Button>
-        {(status || cardId) && (
+        {(status || cardId || visitorId) && (
           <Button
             appearance="subtle"
             icon={<Dismiss24Regular />}
@@ -331,6 +344,8 @@ export function ConversationsPage() {
               setStatus("");
               setCardDraft("");
               setCardId("");
+              setVisitorDraft("");
+              setVisitorId("");
               setOffset(0);
             }}
           >

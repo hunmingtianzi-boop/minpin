@@ -193,6 +193,61 @@
   text-align: right;
 }
 
+.visitor-profile-overview-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.visitor-profile-overview-section h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.visitor-profile-overview-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.visitor-profile-overview-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.visitor-profile-overview-heading a {
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.visitor-profile-overview-heading a:hover {
+  text-decoration: underline;
+}
+
+.visitor-profile-overview-list {
+  display: grid;
+  gap: 8px;
+}
+
+.visitor-profile-overview-list article {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface-subtle);
+}
+
+.visitor-profile-overview-list span,
+.visitor-profile-overview-list time {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 @media (max-width: 760px) {
   .visitor-profile-detail-summary,
   .visitor-profile-dates {

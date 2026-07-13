@@ -11,7 +11,9 @@ from app.api.workflow_schemas import (
     PaginationMeta,
     VisitorProfileEnvelope,
     VisitorProfileListEnvelope,
+    VisitorProfileOverviewEnvelope,
 )
+from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
 from app.services.visitor_profile_store import VisitorProfileScope, VisitorProfileStore
 
@@ -76,4 +78,24 @@ async def get_visitor_profile(
     _authorize(principal)
     return VisitorProfileEnvelope(
         data=await _store(request).get(scope=_scope(principal), visitor_id=visitor_id)
+    )
+
+
+@router.get(
+    "/admin/visitor-profiles/{visitor_id}/overview",
+    response_model=VisitorProfileOverviewEnvelope,
+    operation_id="getAdminVisitorProfileOverview",
+)
+async def get_visitor_profile_overview(
+    visitor_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+) -> VisitorProfileOverviewEnvelope:
+    _authorize(principal)
+    return VisitorProfileOverviewEnvelope(
+        data=await _store(request).overview(
+            scope=_scope(principal),
+            visitor_id=visitor_id,
+            trace_id=request_id_ctx.get(),
+        )
     )
