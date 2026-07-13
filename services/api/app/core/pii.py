@@ -40,14 +40,11 @@ class PiiCipher:
         previous_keys: dict[str, str] = {}
         if settings.field_encryption_previous_keys is not None:
             try:
-                loaded = json.loads(
-                    settings.field_encryption_previous_keys.get_secret_value()
-                )
+                loaded = json.loads(settings.field_encryption_previous_keys.get_secret_value())
             except json.JSONDecodeError as exc:
                 raise PiiCipherError("previous field encryption keys are invalid") from exc
             if not isinstance(loaded, dict) or not all(
-                isinstance(key, str) and isinstance(value, str)
-                for key, value in loaded.items()
+                isinstance(key, str) and isinstance(value, str) for key, value in loaded.items()
             ):
                 raise PiiCipherError("previous field encryption keys are invalid")
             previous_keys = loaded
@@ -87,23 +84,39 @@ class PiiCipher:
             ):
                 raise PiiCipherError("previous field encryption keys are invalid")
             if previous_ref != key_ref:
-                decryption_keys.append(
-                    (previous_ref, _derive_encryption_key(previous_material))
-                )
+                decryption_keys.append((previous_ref, _derive_encryption_key(previous_material)))
         return cls(encryption_key, search_key, key_ref, tuple(decryption_keys))
 
     def encrypt(self, value: str) -> bytes:
+        return self.encrypt_bytes(value.encode("utf-8"))
+
+    def encrypt_bytes(self, value: bytes) -> bytes:
+        """Encrypt arbitrary bounded application data.
+
+        Most PII columns carry text, but the knowledge-import queue also has to
+        retain opaque office and image uploads until the worker consumes them.
+        Keeping the byte API here avoids base64-expanding the file and preserves
+        the same versioned key-rotation envelope as normal fields.
+        """
+        if not isinstance(value, bytes):
+            raise TypeError("encrypted value must be bytes")
         encoded_ref = self.key_ref.encode("utf-8")
         header = _MAGIC + bytes((_FORMAT_VERSION, len(encoded_ref))) + encoded_ref
         nonce = os.urandom(_NONCE_BYTES)
         ciphertext = AESGCM(self._encryption_key).encrypt(
             nonce,
-            value.encode("utf-8"),
+            value,
             header,
         )
         return header + nonce + ciphertext
 
     def decrypt(self, payload: bytes) -> str:
+        try:
+            return self.decrypt_bytes(payload).decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PiiCipherError("encrypted field authentication failed") from exc
+
+    def decrypt_bytes(self, payload: bytes) -> bytes:
         minimum = len(_MAGIC) + 2 + 1 + _NONCE_BYTES + _TAG_BYTES
         if not isinstance(payload, bytes) or len(payload) < minimum:
             raise PiiCipherError("encrypted field is invalid")
@@ -136,9 +149,8 @@ class PiiCipher:
         nonce = payload[header_end:nonce_end]
         ciphertext = payload[nonce_end:]
         try:
-            plaintext = AESGCM(decryption_key).decrypt(nonce, ciphertext, header)
-            return plaintext.decode("utf-8")
-        except (InvalidTag, UnicodeDecodeError) as exc:
+            return AESGCM(decryption_key).decrypt(nonce, ciphertext, header)
+        except InvalidTag as exc:
             raise PiiCipherError("encrypted field authentication failed") from exc
 
     def hmac(self, value: str) -> str:

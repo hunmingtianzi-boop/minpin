@@ -7,7 +7,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
+from app.core.config import Settings as ApiSettings
 from app.core.pii import PiiCipher, PiiCipherError, mask_value
+from app.services.admin_store import AdminScope, AdminStore
 from app.services.audit import append_audit
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -114,6 +117,7 @@ class PostgresOutboxRepository:
                     source_type=str(row["source_type"]),
                     content_type=str(row["content_type"]),
                     row_number=row["row_number"],
+                    auto_publish=bool(row["auto_publish"]),
                     payload_ciphertext=bytes(row["payload_ciphertext"]),
                     payload_sha256=str(row["payload_sha256"]),
                     encryption_key_ref=str(row["encryption_key_ref"]),
@@ -126,12 +130,48 @@ class PostgresOutboxRepository:
 
     async def create_knowledge_import_draft(
         self, claim: ClaimedKnowledgeImport, draft: Any, chunks: tuple[str, ...]
+    ) -> tuple[uuid.UUID, uuid.UUID, bool]:
+        return await create_draft(self.session_factory, claim, draft, chunks)
+
+    async def publish_knowledge_import(
+        self, claim: ClaimedKnowledgeImport, document_id: uuid.UUID, version_id: uuid.UUID
     ) -> None:
-        document_id, version_id, already_completed = await create_draft(
-            self.session_factory, claim, draft, chunks
+        """Publish only through the same embedding/index transaction as admin UI."""
+        api_settings = ApiSettings(
+            database_url=self._settings.database_url,
+            embedding_provider=self._settings.embedding_provider,
+            embedding_base_url=self._settings.embedding_base_url,
+            embedding_api_key=self._settings.embedding_api_key,
+            embedding_model=self._settings.embedding_model,
+            embedding_dimension=self._settings.embedding_dimension,
+            embedding_timeout_seconds=self._settings.embedding_timeout_seconds,
         )
-        if already_completed:
-            return
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(self._settings.embedding_timeout_seconds, connect=5.0),
+            follow_redirects=False,
+        ) as client:
+            store = AdminStore.from_runtime(
+                session_factory=self.session_factory, settings=api_settings, http_client=client
+            )
+            await store.publish_document(
+                scope=AdminScope(
+                    tenant_id=claim.tenant_id,
+                    company_id=claim.company_id,
+                    actor_user_id=claim.requested_by,
+                ),
+                document_id=document_id,
+                version_id=version_id,
+                trace_id=f"knowledge-import:{claim.id}",
+            )
+
+    async def complete_knowledge_import(
+        self,
+        claim: ClaimedKnowledgeImport,
+        document_id: uuid.UUID,
+        version_id: uuid.UUID,
+        *,
+        published: bool,
+    ) -> None:
         async with self._engine.begin() as connection:
             await self._set_scope(connection, claim.tenant_id, claim.company_id)
             result = await connection.execute(
@@ -140,7 +180,9 @@ class PostgresOutboxRepository:
                     UPDATE knowledge_import_items
                     SET status='completed', payload_ciphertext=NULL, document_id=:document_id,
                         version_id=:version_id, completed_at=clock_timestamp(), lock_token=NULL,
-                        locked_by=NULL, lease_expires_at=NULL, error_code=NULL
+                        locked_by=NULL, lease_expires_at=NULL, error_code=NULL,
+                        parse_status='completed', publish_status=:publish_status,
+                        published_at=CASE WHEN :published THEN clock_timestamp() ELSE NULL END
                     WHERE id=:item_id AND lock_token=:lock_token AND status='processing'
                     """
                 ),
@@ -149,6 +191,8 @@ class PostgresOutboxRepository:
                     "lock_token": claim.lock_token,
                     "document_id": document_id,
                     "version_id": version_id,
+                    "published": published,
+                    "publish_status": "published" if published else "not_requested",
                 },
             )
             if result.rowcount != 1:
@@ -173,7 +217,9 @@ class PostgresOutboxRepository:
                           ELSE clock_timestamp()+make_interval(secs => :backoff) END,
                         completed_at=CASE WHEN :dead_letter THEN clock_timestamp() ELSE NULL END,
                         lock_token=NULL, locked_by=NULL, lease_expires_at=NULL,
-                        error_code=:error_code
+                        error_code=:error_code,
+                        parse_status=CASE WHEN :dead_letter THEN 'failed' ELSE parse_status END,
+                        publish_status=CASE WHEN auto_publish THEN 'failed' ELSE publish_status END
                     WHERE id=:item_id AND lock_token=:lock_token AND status='processing'
                     """
                 ),

@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from functools import partial
 from typing import Annotated
 
-import anyio
-from fastapi import APIRouter, Depends, File, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 
 from app.api.admin_schemas import (
     CreateKnowledgeDocumentRequest,
@@ -36,7 +34,6 @@ from app.services.knowledge_import import (
     MAX_BATCH_BYTES,
     MAX_FILES,
     KnowledgeImportError,
-    parse_payload,
     safe_file_name,
     validate_upload,
 )
@@ -112,6 +109,7 @@ async def create_knowledge_import(
     request: Request,
     principal: StaffDependency,
     files: Annotated[list[UploadFile], File(...)],
+    auto_publish: Annotated[bool, Form()] = False,
 ) -> KnowledgeImportBatchEnvelope:
     _require_permission(principal, "knowledge.write")
     if not files or len(files) > MAX_FILES:
@@ -126,28 +124,21 @@ async def create_knowledge_import(
             if total_bytes > MAX_BATCH_BYTES:
                 raise KnowledgeImportError("IMPORT_BATCH_TOO_LARGE")
             source_type = validate_upload(file_name, upload.content_type, payload)
-            try:
-                with anyio.fail_after(15):
-                    drafts = await anyio.to_thread.run_sync(
-                        partial(parse_payload, source_type, file_name, payload),
-                        abandon_on_cancel=True,
-                    )
-            except TimeoutError as exc:
-                raise KnowledgeImportError("IMPORT_PARSE_TIMEOUT") from exc
-            for ordinal, draft in enumerate(drafts, start=1):
-                pending.append(
-                    PendingImport(
-                        file_name=file_name,
-                        source_type=source_type,
-                        content_type=upload.content_type or "application/octet-stream",
-                        row_number=ordinal if source_type == "csv" else None,
-                        draft=draft,
-                    )
+            pending.append(
+                PendingImport(
+                    file_name=file_name,
+                    source_type=source_type,
+                    content_type=upload.content_type or "application/octet-stream",
+                    payload=payload,
                 )
+            )
     except KnowledgeImportError as exc:
         raise ApiError(400, exc.code, "文件不符合安全导入要求") from exc
     result = await _import_store(request).create_batch(
-        scope=_import_scope(principal), items=pending, trace_id=request_id_ctx.get()
+        scope=_import_scope(principal),
+        items=pending,
+        auto_publish=auto_publish,
+        trace_id=request_id_ctx.get(),
     )
     return KnowledgeImportBatchEnvelope(data=result)
 

@@ -4,6 +4,7 @@ import {
   MessageBar,
   MessageBarBody,
   ProgressBar,
+  Switch,
   Table,
   TableBody,
   TableCell,
@@ -20,6 +21,7 @@ import {
   type KnowledgeImportBatch,
   type KnowledgeImportBatchStatus,
   type KnowledgeImportItemStatus,
+  type KnowledgeImportStageStatus,
 } from "../api/knowledgeImportsApi";
 import { AuthContext } from "../auth/AuthContext";
 import { hasPermission } from "../auth/permissions";
@@ -31,7 +33,10 @@ import { formatTimestamp } from "../utils/format";
 export const KNOWLEDGE_IMPORT_MAX_FILES = 5;
 export const KNOWLEDGE_IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 export const KNOWLEDGE_IMPORT_MAX_BATCH_BYTES = 25 * 1024 * 1024;
-const allowedExtensions = new Set(["pdf", "docx", "csv"]);
+const allowedExtensions = new Set([
+  "pdf", "docx", "pptx", "xlsx", "csv", "txt", "md", "html", "htm",
+  "png", "jpg", "jpeg", "webp", "tiff", "bmp",
+]);
 
 const batchLabels: Record<KnowledgeImportBatchStatus, string> = {
   pending: "等待处理",
@@ -48,6 +53,17 @@ const itemLabels: Record<KnowledgeImportItemStatus, string> = {
   failed: "失败",
   dead_letter: "处理终止",
 };
+const stageLabels: Record<KnowledgeImportStageStatus, string> = {
+  pending: "等待",
+  processing: "处理中",
+  completed: "完成",
+  failed: "失败",
+  skipped: "跳过",
+};
+
+function stageCopy(label: string, status: KnowledgeImportStageStatus | undefined): string {
+  return status ? `${label}：${stageLabels[status]}` : `${label}：等待服务端回执`;
+}
 
 export function validateKnowledgeImportFiles(files: File[]): string | undefined {
   if (files.length === 0) return "请选择要导入的文件。";
@@ -55,7 +71,7 @@ export function validateKnowledgeImportFiles(files: File[]): string | undefined 
   for (const file of files) {
     const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
     if (!allowedExtensions.has(extension)) {
-      return `不支持文件“${file.name}”，仅可上传 PDF、DOCX 或 CSV。`;
+      return `不支持文件“${file.name}”。可上传 PDF、Word、PPT、Excel、CSV、TXT/MD/HTML 或 PNG/JPG/WEBP/TIFF/BMP 图片。`;
     }
     if (file.size > KNOWLEDGE_IMPORT_MAX_FILE_BYTES) {
       return `文件“${file.name}”超过 10 MiB。`;
@@ -91,7 +107,7 @@ function ImportDetail({ batch }: { batch: KnowledgeImportBatch }) {
         <Table aria-label="知识导入逐文件结果" size="small">
           <TableHeader><TableRow>
             <TableHeaderCell>文件</TableHeaderCell><TableHeaderCell>类型</TableHeaderCell>
-            <TableHeaderCell>状态</TableHeaderCell><TableHeaderCell>结果</TableHeaderCell>
+            <TableHeaderCell>处理状态</TableHeaderCell><TableHeaderCell>解析 / 索引 / 发布</TableHeaderCell><TableHeaderCell>结果</TableHeaderCell>
           </TableRow></TableHeader>
           <TableBody>
             {batch.items.map((item) => (
@@ -99,7 +115,14 @@ function ImportDetail({ batch }: { batch: KnowledgeImportBatch }) {
                 <TableCell>{item.fileName}{item.rowNumber ? ` · 第 ${item.rowNumber} 行` : ""}</TableCell>
                 <TableCell>{item.sourceType.toUpperCase()}</TableCell>
                 <TableCell><Badge appearance="tint" color={item.status === "completed" ? "success" : item.status === "failed" || item.status === "dead_letter" ? "danger" : "informative"}>{itemLabels[item.status]}</Badge></TableCell>
-                <TableCell>{item.errorCode ? `错误码：${item.errorCode}` : item.documentId ? "已生成待审核草稿" : "—"}</TableCell>
+                <TableCell>
+                  <div className="knowledge-import-stages">
+                    <span>{stageCopy("解析", item.parseStatus)}</span>
+                    <span>{item.indexStatus ? stageCopy("索引", item.indexStatus) : "索引：随发布流程确认"}</span>
+                    <span>{stageCopy("发布", item.publishStatus)}</span>
+                  </div>
+                </TableCell>
+                <TableCell>{item.errorCode ? `错误码：${item.errorCode}` : item.documentId ? item.publishStatus === "completed" ? "已更新并发布" : <a href="#knowledge-documents">已生成待审核草稿，去审核</a> : "—"}</TableCell>
               </TableRow>
             ))}
           </TableBody>
@@ -114,11 +137,15 @@ export function KnowledgeImportPanel() {
   const canImport = auth?.user
     ? hasPermission(auth.user, "knowledge.write")
     : true;
+  const canAutoPublish = auth?.user
+    ? auth.user.role === "company_admin" || auth.user.role === "platform_admin"
+    : true;
   const inputRef = useRef<HTMLInputElement>(null);
   const resource = useResource(() => knowledgeImportsApi.list());
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<KnowledgeImportBatch>();
   const [uploading, setUploading] = useState(false);
+  const [autoPublish, setAutoPublish] = useState(false);
   const [validationError, setValidationError] = useState<string>();
   const [operationError, setOperationError] = useState<ApiError>();
   const [notice, setNotice] = useState<string>();
@@ -153,11 +180,17 @@ export function KnowledgeImportPanel() {
     setOperationError(undefined);
     setNotice(undefined);
     try {
-      const batch = await knowledgeImportsApi.create(selectedFiles);
+      const batch = autoPublish
+        ? await knowledgeImportsApi.create(selectedFiles, { autoPublish: true })
+        : await knowledgeImportsApi.create(selectedFiles);
       setSelectedBatch(batch);
       setSelectedFiles([]);
       if (inputRef.current) inputRef.current.value = "";
-      setNotice("导入批次已创建。内容只会生成草稿，仍需人工审核并发布。");
+      setNotice(
+        autoPublish
+          ? "导入批次已创建。服务端会解析、建立索引并尝试发布；仅在自动发布成功后，AI 问答才会使用更新后的知识。失败内容会保留为草稿或可重试状态。"
+          : "导入批次已创建。内容只会生成草稿，仍需人工审核并发布。",
+      );
       resource.reload();
     } catch (caught) {
       setOperationError(asApiError(caught));
@@ -178,7 +211,7 @@ export function KnowledgeImportPanel() {
   return (
     <section className="content-panel knowledge-import-panel" aria-labelledby="knowledge-import-title">
       <div className="knowledge-import-heading">
-        <div><h2 id="knowledge-import-title">文件与批量导入</h2><p>支持 PDF、DOCX 和 CSV；CSV 每行一条知识，必须包含 raw_text 列。导入结果均为草稿，不会自动发布；请审核后再发布。</p></div>
+        <div><h2 id="knowledge-import-title">文件与批量导入</h2><p>支持 PDF、Word、PPT、Excel、CSV、文本/网页和常见图片。系统会异步解析并建立知识草稿；默认须人工审核后发布。</p></div>
         <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={resource.reload}>刷新批次</Button>
       </div>
 
@@ -186,8 +219,19 @@ export function KnowledgeImportPanel() {
         <ResourceState status="permission" description="当前账号没有知识写入权限，无法创建导入批次。" compact />
       ) : (
         <div className="knowledge-import-picker">
-          <input ref={inputRef} aria-label="选择知识文件" type="file" accept=".pdf,.docx,.csv" multiple disabled={uploading} onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
+          <input ref={inputRef} aria-label="选择知识文件" type="file" accept=".pdf,.docx,.pptx,.xlsx,.csv,.txt,.md,.html,.htm,.png,.jpg,.jpeg,.webp,.tiff,.bmp" multiple disabled={uploading} onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} />
           <span>{selectedFiles.length > 0 ? `已选择 ${selectedFiles.length} 个文件` : "每批 1–5 个；单文件不超过 10 MiB，批次不超过 25 MiB。"}</span>
+          {canAutoPublish && (
+            <div className="knowledge-import-autopublish">
+              <Switch
+                checked={autoPublish}
+                disabled={uploading}
+                label="解析完成后自动更新并发布到知识库"
+                onChange={(_, data) => setAutoPublish(data.checked)}
+              />
+              <span>仅在自动发布与索引成功后，AI 问答才会使用更新内容；失败时保留草稿或可重试状态。请仅用于已审核、可公开的企业材料。</span>
+            </div>
+          )}
           <Button appearance="primary" icon={<ArrowUpload24Regular />} disabled={uploading || selectedFiles.length === 0} onClick={() => void upload()}>{uploading ? "正在上传" : "创建导入批次"}</Button>
         </div>
       )}

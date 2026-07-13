@@ -41,6 +41,7 @@ import {
   fetchPublicCaseStudy,
   fetchPublicCatalog,
   fetchPublicProduct,
+  fetchPublicRecommendations,
   isPublicExperienceConfigured,
   safeContactHref,
   setProfilePersonalizationConsent,
@@ -50,6 +51,7 @@ import {
   type PublicCaseStudy,
   type PublicCatalog,
   type PublicProduct,
+  type PublicRecommendation,
 } from "../lib/publicExperienceApi";
 import {
   readProfileLinkToken,
@@ -361,6 +363,7 @@ export const PublicExperience = forwardRef<
   const configured = isPublicExperienceConfigured();
   const [catalog, setCatalog] = useState<AsyncState<PublicCatalog>>({ status: "idle" });
   const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const [recommendations, setRecommendations] = useState<AsyncState<PublicRecommendation[]>>({ status: "idle" });
   const [activeTab, setActiveTab] = useState<"products" | "cases">("products");
   const [dialog, setDialog] = useState<DialogState>(null);
   const [detail, setDetail] = useState<AsyncState<PublicProduct | PublicCaseStudy>>({
@@ -409,6 +412,22 @@ export const PublicExperience = forwardRef<
     return () => controller.abort();
   }, [card.slug, catalogAttempt, configured]);
 
+  useEffect(() => {
+    if (!configured) return undefined;
+    const controller = new AbortController();
+    setRecommendations({ status: "loading" });
+    void fetchPublicRecommendations(card.slug, controller.signal)
+      .then((data) => setRecommendations({ status: "ready", data }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setRecommendations({
+          status: "error",
+          message: publicErrorMessage(error, "推荐内容暂时无法加载。"),
+        });
+      });
+    return () => controller.abort();
+  }, [card.slug, configured]);
+
   const loadDetail = useCallback(
     (target: Exclude<DialogState, null | { type: "lead" | "privacy" | "share" }>) => {
       detailController.current?.abort();
@@ -456,6 +475,17 @@ export const PublicExperience = forwardRef<
   const products = catalog.status === "ready" ? catalog.data.products : [];
   const cases = catalog.status === "ready" ? catalog.data.cases : [];
   const activeItems = activeTab === "products" ? products : cases;
+  const openRecommendation = (recommendation: PublicRecommendation) => {
+    if (recommendation.resourceType === "product") {
+      const product = products.find((item) => recommendation.url.endsWith(`/${item.slug}`));
+      if (product) return openDetail({ type: "product", item: product });
+    }
+    if (recommendation.resourceType === "case_study") {
+      const caseStudy = cases.find((item) => recommendation.url.endsWith(`/${item.slug}`));
+      if (caseStudy) return openDetail({ type: "case", item: caseStudy });
+    }
+    onAssistant(`请介绍一下${recommendation.title}`);
+  };
   const handleTabKey = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
     let nextTab: "products" | "cases" | undefined;
     if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
@@ -606,6 +636,35 @@ export const PublicExperience = forwardRef<
               </div>
             )}
           </div>
+
+          {recommendations.status === "ready" && recommendations.data.length > 0 && (
+            <aside className="public-recommendations" aria-labelledby="recommendations-title">
+              <div>
+                <p className="section-eyebrow">公开内容推荐</p>
+                <h3 id="recommendations-title">或许对你有帮助</h3>
+                <p>推荐理由和依据均来自企业当前公开内容，不使用或展示个人画像。</p>
+              </div>
+              <div className="public-recommendation-list">
+                {recommendations.data.map((recommendation) => (
+                  <button
+                    type="button"
+                    key={`${recommendation.resourceType}-${recommendation.resourceId}`}
+                    onClick={() => openRecommendation(recommendation)}
+                  >
+                    <span>
+                      <small>{recommendation.reason}</small>
+                      <strong>{recommendation.title}</strong>
+                      <em>依据：{recommendation.evidence.excerpt}</em>
+                    </span>
+                    <ArrowRight size={18} aria-hidden="true" />
+                  </button>
+                ))}
+              </div>
+            </aside>
+          )}
+          {recommendations.status === "error" && (
+            <p className="public-recommendations-unavailable" role="status">推荐内容暂时不可用，仍可浏览已发布资料或向 AI 助手提问。</p>
+          )}
 
           <div className="contact-ledger" id="contact">
             <div className="contact-intro">

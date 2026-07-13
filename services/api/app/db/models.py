@@ -74,6 +74,18 @@ class ContentStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class DistributedContentType(StrEnum):
+    PRODUCT = "product"
+    CASE_STUDY = "case_study"
+    KNOWLEDGE_DOCUMENT = "knowledge_document"
+
+
+class CardContentOverrideMode(StrEnum):
+    INHERIT = "inherit"
+    HIDDEN = "hidden"
+    CUSTOM = "custom"
+
+
 class LeadStatus(StrEnum):
     NEW = "new"
     VIEWED = "viewed"
@@ -645,6 +657,128 @@ class CaseStudy(
         default=dict,
         server_default=text("'{}'::jsonb"),
     )
+
+
+class EnterpriseContentDistribution(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    """Company default visibility for a published piece of shared content.
+
+    The generic resource identifier deliberately has no polymorphic FK.  The
+    service validates it against its typed source model, which keeps products,
+    cases and knowledge documents independently evolvable.
+    """
+
+    __tablename__ = "enterprise_content_distributions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id"],
+            ["companies.tenant_id", "companies.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "company_id",
+            "resource_type",
+            "resource_id",
+            name="uq_enterprise_content_distributions_resource",
+        ),
+        Index(
+            "ix_enterprise_content_distributions_company_resource",
+            "company_id",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    resource_type: Mapped[DistributedContentType] = mapped_column(
+        db_enum(DistributedContentType, "distributed_content_type"), nullable=False
+    )
+    resource_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    is_default_visible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
+
+
+class CardContentOverride(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    CompanyScopeMixin,
+    Base,
+):
+    """Per-card presentation override; source content itself is never copied."""
+
+    __tablename__ = "card_content_overrides"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "card_id"],
+            ["cards.tenant_id", "cards.company_id", "cards.id"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "tenant_id",
+            "company_id",
+            "card_id",
+            "resource_type",
+            "resource_id",
+            name="uq_card_content_overrides_resource",
+        ),
+        UniqueConstraint(
+            "tenant_id", "company_id", "id", name="uq_card_content_overrides_scope_id"
+        ),
+        Index(
+            "ix_card_content_overrides_card_resource",
+            "card_id",
+            "resource_type",
+            "resource_id",
+        ),
+    )
+
+    card_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    resource_type: Mapped[DistributedContentType] = mapped_column(
+        db_enum(DistributedContentType, "card_override_content_type"), nullable=False
+    )
+    resource_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    mode: Mapped[CardContentOverrideMode] = mapped_column(
+        db_enum(CardContentOverrideMode, "card_content_override_mode"), nullable=False
+    )
+    # Whitelisted public presentation fields only.  Never a source body or visibility.
+    custom_display: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class CardContentOverrideRevision(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base):
+    """Immutable snapshots make an override rollback auditable and deterministic."""
+
+    __tablename__ = "card_content_override_revisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "company_id", "override_id"],
+            [
+                "card_content_overrides.tenant_id",
+                "card_content_overrides.company_id",
+                "card_content_overrides.id",
+            ],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("override_id", "version", name="uq_card_content_override_revision"),
+        Index("ix_card_content_override_revisions_override", "override_id", "version"),
+    )
+
+    override_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[CardContentOverrideMode] = mapped_column(
+        db_enum(CardContentOverrideMode, "card_content_override_revision_mode"), nullable=False
+    )
+    custom_display: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    source_version: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class ForbiddenTopic(
@@ -1332,6 +1466,9 @@ class KnowledgeImportBatch(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixi
     )
 
     requested_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    auto_publish: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     status: Mapped[KnowledgeImportBatchStatus] = mapped_column(
         db_enum(KnowledgeImportBatchStatus, "knowledge_import_batch_status"),
         nullable=False,
@@ -1375,7 +1512,11 @@ class KnowledgeImportItem(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin
             ],
             ondelete="RESTRICT",
         ),
-        CheckConstraint("source_type IN ('pdf', 'docx', 'csv')", name="source_type_allowed"),
+        CheckConstraint(
+            "source_type IN ('pdf','docx','csv','pptx','xlsx','txt','md','html','htm',"
+            "'png','jpg','jpeg','webp','tiff','bmp')",
+            name="source_type_allowed",
+        ),
         CheckConstraint("attempts >= 0 AND max_attempts > 0", name="attempts_valid"),
         CheckConstraint("char_length(payload_sha256) = 64", name="payload_sha256"),
         CheckConstraint(
@@ -1391,6 +1532,14 @@ class KnowledgeImportItem(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin
     source_type: Mapped[str] = mapped_column(String(16), nullable=False)
     content_type: Mapped[str] = mapped_column(String(120), nullable=False)
     row_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    auto_publish: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    parse_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="pending", server_default=text("'pending'")
+    )
+    publish_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     payload_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     payload_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     encryption_key_ref: Mapped[str] = mapped_column(String(128), nullable=False)

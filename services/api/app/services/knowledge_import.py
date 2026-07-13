@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import csv
+import html
 import io
 import json
 import re
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
+from html.parser import HTMLParser
 from pathlib import PurePath
 from typing import Literal
 
 from docx import Document
+from openpyxl import load_workbook
+from PIL import Image, UnidentifiedImageError
+from pptx import Presentation
 from pypdf import PdfReader
 
 MAX_FILE_BYTES = 10 * 1024 * 1024
@@ -20,6 +26,10 @@ MAX_CSV_COLUMNS = 16
 MAX_CSV_CELL_CHARS = 100_000
 MAX_TEXT_CHARS = 1_000_000
 MAX_PDF_PAGES = 500
+MAX_OCR_PAGES = 50
+MAX_IMAGE_PIXELS = 20_000_000
+MAX_PPTX_SLIDES = 500
+MAX_XLSX_SHEETS = 100
 MAX_ARCHIVE_ENTRIES = 2_000
 MAX_ARCHIVE_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
 MAX_ARCHIVE_ENTRY_BYTES = 20 * 1024 * 1024
@@ -29,7 +39,20 @@ _MIMES = {
     "pdf": {"application/pdf"},
     "docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     "csv": {"text/csv", "application/csv", "text/plain", "application/vnd.ms-excel"},
+    "pptx": {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    "xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+    "txt": {"text/plain"},
+    "md": {"text/markdown", "text/plain"},
+    "html": {"text/html", "application/xhtml+xml"},
+    "htm": {"text/html", "application/xhtml+xml"},
+    "png": {"image/png"},
+    "jpg": {"image/jpeg"},
+    "jpeg": {"image/jpeg"},
+    "webp": {"image/webp"},
+    "tiff": {"image/tiff"},
+    "bmp": {"image/bmp"},
 }
+_IMAGE_TYPES = frozenset({"png", "jpg", "jpeg", "webp", "tiff", "bmp"})
 
 
 class KnowledgeImportError(ValueError):
@@ -43,6 +66,7 @@ class ImportDraft:
     title: str
     raw_text: str
     visibility: Literal["public", "authenticated", "internal"]
+    auto_publish: bool = False
 
 
 def safe_file_name(value: str | None) -> str:
@@ -70,9 +94,25 @@ def validate_upload(name: str, content_type: str | None, payload: bytes) -> str:
     if extension == "docx":
         if not payload.startswith(b"PK\x03\x04"):
             raise KnowledgeImportError("IMPORT_MAGIC_MISMATCH")
-        _validate_docx_archive(payload)
+        _validate_office_archive(
+            payload, required_entry="word/document.xml", error="IMPORT_DOCX_INVALID"
+        )
+    if extension == "pptx":
+        if not payload.startswith(b"PK\x03\x04"):
+            raise KnowledgeImportError("IMPORT_MAGIC_MISMATCH")
+        _validate_office_archive(
+            payload, required_entry="ppt/presentation.xml", error="IMPORT_PPTX_INVALID"
+        )
+    if extension == "xlsx":
+        if not payload.startswith(b"PK\x03\x04"):
+            raise KnowledgeImportError("IMPORT_MAGIC_MISMATCH")
+        _validate_office_archive(
+            payload, required_entry="xl/workbook.xml", error="IMPORT_XLSX_INVALID"
+        )
     if extension == "csv" and (payload.startswith(b"%PDF-") or payload.startswith(b"PK\x03\x04")):
         raise KnowledgeImportError("IMPORT_MAGIC_MISMATCH")
+    if extension in _IMAGE_TYPES:
+        _validate_image(payload)
     return extension
 
 
@@ -82,13 +122,26 @@ def parse_payload(source_type: str, file_name: str, payload: bytes) -> list[Impo
     if source_type == "docx":
         return [_parse_docx(file_name, payload)]
     if source_type == "csv":
-        return _parse_csv(payload)
+        return [_parse_csv(file_name, payload)]
+    if source_type == "pptx":
+        return [_parse_pptx(file_name, payload)]
+    if source_type == "xlsx":
+        return [_parse_xlsx(file_name, payload)]
+    if source_type in {"txt", "md", "html", "htm"}:
+        return [_parse_text(file_name, source_type, payload)]
+    if source_type in _IMAGE_TYPES:
+        return [_parse_image(file_name, payload)]
     raise KnowledgeImportError("IMPORT_UNSUPPORTED_TYPE")
 
 
 def encode_draft(draft: ImportDraft) -> bytes:
     return json.dumps(
-        {"title": draft.title, "raw_text": draft.raw_text, "visibility": draft.visibility},
+        {
+            "title": draft.title,
+            "raw_text": draft.raw_text,
+            "visibility": draft.visibility,
+            "auto_publish": draft.auto_publish,
+        },
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -97,7 +150,12 @@ def encode_draft(draft: ImportDraft) -> bytes:
 def decode_draft(payload: bytes) -> ImportDraft:
     try:
         value = json.loads(payload.decode("utf-8"))
-        return _validated_draft(value["title"], value["raw_text"], value["visibility"])
+        return _validated_draft(
+            value["title"],
+            value["raw_text"],
+            value["visibility"],
+            auto_publish=bool(value.get("auto_publish", False)),
+        )
     except (KeyError, TypeError, ValueError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise KnowledgeImportError("IMPORT_PAYLOAD_INVALID") from exc
 
@@ -114,11 +172,15 @@ def _parse_pdf(file_name: str, payload: bytes) -> ImportDraft:
         raise
     except Exception as exc:
         raise KnowledgeImportError("IMPORT_PDF_INVALID") from exc
+    if len(text) < 80:
+        text = _ocr_pdf(payload, max_pages=min(MAX_OCR_PAGES, len(reader.pages)))
     return _validated_draft(file_name.rsplit(".", 1)[0], text, "public")
 
 
 def _parse_docx(file_name: str, payload: bytes) -> ImportDraft:
-    _validate_docx_archive(payload)
+    _validate_office_archive(
+        payload, required_entry="word/document.xml", error="IMPORT_DOCX_INVALID"
+    )
     try:
         document = Document(io.BytesIO(payload))
         parts = [
@@ -134,14 +196,81 @@ def _parse_docx(file_name: str, payload: bytes) -> ImportDraft:
     return _validated_draft(file_name.rsplit(".", 1)[0], "\n\n".join(parts), "public")
 
 
-def _parse_csv(payload: bytes) -> list[ImportDraft]:
+def _parse_pptx(file_name: str, payload: bytes) -> ImportDraft:
+    _validate_office_archive(
+        payload, required_entry="ppt/presentation.xml", error="IMPORT_PPTX_INVALID"
+    )
+    try:
+        presentation = Presentation(io.BytesIO(payload))
+        if len(presentation.slides) > MAX_PPTX_SLIDES:
+            raise KnowledgeImportError("IMPORT_PPTX_TOO_MANY_SLIDES")
+        parts: list[str] = []
+        for ordinal, slide in enumerate(presentation.slides, start=1):
+            values: list[str] = []
+            for shape in slide.shapes:
+                if getattr(shape, "has_text_frame", False) and shape.text.strip():
+                    values.append(shape.text.strip())
+                if getattr(shape, "has_table", False):
+                    for row in shape.table.rows:
+                        line = " | ".join(
+                            cell.text.strip() for cell in row.cells if cell.text.strip()
+                        )
+                        if line:
+                            values.append(line)
+            if values:
+                parts.append(f"第 {ordinal} 页\n" + "\n".join(values))
+    except Exception as exc:
+        raise KnowledgeImportError("IMPORT_PPTX_INVALID") from exc
+    return _validated_draft(file_name.rsplit(".", 1)[0], "\n\n".join(parts), "public")
+
+
+def _parse_xlsx(file_name: str, payload: bytes) -> ImportDraft:
+    _validate_office_archive(payload, required_entry="xl/workbook.xml", error="IMPORT_XLSX_INVALID")
+    try:
+        workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=False)
+        if len(workbook.worksheets) > MAX_XLSX_SHEETS:
+            raise KnowledgeImportError("IMPORT_XLSX_TOO_MANY_SHEETS")
+        parts: list[str] = []
+        for sheet in workbook.worksheets:
+            rows: list[str] = []
+            for row in sheet.iter_rows(values_only=True):
+                values = [
+                    str(value).strip() for value in row if value is not None and str(value).strip()
+                ]
+                if values:
+                    rows.append(" | ".join(values))
+                if len(rows) >= MAX_CSV_ROWS:
+                    break
+            if rows:
+                parts.append(f"工作表：{sheet.title}\n" + "\n".join(rows))
+    except Exception as exc:
+        raise KnowledgeImportError("IMPORT_XLSX_INVALID") from exc
+    return _validated_draft(file_name.rsplit(".", 1)[0], "\n\n".join(parts), "public")
+
+
+def _parse_text(file_name: str, source_type: str, payload: bytes) -> ImportDraft:
+    try:
+        value = payload.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise KnowledgeImportError("IMPORT_TEXT_ENCODING") from exc
+    if source_type in {"html", "htm"}:
+        value = _html_to_text(value)
+    return _validated_draft(file_name.rsplit(".", 1)[0], value, "public")
+
+
+def _parse_image(file_name: str, payload: bytes) -> ImportDraft:
+    return _validated_draft(file_name.rsplit(".", 1)[0], _ocr_image(payload), "public")
+
+
+def _parse_csv(file_name: str, payload: bytes) -> ImportDraft:
     try:
         text = payload.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise KnowledgeImportError("IMPORT_CSV_ENCODING") from exc
     if "\x00" in text:
         raise KnowledgeImportError("IMPORT_CSV_INVALID")
-    drafts: list[ImportDraft] = []
+    rows: list[str] = []
+    visibilities: set[str] = set()
     try:
         reader = csv.DictReader(io.StringIO(text, newline=""))
         raw_fields = [
@@ -150,10 +279,10 @@ def _parse_csv(payload: bytes) -> list[ImportDraft]:
         fields = set(raw_fields)
         if len(raw_fields) > MAX_CSV_COLUMNS or len(raw_fields) != len(fields):
             raise KnowledgeImportError("IMPORT_CSV_HEADERS")
-        if "raw_text" not in fields or fields - {"title", "raw_text", "visibility"}:
+        if not raw_fields:
             raise KnowledgeImportError("IMPORT_CSV_HEADERS")
         for row in reader:
-            if len(drafts) >= MAX_CSV_ROWS:
+            if len(rows) >= MAX_CSV_ROWS:
                 raise KnowledgeImportError("IMPORT_CSV_TOO_MANY_ROWS")
             if None in row:
                 raise KnowledgeImportError("IMPORT_CSV_COLUMNS")
@@ -163,21 +292,31 @@ def _parse_csv(payload: bytes) -> list[ImportDraft]:
                     raise KnowledgeImportError("IMPORT_CSV_CELL_TOO_LARGE")
                 if value.lstrip().startswith(_DANGEROUS_PREFIXES):
                     raise KnowledgeImportError("IMPORT_DANGEROUS_VALUE")
-            drafts.append(
-                _validated_draft(
-                    values.get("title") or f"批量导入第 {reader.line_num - 1} 条",
-                    values.get("raw_text", ""),
-                    values.get("visibility") or "public",
+            visibility = values.get("visibility", "").strip().casefold()
+            if visibility:
+                if visibility not in {"public", "authenticated", "internal"}:
+                    raise KnowledgeImportError("IMPORT_VISIBILITY_INVALID")
+                visibilities.add(visibility)
+            rows.append(
+                " | ".join(
+                    f"{field}: {values.get(field, '').strip()}"
+                    for field in raw_fields
+                    if values.get(field, "").strip()
                 )
             )
     except csv.Error as exc:
         raise KnowledgeImportError("IMPORT_CSV_INVALID") from exc
-    if not drafts:
+    if not rows:
         raise KnowledgeImportError("IMPORT_EMPTY_TEXT")
-    return drafts
+    visibility = next(iter(visibilities)) if len(visibilities) == 1 else "public"
+    return _validated_draft(
+        file_name.rsplit(".", 1)[0], "\n".join([" | ".join(raw_fields), *rows]), visibility
+    )
 
 
-def _validated_draft(title: str, raw_text: str, visibility: str) -> ImportDraft:
+def _validated_draft(
+    title: str, raw_text: str, visibility: str, *, auto_publish: bool = False
+) -> ImportDraft:
     normalized_title = str(title).strip()
     normalized_text = str(raw_text).strip()
     normalized_visibility = str(visibility).strip().casefold()
@@ -193,10 +332,18 @@ def _validated_draft(title: str, raw_text: str, visibility: str) -> ImportDraft:
         raise KnowledgeImportError("IMPORT_DANGEROUS_VALUE")
     if normalized_visibility not in {"public", "authenticated", "internal"}:
         raise KnowledgeImportError("IMPORT_VISIBILITY_INVALID")
-    return ImportDraft(normalized_title, normalized_text, normalized_visibility)  # type: ignore[arg-type]
+    return ImportDraft(  # type: ignore[arg-type]
+        normalized_title, normalized_text, normalized_visibility, auto_publish=auto_publish
+    )
 
 
-def _validate_docx_archive(payload: bytes) -> None:
+def _validate_office_archive(payload: bytes, *, required_entry: str, error: str) -> None:
+    """Reject archive bombs, traversal entries and macro-enabled Office files.
+
+    OOXML is a ZIP archive.  Validate its central directory before handing it
+    to third-party parsers, which prevents a small upload from expanding into
+    unbounded disk/memory work in a worker process.
+    """
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             infos = archive.infolist()
@@ -205,8 +352,8 @@ def _validate_docx_archive(payload: bytes) -> None:
             if sum(item.file_size for item in infos) > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
                 raise KnowledgeImportError("IMPORT_ARCHIVE_LIMIT")
             names = [item.filename for item in infos]
-            if "word/document.xml" not in names:
-                raise KnowledgeImportError("IMPORT_DOCX_INVALID")
+            if required_entry not in names:
+                raise KnowledgeImportError(error)
             for item in infos:
                 name = item.filename
                 if item.file_size > MAX_ARCHIVE_ENTRY_BYTES:
@@ -222,7 +369,117 @@ def _validate_docx_archive(payload: bytes) -> None:
     except KnowledgeImportError:
         raise
     except (OSError, zipfile.BadZipFile) as exc:
-        raise KnowledgeImportError("IMPORT_DOCX_INVALID") from exc
+        raise KnowledgeImportError(error) from exc
+
+
+def _validate_image(payload: bytes) -> None:
+    try:
+        with Image.open(io.BytesIO(payload)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(payload)) as image:
+            width, height = image.size
+            if width < 1 or height < 1 or width * height > MAX_IMAGE_PIXELS:
+                raise KnowledgeImportError("IMPORT_IMAGE_DIMENSIONS")
+    except KnowledgeImportError:
+        raise
+    except (OSError, UnidentifiedImageError, Image.DecompressionBombError) as exc:
+        raise KnowledgeImportError("IMPORT_IMAGE_INVALID") from exc
+
+
+@lru_cache(maxsize=1)
+def _ocr_engine():
+    """Load the local OCR engine lazily, only in the background worker."""
+    try:
+        from rapidocr import RapidOCR
+    except ImportError as exc:  # pragma: no cover - exercised in deploy configuration
+        raise KnowledgeImportError("IMPORT_OCR_UNAVAILABLE") from exc
+    return RapidOCR()
+
+
+def _ocr_image(payload: bytes) -> str:
+    _validate_image(payload)
+    try:
+        import numpy as np
+
+        with Image.open(io.BytesIO(payload)) as image:
+            rgb = image.convert("RGB")
+            result = _ocr_engine()(np.asarray(rgb))
+        # v3 exposes a result object; keep the tuple/list fallback for a
+        # locally pinned v2 engine during rolling upgrades.
+        if hasattr(result, "txts"):
+            text = "\n".join(str(value).strip() for value in result.txts if str(value).strip())
+        else:
+            lines = result[0] if isinstance(result, tuple) else result
+            text = "\n".join(
+                str(line[1]).strip()
+                for line in (lines or [])
+                if isinstance(line, (list, tuple)) and len(line) > 1 and str(line[1]).strip()
+            )
+    except KnowledgeImportError:
+        raise
+    except Exception as exc:
+        raise KnowledgeImportError("IMPORT_OCR_FAILED") from exc
+    if not text:
+        raise KnowledgeImportError("IMPORT_OCR_EMPTY")
+    return text
+
+
+def _ocr_pdf(payload: bytes, *, max_pages: int) -> str:
+    try:
+        import fitz
+
+        document = fitz.open(stream=payload, filetype="pdf")
+        try:
+            values: list[str] = []
+            for page_number in range(min(document.page_count, max_pages)):
+                page = document.load_page(page_number)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                values.append(_ocr_image(pixmap.tobytes("png")))
+            return "\n\n".join(value for value in values if value).strip()
+        finally:
+            document.close()
+    except KnowledgeImportError:
+        raise
+    except Exception as exc:
+        raise KnowledgeImportError("IMPORT_PDF_OCR_FAILED") from exc
+
+
+class _TextExtractor(HTMLParser):
+    _IGNORED = {"script", "style", "noscript", "template"}
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._parts: list[str] = []
+        self._ignored_depth = 0
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.casefold() in self._IGNORED:
+            self._ignored_depth += 1
+        elif tag.casefold() in {"p", "div", "li", "br", "tr", "h1", "h2", "h3", "h4"}:
+            self._parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.casefold() in self._IGNORED and self._ignored_depth:
+            self._ignored_depth -= 1
+        elif tag.casefold() in {"p", "div", "li", "tr", "h1", "h2", "h3", "h4"}:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._ignored_depth:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        return re.sub(r"\n{3,}", "\n\n", "".join(self._parts)).strip()
+
+
+def _html_to_text(value: str) -> str:
+    parser = _TextExtractor()
+    try:
+        parser.feed(value)
+        parser.close()
+    except Exception as exc:
+        raise KnowledgeImportError("IMPORT_HTML_INVALID") from exc
+    return html.unescape(parser.text())
 
 
 __all__ = [

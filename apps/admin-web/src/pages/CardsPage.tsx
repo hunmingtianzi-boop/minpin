@@ -24,6 +24,7 @@ import {
   QrCode24Regular,
   Send24Regular,
   Share24Regular,
+  Settings24Regular,
   ToggleRight24Regular,
 } from "@fluentui/react-icons";
 import { useState } from "react";
@@ -33,6 +34,7 @@ import { ApiError } from "../api/client";
 import type { ManagedCard } from "../api/types";
 import { ActionConfirmDialog } from "../components/ActionConfirmDialog";
 import { CardEditor } from "../components/CardEditor";
+import { CardContentOverridesDialog } from "../components/CardContentOverridesDialog";
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
 import { StatusBadge } from "../components/StatusBadge";
@@ -65,6 +67,7 @@ export function CardsPage() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<ManagedCard>();
   const [shareTarget, setShareTarget] = useState<ManagedCard>();
+  const [overrideTarget, setOverrideTarget] = useState<ManagedCard>();
   const [copyNotice, setCopyNotice] = useState<string>();
   const [copyError, setCopyError] = useState<string>();
   const [action, setAction] = useState<CardAction>();
@@ -224,6 +227,14 @@ export function CardsPage() {
                         >
                           分享
                         </Button>
+                        <Button
+                          appearance="subtle"
+                          size="small"
+                          icon={<Settings24Regular />}
+                          onClick={() => setOverrideTarget(card)}
+                        >
+                          内容覆盖
+                        </Button>
                         {card.status !== "published" ? (
                           <Button
                             appearance="subtle"
@@ -258,6 +269,11 @@ export function CardsPage() {
         item={editing}
         onClose={() => setEditorOpen(false)}
         onSaved={saved}
+      />
+      <CardContentOverridesDialog
+        card={overrideTarget}
+        open={Boolean(overrideTarget)}
+        onClose={() => setOverrideTarget(undefined)}
       />
 
       <ActionConfirmDialog

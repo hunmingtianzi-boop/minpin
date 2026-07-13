@@ -145,7 +145,7 @@ export function KnowledgePage() {
 
       <KnowledgeImportPanel />
 
-      <section className="content-panel knowledge-panel">
+      <section id="knowledge-documents" className="content-panel knowledge-panel">
         {resource.status !== "ready" && (
           <ResourceState
             status={resource.status}

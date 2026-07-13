@@ -38,6 +38,22 @@ describe("knowledgeImportsApi", () => {
     expect((request?.headers as Headers).has("Content-Type")).toBe(false);
   });
 
+  it("sends automatic publication only when the enterprise admin opts in", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ data: { access_token: "access", csrf_token: "csrf" } }))
+      .mockResolvedValueOnce(response({ data: { ...batch, auto_publish: true } }, 202));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetcher });
+    await client.login("admin", "password");
+    const api = createKnowledgeImportsApi(client);
+
+    await api.create([new File(["pdf"], "knowledge.pdf", { type: "application/pdf" })], {
+      autoPublish: true,
+    });
+
+    const form = fetcher.mock.calls[1][1]?.body as FormData;
+    expect(form.get("auto_publish")).toBe("true");
+  });
+
   it("normalizes list and detail responses", async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(response({ data: { access_token: "access", csrf_token: "csrf" } }))

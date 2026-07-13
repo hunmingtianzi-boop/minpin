@@ -291,6 +291,7 @@ async def _generate_and_persist(
             RAGRequest(
                 tenant_id=str(principal.tenant_id),
                 company_id=str(principal.company_id),
+                card_id=str(principal.card_id),
                 question=prepared.question,
                 history=history,
                 forbidden_topics=forbidden_topics,

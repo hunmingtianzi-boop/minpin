@@ -134,6 +134,7 @@ class PostgresHybridRetrievalRepository:
         parameters: dict[str, Any] = {
             "tenant_id": query.tenant_id,
             "company_id": query.company_id,
+            "card_id": query.card_id,
             "query_text": query.text,
             "top_k": query.top_k,
             "candidate_limit": query.candidate_limit,
@@ -218,7 +219,7 @@ eligible AS (
       AND d.{schema.document_status} = :active_document_status
       AND v.{schema.version_review_status} = :published_review_status
       AND c.{schema.chunk_visibility} = :public_visibility
-      AND (
+    AND (
         d.{schema.document_source_type} NOT IN ('product', 'case_study')
         OR (
           d.{schema.document_source_type} = 'product'
@@ -245,6 +246,46 @@ eligible AS (
           )
         )
       ){active_chunk_predicate}
+      AND (
+        CAST(:card_id AS uuid) IS NULL
+        OR (
+          NOT EXISTS (
+            SELECT 1
+            FROM enterprise_content_distributions AS distribution
+            WHERE distribution.tenant_id = CAST(:tenant_id AS uuid)
+              AND distribution.company_id = CAST(:company_id AS uuid)
+              AND distribution.resource_type = CASE
+                WHEN d.{schema.document_source_type} IN ('product', 'case_study')
+                  THEN d.{schema.document_source_type}
+                ELSE 'knowledge_document'
+              END
+              AND distribution.resource_id::text = CASE
+                WHEN d.{schema.document_source_type} IN ('product', 'case_study')
+                  THEN d.{schema.document_source_id}
+                ELSE d.{schema.document_id}::text
+              END
+              AND distribution.is_default_visible IS FALSE
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM card_content_overrides AS override
+            WHERE override.tenant_id = CAST(:tenant_id AS uuid)
+              AND override.company_id = CAST(:company_id AS uuid)
+              AND override.card_id = CAST(:card_id AS uuid)
+              AND override.resource_type = CASE
+                WHEN d.{schema.document_source_type} IN ('product', 'case_study')
+                  THEN d.{schema.document_source_type}
+                ELSE 'knowledge_document'
+              END
+              AND override.resource_id::text = CASE
+                WHEN d.{schema.document_source_type} IN ('product', 'case_study')
+                  THEN d.{schema.document_source_id}
+                ELSE d.{schema.document_id}::text
+              END
+              AND override.mode = 'hidden'
+          )
+        )
+      )
 )
 """.strip()
 

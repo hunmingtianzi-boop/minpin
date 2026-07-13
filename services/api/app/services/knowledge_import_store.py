@@ -17,7 +17,6 @@ from app.core.pii import PiiCipher
 from app.db.models import KnowledgeImportBatch, KnowledgeImportItem
 from app.db.session import set_rls_context
 from app.services.audit import append_audit
-from app.services.knowledge_import import ImportDraft, encode_draft
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,8 +31,7 @@ class PendingImport:
     file_name: str
     source_type: str
     content_type: str
-    row_number: int | None
-    draft: ImportDraft
+    payload: bytes
 
 
 class KnowledgeImportStore:
@@ -46,6 +44,7 @@ class KnowledgeImportStore:
         *,
         scope: KnowledgeImportScope,
         items: list[PendingImport],
+        auto_publish: bool,
         trace_id: str | None,
     ) -> KnowledgeImportBatchRecord:
         batch_id = uuid.uuid4()
@@ -56,6 +55,7 @@ class KnowledgeImportStore:
                 tenant_id=scope.tenant_id,
                 company_id=scope.company_id,
                 requested_by=scope.actor_user_id,
+                auto_publish=auto_publish,
                 total_items=len(items),
                 pending_items=len(items),
                 succeeded_items=0,
@@ -63,7 +63,7 @@ class KnowledgeImportStore:
             )
             session.add(batch)
             for item in items:
-                plaintext = encode_draft(item.draft)
+                plaintext = item.payload
                 session.add(
                     KnowledgeImportItem(
                         id=uuid.uuid4(),
@@ -73,8 +73,9 @@ class KnowledgeImportStore:
                         file_name=item.file_name,
                         source_type=item.source_type,
                         content_type=item.content_type,
-                        row_number=item.row_number,
-                        payload_ciphertext=self._cipher.encrypt(plaintext.decode("utf-8")),
+                        row_number=None,
+                        auto_publish=auto_publish,
+                        payload_ciphertext=self._cipher.encrypt_bytes(plaintext),
                         payload_sha256=hashlib.sha256(plaintext).hexdigest(),
                         encryption_key_ref=self._cipher.key_ref,
                     )
@@ -89,7 +90,7 @@ class KnowledgeImportStore:
                 resource_type="knowledge_import_batch",
                 resource_id=batch.id,
                 trace_id=trace_id,
-                event_data={"item_count": len(items)},
+                event_data={"item_count": len(items), "auto_publish": auto_publish},
             )
             await session.flush()
             return await self._record(session, scope, batch, with_items=True)
@@ -159,6 +160,7 @@ class KnowledgeImportStore:
         return KnowledgeImportBatchRecord(
             id=batch.id,
             status=batch.status.value,
+            auto_publish=batch.auto_publish,
             total_items=batch.total_items,
             pending_items=batch.pending_items,
             succeeded_items=batch.succeeded_items,
@@ -171,12 +173,16 @@ class KnowledgeImportStore:
                     file_name=item.file_name,
                     source_type=item.source_type,
                     status=item.status.value,
+                    auto_publish=item.auto_publish,
+                    parse_status=item.parse_status,
+                    publish_status=item.publish_status,
                     row_number=item.row_number,
                     document_id=item.document_id,
                     version_id=item.version_id,
                     error_code=item.error_code,
                     created_at=item.created_at,
                     completed_at=item.completed_at,
+                    published_at=item.published_at,
                 )
                 for item in rows
             ],

@@ -9,7 +9,7 @@ import { KnowledgeImportPanel, validateKnowledgeImportFiles } from "./KnowledgeI
 
 const batch: KnowledgeImportBatch = {
   id: "batch-1", status: "completed_with_errors", totalItems: 2, pendingItems: 0,
-  succeededItems: 1, failedItems: 1, createdAt: "2026-07-12T00:00:00Z",
+  succeededItems: 1, failedItems: 1, autoPublish: false, createdAt: "2026-07-12T00:00:00Z",
   completedAt: "2026-07-12T00:01:00Z",
   items: [
     { id: "item-1", fileName: "guide.pdf", sourceType: "pdf", status: "completed", documentId: "document-1", versionId: "version-1", createdAt: "2026-07-12T00:00:00Z", completedAt: "2026-07-12T00:01:00Z" },
@@ -23,7 +23,9 @@ function renderPanel() {
 
 describe("validateKnowledgeImportFiles", () => {
   it("rejects unsupported, oversized and over-count selections before upload", () => {
-    expect(validateKnowledgeImportFiles([new File(["x"], "notes.txt")])).toMatch(/仅可上传/);
+    expect(validateKnowledgeImportFiles([new File(["x"], "unsafe.exe")])).toMatch(/不支持文件/);
+    expect(validateKnowledgeImportFiles([new File(["x"], "deck.pptx")])).toBeUndefined();
+    expect(validateKnowledgeImportFiles([new File(["x"], "scan.webp")])).toBeUndefined();
     expect(validateKnowledgeImportFiles([new File([new Uint8Array(10 * 1024 * 1024 + 1)], "large.pdf")])).toMatch(/超过 10 MiB/);
     expect(validateKnowledgeImportFiles(Array.from({ length: 6 }, (_, index) => new File(["x"], `${index}.csv`)))).toMatch(/最多/);
   });
@@ -46,7 +48,7 @@ describe("KnowledgeImportPanel", () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: "guide.pdf" })])));
     expect(await screen.findByText(/内容只会生成草稿/)).toBeInTheDocument();
     expect(screen.getByText("错误码：CSV_RAW_TEXT_REQUIRED")).toBeInTheDocument();
-    expect(screen.getByText("已生成待审核草稿")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /已生成待审核草稿/ })).toBeInTheDocument();
   });
 
   it("shows validation feedback and does not call the server", async () => {
@@ -55,8 +57,22 @@ describe("KnowledgeImportPanel", () => {
     fireEvent.change(screen.getByLabelText("选择知识文件"), {
       target: { files: [new File(["x"], "unsafe.exe")] },
     });
-    expect(await screen.findByText(/仅可上传 PDF/)).toBeInTheDocument();
+    expect(await screen.findByText(/不支持文件/)).toBeInTheDocument();
     expect(create).not.toHaveBeenCalled();
+  });
+
+  it("lets an enterprise admin request automatic publish explicitly", async () => {
+    const user = userEvent.setup();
+    const create = vi.spyOn(knowledgeImportsApi, "create").mockResolvedValue({ ...batch, autoPublish: true });
+    renderPanel();
+    await user.upload(screen.getByLabelText("选择知识文件"), new File(["slide"], "deck.pptx", { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" }));
+    await user.click(screen.getByLabelText("解析完成后自动更新并发布到知识库"));
+    await user.click(screen.getByRole("button", { name: "创建导入批次" }));
+    await waitFor(() => expect(create).toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ name: "deck.pptx" })]),
+      { autoPublish: true },
+    ));
+    expect(await screen.findByText(/尝试发布/)).toBeInTheDocument();
   });
 
   it("loads batch detail on demand and exposes per-file error codes", async () => {

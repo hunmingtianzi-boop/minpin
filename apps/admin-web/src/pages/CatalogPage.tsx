@@ -28,6 +28,7 @@ import {
 import type { CaseStudy, Product } from "../api/types";
 import { ActionConfirmDialog } from "../components/ActionConfirmDialog";
 import { CaseStudyEditor, ProductEditor } from "../components/CatalogEditor";
+import { ContentDistributionControl } from "../components/ContentDistributionControl";
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
 import {
@@ -304,6 +305,12 @@ export function CatalogPage({ kind }: { kind: CatalogKind }) {
                         >
                           编辑
                         </Button>
+                        <ContentDistributionControl
+                          resourceType={kind === "product" ? "product" : "case_study"}
+                          resourceId={record.id}
+                          resourceLabel={recordTitle(record)}
+                          sourceStatus={record.status}
+                        />
                         {record.status !== "published" && !schedule && (
                           <Button
                             appearance="subtle"

@@ -15,17 +15,22 @@ class KnowledgeImportItemRecord(ImportModel):
     file_name: str
     source_type: str
     status: str
+    auto_publish: bool = False
+    parse_status: str = "pending"
+    publish_status: str | None = None
     row_number: int | None = None
     document_id: uuid.UUID | None = None
     version_id: uuid.UUID | None = None
     error_code: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+    published_at: datetime | None = None
 
 
 class KnowledgeImportBatchRecord(ImportModel):
     id: uuid.UUID
     status: str
+    auto_publish: bool = False
     total_items: int = Field(ge=1)
     pending_items: int = Field(ge=0)
     succeeded_items: int = Field(ge=0)

@@ -237,6 +237,7 @@ class RAGOrchestrator:
                         rrf_k=self.config.rrf_k,
                         vector_weight=self.config.vector_weight,
                         lexical_weight=self.config.lexical_weight,
+                        card_id=request.card_id,
                     )
                 )
             )

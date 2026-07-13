@@ -48,6 +48,22 @@ export type PublicCatalog = {
   cases: PublicCaseStudy[];
 };
 
+export type PublicRecommendation = {
+  resourceType: "product" | "case_study" | "knowledge_document";
+  resourceId: string;
+  title: string;
+  summary: string;
+  url: string;
+  reason: string;
+  evidence: {
+    sourceType: "product" | "case_study" | "knowledge_document";
+    sourceId: string;
+    sourceVersion?: number;
+    title: string;
+    excerpt: string;
+  };
+};
+
 export type PublicLeadInput = {
   conversationId?: string;
   name: string;
@@ -248,6 +264,35 @@ function parseCaseStudy(value: unknown): PublicCaseStudy {
   };
 }
 
+function recommendationResourceType(value: unknown, label: string): PublicRecommendation["resourceType"] {
+  if (value === "product" || value === "case_study" || value === "knowledge_document") return value;
+  throw new AssistantApiError(`公开服务响应包含无效${label}。`, {
+    code: "INVALID_API_RESPONSE",
+    retryable: true,
+  });
+}
+
+function parseRecommendation(value: unknown): PublicRecommendation {
+  const record = requireRecord(value, "推荐内容");
+  const evidence = requireRecord(record.evidence, "推荐依据");
+  const version = evidence.source_version ?? evidence.sourceVersion;
+  return {
+    resourceType: recommendationResourceType(record.resource_type ?? record.resourceType, "推荐类型"),
+    resourceId: requireString(record.resource_id ?? record.resourceId, "推荐资源"),
+    title: requireString(record.title, "推荐标题"),
+    summary: requireString(record.summary, "推荐摘要"),
+    url: requireString(record.url, "推荐链接"),
+    reason: requireString(record.reason, "推荐理由"),
+    evidence: {
+      sourceType: recommendationResourceType(evidence.source_type ?? evidence.sourceType, "依据类型"),
+      sourceId: requireString(evidence.source_id ?? evidence.sourceId, "依据资源"),
+      sourceVersion: typeof version === "number" && Number.isFinite(version) ? version : undefined,
+      title: requireString(evidence.title, "依据标题"),
+      excerpt: requireString(evidence.excerpt, "依据摘要"),
+    },
+  };
+}
+
 function parseList<T>(value: unknown, parser: (item: unknown) => T, label: string) {
   const envelope = requireRecord(value, `${label}列表`);
   if (!Array.isArray(envelope.data)) {
@@ -288,6 +333,18 @@ export async function fetchPublicCatalog(
     products: parseList(productsEnvelope, parseProduct, "产品"),
     cases: parseList(casesEnvelope, parseCaseStudy, "案例"),
   };
+}
+
+export async function fetchPublicRecommendations(
+  cardSlug: string,
+  signal?: AbortSignal,
+): Promise<PublicRecommendation[]> {
+  const envelope = await publicRequestJson(
+    `/public/cards/${encodeURIComponent(cardSlug.trim())}/recommendations?limit=4`,
+    { method: "GET", headers: { Accept: "application/json" } },
+    signal,
+  );
+  return parseList(envelope, parseRecommendation, "推荐内容");
 }
 
 export async function fetchPublicProduct(

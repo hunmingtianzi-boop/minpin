@@ -140,6 +140,9 @@ class RetrievalQuery:
     rrf_k: int = 60
     vector_weight: float = 1.0
     lexical_weight: float = 1.0
+    # Public chat always supplies a card.  None preserves compatibility for
+    # offline evaluation jobs that intentionally operate at company scope.
+    card_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,6 +163,7 @@ class RAGRequest:
     top_k: int | None = None
     history: tuple[ChatMessage, ...] = ()
     forbidden_topics: tuple[ForbiddenTopicPolicy, ...] = ()
+    card_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

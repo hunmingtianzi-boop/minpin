@@ -10,7 +10,9 @@ from app.api.catalog_schemas import (
     PublicProductEnvelope,
     PublicProductListEnvelope,
 )
+from app.api.enterprise_schemas import PublicRecommendationEnvelope
 from app.services.catalog_store import CatalogStore
+from app.services.enterprise_content_store import EnterpriseContentStore
 
 router = APIRouter(prefix="/public/cards/{slug}", tags=["Public Catalog"])
 CardSlug = Annotated[
@@ -28,6 +30,34 @@ def _store(request: Request) -> CatalogStore:
     if override is not None:
         return override
     return CatalogStore(request.app.state.session_factory)
+
+
+def _enterprise_store(request: Request) -> EnterpriseContentStore:
+    override = getattr(request.app.state, "enterprise_content_store", None)
+    return (
+        override
+        if override is not None
+        else EnterpriseContentStore(request.app.state.session_factory)
+    )
+
+
+@router.get(
+    "/recommendations",
+    response_model=PublicRecommendationEnvelope,
+    operation_id="listPublicCardRecommendations",
+)
+async def list_public_recommendations(
+    slug: CardSlug,
+    request: Request,
+    q: Annotated[str | None, Query(min_length=1, max_length=300)] = None,
+    limit: Annotated[int, Query(ge=1, le=20)] = 6,
+) -> PublicRecommendationEnvelope:
+    """Public, evidence-backed recommendations; no profile data is exposed."""
+    return PublicRecommendationEnvelope(
+        data=await _enterprise_store(request).public_recommendations(
+            card_slug=slug, query=q, limit=limit
+        )
+    )
 
 
 @router.get(

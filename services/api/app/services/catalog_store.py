@@ -42,6 +42,7 @@ from app.db.models import (
 )
 from app.db.session import resolve_public_card_scope, set_rls_context
 from app.services.audit import append_audit
+from app.services.enterprise_content_store import effective_overrides
 
 _CARD_SLUG_ATTEMPTS = 8
 
@@ -932,19 +933,23 @@ class CatalogStore:
                 tenant_id=scope.tenant_id,
                 company_id=scope.company_id,
             )
-            total = int(
-                await session.scalar(select(func.count()).select_from(Product).where(*filters)) or 0
-            )
             rows = (
                 await session.scalars(
                     select(Product)
                     .where(*filters)
                     .order_by(Product.sort_order, Product.published_at.desc(), Product.id)
-                    .limit(limit)
-                    .offset(offset)
                 )
             ).all()
-            return [_public_product_record(row) for row in rows], total
+            overrides = await effective_overrides(
+                session, scope=scope, resource_type="product", resource_ids=[row.id for row in rows]
+            )
+            records = [
+                _public_product_record(row, overrides[row.id].custom_display)
+                for row in rows
+                if overrides[row.id].visible
+            ]
+            records.sort(key=lambda item: (item.sort_order, item.published_at, item.slug))
+            return records[offset : offset + limit], len(records)
 
     async def get_public_product(self, *, card_slug: str, product_slug: str) -> PublicProductRecord:
         async with self._sessions() as session, session.begin():
@@ -963,7 +968,14 @@ class CatalogStore:
             )
             if product is None:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "产品不存在或尚未公开")
-            return _public_product_record(product)
+            resolved = (
+                await effective_overrides(
+                    session, scope=scope, resource_type="product", resource_ids=[product.id]
+                )
+            )[product.id]
+            if not resolved.visible:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "产品不存在或尚未公开")
+            return _public_product_record(product, resolved.custom_display)
 
     async def list_public_case_studies(
         self,
@@ -981,20 +993,26 @@ class CatalogStore:
                 tenant_id=scope.tenant_id,
                 company_id=scope.company_id,
             )
-            total = int(
-                await session.scalar(select(func.count()).select_from(CaseStudy).where(*filters))
-                or 0
-            )
             rows = (
                 await session.scalars(
                     select(CaseStudy)
                     .where(*filters)
                     .order_by(CaseStudy.sort_order, CaseStudy.published_at.desc(), CaseStudy.id)
-                    .limit(limit)
-                    .offset(offset)
                 )
             ).all()
-            return [_public_case_study_record(row) for row in rows], total
+            overrides = await effective_overrides(
+                session,
+                scope=scope,
+                resource_type="case_study",
+                resource_ids=[row.id for row in rows],
+            )
+            records = [
+                _public_case_study_record(row, overrides[row.id].custom_display)
+                for row in rows
+                if overrides[row.id].visible
+            ]
+            records.sort(key=lambda item: (item.sort_order, item.published_at, item.slug))
+            return records[offset : offset + limit], len(records)
 
     async def get_public_case_study(
         self, *, card_slug: str, case_study_slug: str
@@ -1015,7 +1033,14 @@ class CatalogStore:
             )
             if case_study is None:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "案例不存在或尚未公开")
-            return _public_case_study_record(case_study)
+            resolved = (
+                await effective_overrides(
+                    session, scope=scope, resource_type="case_study", resource_ids=[case_study.id]
+                )
+            )[case_study.id]
+            if not resolved.visible:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "案例不存在或尚未公开")
+            return _public_case_study_record(case_study, resolved.custom_display)
 
     async def _set_scope(self, session: AsyncSession, scope: CatalogScope) -> None:
         await set_rls_context(
@@ -1297,36 +1322,46 @@ def _forbidden_topic_record(topic: ForbiddenTopic) -> ForbiddenTopicRecord:
     )
 
 
-def _public_product_record(product: Product) -> PublicProductRecord:
+def _public_product_record(
+    product: Product, display: dict[str, Any] | None = None
+) -> PublicProductRecord:
     if product.published_at is None:
         raise RuntimeError("public product is missing published_at")
+    custom = display or {}
     return PublicProductRecord(
         slug=product.slug,
-        name=product.name,
+        name=str(custom.get("title") or product.name),
         category=product.category,
-        summary=product.summary,
+        summary=str(custom.get("summary") or product.summary),
         detail=product.detail,
         audience=product.audience,
         price_boundary=product.price_boundary,
-        image_url=product.image_url,
-        sort_order=product.sort_order,
+        image_url=str(custom.get("image_url") or product.image_url)
+        if (custom.get("image_url") or product.image_url)
+        else None,
+        sort_order=int(custom.get("sort_order", product.sort_order)),
         published_at=product.published_at,
     )
 
 
-def _public_case_study_record(case_study: CaseStudy) -> PublicCaseStudyRecord:
+def _public_case_study_record(
+    case_study: CaseStudy, display: dict[str, Any] | None = None
+) -> PublicCaseStudyRecord:
     if case_study.published_at is None:
         raise RuntimeError("public case study is missing published_at")
+    custom = display or {}
     return PublicCaseStudyRecord(
         slug=case_study.slug,
-        title=case_study.title,
+        title=str(custom.get("title") or case_study.title),
         industry=case_study.industry,
         background=case_study.background,
         solution=case_study.solution,
         result=case_study.result,
         client_display_name=case_study.client_display_name,
-        image_url=case_study.image_url,
-        sort_order=case_study.sort_order,
+        image_url=str(custom.get("image_url") or case_study.image_url)
+        if (custom.get("image_url") or case_study.image_url)
+        else None,
+        sort_order=int(custom.get("sort_order", case_study.sort_order)),
         published_at=case_study.published_at,
     )
 

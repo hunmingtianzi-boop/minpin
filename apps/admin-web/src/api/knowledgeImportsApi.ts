@@ -16,15 +16,49 @@ export type KnowledgeImportItemStatus =
   | "failed"
   | "dead_letter";
 
+export type KnowledgeImportSourceType =
+  | "pdf"
+  | "docx"
+  | "pptx"
+  | "xlsx"
+  | "csv"
+  | "txt"
+  | "md"
+  | "html"
+  | "htm"
+  | "png"
+  | "jpg"
+  | "jpeg"
+  | "webp"
+  | "tiff"
+  | "bmp";
+
+/**
+ * Individual pipeline stages are deliberately optional for compatibility with
+ * the original import endpoint. Once available they distinguish extraction,
+ * indexing and publication rather than treating a completed worker job as a
+ * published knowledge item.
+ */
+export type KnowledgeImportStageStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "skipped";
+
 export type KnowledgeImportItem = {
   id: string;
   fileName: string;
-  sourceType: "pdf" | "docx" | "csv";
+  sourceType: KnowledgeImportSourceType;
   status: KnowledgeImportItemStatus;
   rowNumber?: number;
   documentId?: string;
   versionId?: string;
   errorCode?: string;
+  parseStatus?: KnowledgeImportStageStatus;
+  indexStatus?: KnowledgeImportStageStatus;
+  publishStatus?: KnowledgeImportStageStatus;
+  publishedAt?: string;
   createdAt: string;
   completedAt?: string;
 };
@@ -36,6 +70,7 @@ export type KnowledgeImportBatch = {
   pendingItems: number;
   succeededItems: number;
   failedItems: number;
+  autoPublish: boolean;
   createdAt: string;
   completedAt?: string;
   items: KnowledgeImportItem[];
@@ -80,6 +115,19 @@ const batchStatuses = new Set<KnowledgeImportBatchStatus>([
 const itemStatuses = new Set<KnowledgeImportItemStatus>([
   "pending", "processing", "completed", "failed", "dead_letter",
 ]);
+const sourceTypes = new Set<KnowledgeImportSourceType>([
+  "pdf", "docx", "pptx", "xlsx", "csv", "txt", "md", "html", "htm",
+  "png", "jpg", "jpeg", "webp", "tiff", "bmp",
+]);
+const stageStatuses = new Set<KnowledgeImportStageStatus>([
+  "pending", "processing", "completed", "failed", "skipped",
+]);
+
+function optionalStageStatus(value: unknown): KnowledgeImportStageStatus | undefined {
+  return typeof value === "string" && stageStatuses.has(value as KnowledgeImportStageStatus)
+    ? value as KnowledgeImportStageStatus
+    : undefined;
+}
 
 function normalizeItem(value: unknown): KnowledgeImportItem {
   if (!isRecord(value)) {
@@ -87,18 +135,22 @@ function normalizeItem(value: unknown): KnowledgeImportItem {
   }
   const status = requiredString(value.status, "item.status") as KnowledgeImportItemStatus;
   const sourceType = requiredString(value.source_type, "item.source_type");
-  if (!itemStatuses.has(status) || !["pdf", "docx", "csv"].includes(sourceType)) {
+  if (!itemStatuses.has(status) || !sourceTypes.has(sourceType as KnowledgeImportSourceType)) {
     throw new ApiError("知识导入文件状态或类型无法识别。", { code: "INVALID_API_RESPONSE" });
   }
   return {
     id: requiredString(value.id, "item.id"),
     fileName: requiredString(value.file_name, "item.file_name"),
-    sourceType: sourceType as KnowledgeImportItem["sourceType"],
+    sourceType: sourceType as KnowledgeImportSourceType,
     status,
     rowNumber: typeof value.row_number === "number" ? value.row_number : undefined,
     documentId: optionalString(value.document_id),
     versionId: optionalString(value.version_id),
     errorCode: optionalString(value.error_code),
+    parseStatus: optionalStageStatus(value.parse_status),
+    indexStatus: optionalStageStatus(value.index_status),
+    publishStatus: optionalStageStatus(value.publish_status),
+    publishedAt: optionalString(value.published_at),
     createdAt: requiredString(value.created_at, "item.created_at"),
     completedAt: optionalString(value.completed_at),
   };
@@ -122,6 +174,7 @@ function normalizeBatch(value: unknown): KnowledgeImportBatch {
     pendingItems: requiredCount(value.pending_items, "pending_items"),
     succeededItems: requiredCount(value.succeeded_items, "succeeded_items"),
     failedItems: requiredCount(value.failed_items, "failed_items"),
+    autoPublish: value.auto_publish === true,
     createdAt: requiredString(value.created_at, "created_at"),
     completedAt: optionalString(value.completed_at),
     items: (value.items ?? []).map(normalizeItem),
@@ -130,9 +183,16 @@ function normalizeBatch(value: unknown): KnowledgeImportBatch {
 
 export function createKnowledgeImportsApi(client: ApiClient = apiClient) {
   return {
-    async create(files: File[]): Promise<KnowledgeImportBatch> {
+    async create(
+      files: File[],
+      options: { autoPublish?: boolean } = {},
+    ): Promise<KnowledgeImportBatch> {
       const body = new FormData();
       files.forEach((file) => body.append("files", file, file.name));
+      // Omit the default so older API deployments remain usable while the
+      // server-side setting is rolling out. The server must still enforce that
+      // only an enterprise administrator may enable it.
+      if (options.autoPublish) body.append("auto_publish", "true");
       return normalizeBatch(unwrapData(await client.postForm("/admin/knowledge/imports", body)));
     },
 

@@ -5,6 +5,8 @@ import zipfile
 
 import pytest
 from docx import Document
+from openpyxl import Workbook
+from pptx import Presentation
 from pypdf import PdfWriter
 
 from app.services.knowledge_import import (
@@ -23,6 +25,24 @@ def _docx_bytes(text: str) -> bytes:
     return buffer.getvalue()
 
 
+def _pptx_bytes(text: str) -> bytes:
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[1]).shapes.title.text = text
+    buffer = io.BytesIO()
+    presentation.save(buffer)
+    return buffer.getvalue()
+
+
+def _xlsx_bytes() -> bytes:
+    workbook = Workbook()
+    workbook.active.title = "产品"
+    workbook.active.append(["名称", "说明"])
+    workbook.active.append(["数智名片", "企业展示"])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    return buffer.getvalue()
+
+
 def test_csv_import_produces_drafts_and_rejects_formula_injection() -> None:
     payload = "title,raw_text,visibility\n产品说明,正文内容,internal\n".encode()
     assert validate_upload("docs.csv", "text/csv", payload) == "csv"
@@ -32,9 +52,11 @@ def test_csv_import_produces_drafts_and_rejects_formula_injection() -> None:
         parse_payload("csv", "docs.csv", b"title,raw_text\n=cmd,content\n")
 
 
-def test_csv_import_rejects_extra_columns_and_oversized_cells() -> None:
-    with pytest.raises(KnowledgeImportError, match="IMPORT_CSV_COLUMNS"):
-        parse_payload("csv", "docs.csv", b"title,raw_text\nA,content,unexpected\n")
+def test_csv_import_accepts_tabular_columns_and_rejects_oversized_cells() -> None:
+    draft = parse_payload("csv", "docs.csv", "title,raw_text,category\nA,content,产品\n".encode())[
+        0
+    ]
+    assert "category: 产品" in draft.raw_text
 
     oversized = b"raw_text\n" + (b"a" * 100_001) + b"\n"
     with pytest.raises(KnowledgeImportError, match="IMPORT_CSV_CELL_TOO_LARGE"):
@@ -78,6 +100,37 @@ def test_encrypted_pdf_and_mime_magic_mismatches_are_rejected() -> None:
         validate_upload("file.pdf", "text/plain", b"%PDF-1.7")
     with pytest.raises(KnowledgeImportError, match="IMPORT_MAGIC_MISMATCH"):
         validate_upload("file.pdf", "application/pdf", b"not-a-pdf")
+
+
+def test_office_and_html_formats_extract_text_without_network_access() -> None:
+    pptx = _pptx_bytes("企业介绍")
+    assert (
+        validate_upload(
+            "intro.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            pptx,
+        )
+        == "pptx"
+    )
+    assert "企业介绍" in parse_payload("pptx", "intro.pptx", pptx)[0].raw_text
+
+    xlsx = _xlsx_bytes()
+    assert (
+        validate_upload(
+            "catalog.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            xlsx,
+        )
+        == "xlsx"
+    )
+    assert "数智名片" in parse_payload("xlsx", "catalog.xlsx", xlsx)[0].raw_text
+
+    html = (
+        b"<h1>\xe4\xbc\x81\xe4\xb8\x9a</h1><script>ignore()</script><p>\xe4\xba\xa7\xe5\x93\x81</p>"
+    )
+    assert "企业" in parse_payload("html", "page.html", html)[0].raw_text
+    assert "产品" in parse_payload("html", "page.html", html)[0].raw_text
+    assert "ignore" not in parse_payload("html", "page.html", html)[0].raw_text
 
 
 @pytest.mark.parametrize("name", ["../file.csv", "folder/file.csv", "folder\\file.csv", ""])

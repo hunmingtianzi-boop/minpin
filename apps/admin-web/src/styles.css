@@ -673,6 +673,27 @@ a:hover {
   font-size: 13px;
 }
 
+.knowledge-import-autopublish {
+  display: grid;
+  gap: 5px;
+  max-width: 360px;
+  padding-left: 16px;
+  border-left: 1px solid var(--border);
+}
+
+.knowledge-import-autopublish > span,
+.knowledge-import-stages {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.knowledge-import-stages {
+  display: grid;
+  gap: 2px;
+  min-width: 156px;
+}
+
 .knowledge-import-detail {
   display: grid;
   gap: 12px;
@@ -798,6 +819,88 @@ a:hover {
 
 .catalog-row-actions {
   flex-wrap: wrap;
+}
+
+.inline-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  color: var(--colorNeutralForeground3);
+}
+
+.distribution-summary,
+.content-override-list,
+.override-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.distribution-options,
+.content-override-actions,
+.override-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.content-overrides-dialog {
+  width: min(920px, calc(100vw - 32px));
+}
+
+.content-override-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 10px;
+}
+
+.content-override-row > div:first-child {
+  min-width: 0;
+}
+
+.content-override-row strong,
+.content-override-row small,
+.content-override-row p {
+  display: block;
+}
+
+.content-override-row small,
+.content-override-row p {
+  color: var(--colorNeutralForeground3);
+}
+
+.content-override-row p {
+  margin: 5px 0;
+}
+
+.content-override-actions {
+  align-content: flex-start;
+  justify-content: flex-end;
+  min-width: 250px;
+}
+
+.content-override-mode {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mode-hidden { color: var(--colorPaletteRedForeground1); }
+.mode-custom { color: var(--colorPaletteDarkOrangeForeground2); }
+.mode-inherit { color: var(--colorPaletteGreenForeground1); }
+
+.override-history-row {
+  justify-content: space-between;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--colorNeutralStroke2);
+}
+
+@media (max-width: 720px) {
+  .content-override-row { flex-direction: column; }
+  .content-override-actions { justify-content: flex-start; min-width: 0; }
 }
 
 .catalog-editor-form {
@@ -1718,6 +1821,14 @@ a:hover {
   .knowledge-import-picker {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .knowledge-import-autopublish {
+    max-width: none;
+    padding-top: 12px;
+    padding-left: 0;
+    border-top: 1px solid var(--border);
+    border-left: 0;
   }
 
   .form-section-heading > span {

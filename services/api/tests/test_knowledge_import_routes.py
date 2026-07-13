@@ -70,7 +70,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
         yield test_client, store, principal
 
 
-def test_csv_upload_returns_accepted_batch_with_row_items(client) -> None:
+def test_csv_upload_is_encrypted_and_queued_without_request_thread_parsing(client) -> None:
     test_client, store, _ = client
     response = test_client.post(
         "/api/v1/admin/knowledge/imports",
@@ -83,8 +83,22 @@ def test_csv_upload_returns_accepted_batch_with_row_items(client) -> None:
         },
     )
     assert response.status_code == 202
-    assert response.json()["data"]["total_items"] == 2
-    assert len(store.calls[0][1]["items"]) == 2
+    assert response.json()["data"]["total_items"] == 1
+    assert len(store.calls[0][1]["items"]) == 1
+    queued = store.calls[0][1]["items"][0]
+    assert queued.source_type == "csv"
+    assert "正文一".encode() in queued.payload
+
+
+def test_upload_accepts_explicit_auto_publish_flag(client) -> None:
+    test_client, store, _ = client
+    response = test_client.post(
+        "/api/v1/admin/knowledge/imports",
+        data={"auto_publish": "true"},
+        files={"files": ("note.txt", "最新产品资料", "text/plain")},
+    )
+    assert response.status_code == 202
+    assert store.calls[0][1]["auto_publish"] is True
 
 
 def test_upload_rejects_unsupported_file_and_missing_permission(client) -> None:
