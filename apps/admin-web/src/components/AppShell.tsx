@@ -103,6 +103,17 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
   },
 ];
 
+const platformNavGroups: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: "平台运营",
+    items: [{ path: APP_PATHS.platformOverview, label: "运营概览", icon: Home24Regular, role: "platform_admin" }],
+  },
+  {
+    label: "企业入驻",
+    items: [{ path: APP_PATHS.platformEnterprises, label: "企业管理", icon: Building24Regular, permission: "platform.enterprise.manage", role: "platform_admin" }],
+  },
+];
+
 export function hasNavPermission(
   user: AdminUser | undefined,
   permission?: string,
@@ -114,9 +125,10 @@ export function hasNavPermission(
 function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   const pathname = usePathname();
   const auth = useAuth();
+  const groups = auth.user?.role === "platform_admin" ? platformNavGroups : navGroups;
   return (
-    <nav className="primary-nav" aria-label="管理工作台主导航">
-      {navGroups.map((group) => {
+    <nav className="primary-nav" aria-label={auth.user?.role === "platform_admin" ? "平台运营中心主导航" : "企业管理工作台主导航"}>
+      {groups.map((group) => {
         const visibleItems = group.items.filter(
           (item) =>
             (!item.role || auth.user?.role === item.role) &&
@@ -152,15 +164,15 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
   );
 }
 
-function Brand() {
+function Brand({ platform }: { platform?: boolean }) {
   return (
     <div className="shell-brand">
       <span className="shell-brand-mark" aria-hidden>
         CF
       </span>
       <div>
-        <strong>企业管理</strong>
-        <span>数智名片工作台</span>
+        <strong>{platform ? "平台运营" : "企业管理"}</strong>
+        <span>{platform ? "企业入驻控制台" : "数智名片工作台"}</span>
       </div>
     </div>
   );
@@ -169,11 +181,12 @@ function Brand() {
 export function AppShell({ children }: { children: ReactNode }) {
   const auth = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const isPlatform = auth.user?.role === "platform_admin";
 
   return (
-    <div className="app-shell">
+    <div className={isPlatform ? "app-shell platform-shell" : "app-shell"}>
       <aside className="shell-sidebar">
-        <Brand />
+        <Brand platform={isPlatform} />
         <Navigation />
         <div className="sidebar-footer">
           <span>已登录</span>
@@ -190,7 +203,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             aria-label="打开导航"
             onClick={() => setMobileOpen(true)}
           />
-          <div className="mobile-brand">企业管理</div>
+          <div className="mobile-brand">{isPlatform ? "平台运营" : "企业管理"}</div>
           <div className="topbar-user">
             <Avatar
               name={auth.user?.displayName || "管理员"}
@@ -232,7 +245,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               />
             }
           >
-            <Brand />
+            <Brand platform={isPlatform} />
           </DrawerHeaderTitle>
         </DrawerHeader>
         <DrawerBody>

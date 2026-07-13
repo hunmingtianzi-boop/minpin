@@ -93,6 +93,11 @@ const PlatformEnterprisesPage = lazy(() =>
     default: module.PlatformEnterprisesPage,
   })),
 );
+const PlatformOverviewPage = lazy(() =>
+  import("./pages/PlatformOverviewPage").then((module) => ({
+    default: module.PlatformOverviewPage,
+  })),
+);
 const MembersPage = lazy(() =>
   import("./pages/MembersPage").then((module) => ({
     default: module.MembersPage,
@@ -101,6 +106,8 @@ const MembersPage = lazy(() =>
 
 function CurrentPage() {
   const pathname = usePathname();
+  const auth = useAuth();
+  if (pathname === APP_PATHS.platformOverview) return <PlatformOverviewPage />;
   if (pathname === APP_PATHS.visits) return <VisitsPage />;
   if (pathname === APP_PATHS.visitorProfiles) return <VisitorProfilesPage />;
   if (pathname === APP_PATHS.conversations) return <ConversationsPage />;
@@ -118,7 +125,9 @@ function CurrentPage() {
   if (pathname === APP_PATHS.forbiddenTopics) return <ForbiddenTopicsPage />;
   if (pathname === APP_PATHS.knowledge) return <KnowledgePage />;
   if (pathname === APP_PATHS.platformEnterprises) return <PlatformEnterprisesPage />;
-  if (pathname === APP_PATHS.overview) return <OverviewPage />;
+  if (pathname === APP_PATHS.overview) {
+    return auth.user?.role === "platform_admin" ? <PlatformOverviewPage /> : <OverviewPage />;
+  }
 
   return (
     <main className="page-stack">
