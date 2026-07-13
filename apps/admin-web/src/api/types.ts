@@ -396,6 +396,18 @@ export type Conversation = {
   hasCurrentSummary: boolean;
 };
 
+export type OpportunityCandidate = {
+  conversationId: string;
+  cardId: string;
+  cardDisplayName: string;
+  visitorId: string;
+  question: string;
+  reason: string;
+  score: number;
+  hasConsentedLead: boolean;
+  lastActivityAt: string;
+};
+
 export type ConversationCitation = {
   id: string;
   chunkId: string;

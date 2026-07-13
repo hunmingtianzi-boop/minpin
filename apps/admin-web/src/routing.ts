@@ -5,6 +5,7 @@ export const APP_PATHS = {
   visits: "/visits",
   visitorProfiles: "/visitor-profiles",
   conversations: "/conversations",
+  opportunities: "/opportunities",
   leads: "/leads",
   exports: "/exports",
   knowledgeGaps: "/knowledge-gaps",

@@ -18,6 +18,7 @@ from app.api.workflow_schemas import (
     KnowledgeGapListEnvelope,
     NotificationEnvelope,
     NotificationListEnvelope,
+    OpportunityCandidateListEnvelope,
     SummaryEnvelope,
     UpdateKnowledgeGapRequest,
     VisitEventEnvelope,
@@ -204,6 +205,26 @@ async def list_conversations(
         visitor_id=visitor_id,
     )
     return ConversationListEnvelope(data=records, total=total, limit=limit, offset=offset)
+
+
+@router.get(
+    "/admin/opportunities",
+    response_model=OpportunityCandidateListEnvelope,
+    operation_id="listAdminOpportunities",
+)
+async def list_opportunities(
+    request: Request,
+    principal: StaffDependency,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> OpportunityCandidateListEnvelope:
+    _require_access(principal, "conversations.read", allow_card_owner=True)
+    records, total = await _store(request).list_opportunities(
+        scope=_scope(principal), limit=limit, offset=offset
+    )
+    return OpportunityCandidateListEnvelope(
+        data=records, total=total, limit=limit, offset=offset
+    )
 
 
 @router.get(

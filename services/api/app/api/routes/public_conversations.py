@@ -441,7 +441,7 @@ async def _answer_events(
         MessageCompleted(
             message_id=answer.message_id,
             finish_reason=answer.finish_reason,
-            lead_prompt=False,
+            lead_prompt=answer.lead_prompt,
         ).model_dump(mode="json"),
     )
 

@@ -28,6 +28,11 @@ const ConversationsPage = lazy(() =>
     default: module.ConversationsPage,
   })),
 );
+const OpportunitiesPage = lazy(() =>
+  import("./pages/OpportunitiesPage").then((module) => ({
+    default: module.OpportunitiesPage,
+  })),
+);
 const LeadsPage = lazy(() =>
   import("./pages/LeadsPage").then((module) => ({
     default: module.LeadsPage,
@@ -111,6 +116,7 @@ function CurrentPage() {
   if (pathname === APP_PATHS.visits) return <VisitsPage />;
   if (pathname === APP_PATHS.visitorProfiles) return <VisitorProfilesPage />;
   if (pathname === APP_PATHS.conversations) return <ConversationsPage />;
+  if (pathname === APP_PATHS.opportunities) return <OpportunitiesPage />;
   if (pathname === APP_PATHS.leads) return <LeadsPage />;
   if (pathname === APP_PATHS.exports) return <ExportsPage />;
   if (pathname === APP_PATHS.knowledgeGaps) return <KnowledgeGapsPage />;

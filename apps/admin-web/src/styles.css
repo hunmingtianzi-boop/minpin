@@ -898,6 +898,26 @@ a:hover {
   text-align: right;
 }
 
+.subtle-note {
+  margin: 0 0 16px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.inline-action-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.inline-action-link:hover {
+  text-decoration: underline;
+}
+
 .catalog-actions-column {
   width: 330px;
   text-align: right;

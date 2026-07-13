@@ -234,6 +234,27 @@ class ConversationListEnvelope(WorkflowModel):
     offset: int = Field(ge=0)
 
 
+class OpportunityCandidateView(WorkflowModel):
+    """A high-intent anonymous conversation, not a consented sales lead."""
+
+    conversation_id: uuid.UUID
+    card_id: uuid.UUID
+    card_display_name: str
+    visitor_id: uuid.UUID
+    question: str
+    reason: str
+    score: float = Field(ge=0, le=1)
+    has_consented_lead: bool
+    last_activity_at: datetime
+
+
+class OpportunityCandidateListEnvelope(WorkflowModel):
+    data: list[OpportunityCandidateView]
+    total: int = Field(ge=0)
+    limit: int = Field(ge=1)
+    offset: int = Field(ge=0)
+
+
 class CitationView(WorkflowModel):
     id: uuid.UUID
     chunk_id: uuid.UUID

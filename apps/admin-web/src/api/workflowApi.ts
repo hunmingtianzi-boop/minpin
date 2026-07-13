@@ -22,6 +22,7 @@ import type {
   LeadPriority,
   LeadStatus,
   NotificationList,
+  OpportunityCandidate,
   PageResult,
   PrivacyRequest,
   PrivacyRequestStatus,
@@ -208,6 +209,21 @@ function normalizeConversation(value: unknown): Conversation {
     lastActivityAt: requiredString(raw.last_activity_at, "对话活跃时间"),
     messageCount: numberValue(raw.message_count),
     hasCurrentSummary: raw.has_current_summary === true,
+  };
+}
+
+function normalizeOpportunity(value: unknown): OpportunityCandidate {
+  const raw = isRecord(value) ? value : invalid("潜在机会");
+  return {
+    conversationId: requiredString(raw.conversation_id, "机会 conversation_id"),
+    cardId: requiredString(raw.card_id, "机会 card_id"),
+    cardDisplayName: stringValue(raw.card_display_name, "未命名名片"),
+    visitorId: requiredString(raw.visitor_id, "机会 visitor_id"),
+    question: requiredString(raw.question, "机会问题"),
+    reason: stringValue(raw.reason, "高意向提问"),
+    score: numberValue(raw.score),
+    hasConsentedLead: raw.has_consented_lead === true,
+    lastActivityAt: requiredString(raw.last_activity_at, "机会最后活跃时间"),
   };
 }
 
@@ -463,6 +479,22 @@ export function createWorkflowApi(client: ApiClient) {
     async getConversation(id: string): Promise<ConversationDetail> {
       return normalizeConversationDetail(
         await client.get(`/admin/conversations/${encodeURIComponent(id)}`),
+      );
+    },
+
+    async listOpportunities(options: {
+      limit?: number;
+      offset?: number;
+    } = {}): Promise<PageResult<OpportunityCandidate>> {
+      return normalizePage(
+        await client.get(
+          `/admin/opportunities${query({
+            limit: options.limit ?? 20,
+            offset: options.offset ?? 0,
+          })}`,
+        ),
+        "潜在机会列表",
+        normalizeOpportunity,
       );
     },
 

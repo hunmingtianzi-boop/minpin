@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, func, select, text, update
+from sqlalchemy import exists, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -22,6 +22,7 @@ from app.api.workflow_schemas import (
     KnowledgeGapView,
     MessageView,
     NotificationView,
+    OpportunityCandidateView,
     SummaryDraft,
     SummaryView,
     VisitEventRequest,
@@ -48,6 +49,7 @@ from app.db.models import (
     Membership,
     Message,
     MessageCitation,
+    MessageRole,
     MessageStatus,
     ModelConfig,
     Notification,
@@ -74,6 +76,18 @@ from app.services.summary_provider import (
 )
 
 _LLM_SECRET_REFERENCE = "environment-variable:LLM_API_KEY"  # noqa: S105 - reference, not secret
+_OPPORTUNITY_TERMS = (
+    "报价",
+    "预算",
+    "采购",
+    "合作",
+    "演示",
+    "联系",
+    "方案",
+    "price",
+    "budget",
+    "demo",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -852,6 +866,82 @@ class WorkflowStore:
                 ],
                 current_summary=self._summary_view(summary) if summary else None,
             )
+
+    async def list_opportunities(
+        self,
+        *,
+        scope: WorkflowScope,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[OpportunityCandidateView], int]:
+        """List detectable high-intent conversations without manufacturing a lead.
+
+        A person only becomes a lead after voluntarily submitting the contact form.
+        Until then the operator receives an anonymous, auditable opportunity signal.
+        """
+
+        async with self._sessions() as session, session.begin():
+            await self._set_scope(session, scope)
+            term_match = or_(*[Message.content.ilike(f"%{term}%") for term in _OPPORTUNITY_TERMS])
+            high_intent_question = (
+                select(Message.content)
+                .where(
+                    Message.tenant_id == scope.tenant_id,
+                    Message.company_id == scope.company_id,
+                    Message.conversation_id == Conversation.id,
+                    Message.role == MessageRole.USER,
+                    term_match,
+                )
+                .order_by(Message.created_at.desc(), Message.id.desc())
+                .limit(1)
+                .correlate(Conversation)
+                .scalar_subquery()
+            )
+            has_consented_lead = exists().where(
+                Lead.tenant_id == scope.tenant_id,
+                Lead.company_id == scope.company_id,
+                Lead.conversation_id == Conversation.id,
+            )
+            filters = [
+                Conversation.tenant_id == scope.tenant_id,
+                Conversation.company_id == scope.company_id,
+                high_intent_question.is_not(None),
+                *self._card_filters(scope),
+            ]
+            base = select(Conversation).join(Card, Card.id == Conversation.card_id).where(*filters)
+            total = int(
+                await session.scalar(select(func.count()).select_from(base.subquery())) or 0
+            )
+            rows = (
+                await session.execute(
+                    select(
+                        Conversation,
+                        Card.display_name,
+                        high_intent_question.label("question"),
+                        has_consented_lead.label("has_consented_lead"),
+                    )
+                    .join(Card, Card.id == Conversation.card_id)
+                    .where(*filters)
+                    .order_by(Conversation.last_activity_at.desc(), Conversation.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            ).all()
+            return [
+                OpportunityCandidateView(
+                    conversation_id=conversation.id,
+                    card_id=conversation.card_id,
+                    card_display_name=display_name,
+                    visitor_id=conversation.visitor_id,
+                    question=question,
+                    reason=_opportunity_reason(question),
+                    score=_opportunity_score(question),
+                    has_consented_lead=bool(consented_lead),
+                    last_activity_at=conversation.last_activity_at,
+                )
+                for conversation, display_name, question, consented_lead in rows
+                if question
+            ], total
 
     async def generate_summary(
         self,
@@ -1867,6 +1957,24 @@ class WorkflowStore:
             read_at=notification.read_at,
             created_at=notification.created_at,
         )
+
+
+def _opportunity_score(question: str) -> float:
+    normalized = question.casefold()
+    if any(term in normalized for term in ("报价", "预算", "采购", "price", "budget")):
+        return 0.9
+    if any(term in normalized for term in ("演示", "demo", "联系")):
+        return 0.82
+    return 0.72
+
+
+def _opportunity_reason(question: str) -> str:
+    normalized = question.casefold()
+    if any(term in normalized for term in ("报价", "预算", "采购", "price", "budget")):
+        return "商业决策信号（报价、预算或采购）"
+    if any(term in normalized for term in ("演示", "demo", "联系")):
+        return "跟进信号（演示或联系）"
+    return "合作意向信号"
 
 
 def _profile_strength(value: str | None) -> float:

@@ -111,6 +111,7 @@ class StoredAnswer:
     text: str
     finish_reason: Literal["stop", "refusal", "length", "content_filter"]
     citations: tuple[StoredCitation, ...]
+    lead_prompt: bool = False
 
 
 def canonical_request_hash(action: str, payload: dict[str, Any]) -> str:
@@ -981,7 +982,10 @@ class PublicStore:
                 },
             )
 
-            if result.refusal and result.refusal.code == RefusalCode.INSUFFICIENT_EVIDENCE:
+            # Every answer that cannot be grounded should become an auditable
+            # knowledge-operations item. Policy refusals are deliberately not
+            # knowledge gaps: adding material must never bypass a forbidden-topic rule.
+            if result.refusal and result.refusal.code != RefusalCode.FORBIDDEN_TOPIC:
                 await self._upsert_knowledge_gap(
                     session,
                     principal=principal,
@@ -996,6 +1000,7 @@ class PublicStore:
                 text=visible_text,
                 finish_reason=finish_reason,
                 citations=tuple(stored_citations),
+                lead_prompt=result.refusal is None and _looks_like_opportunity(prepared.question),
             )
 
     async def persist_ai_failure(
@@ -1013,6 +1018,14 @@ class PublicStore:
             if assistant is not None and assistant.status == MessageStatus.PENDING:
                 assistant.status = MessageStatus.FAILED
                 assistant.content = ""
+                await self._upsert_knowledge_gap(
+                    session,
+                    principal=principal,
+                    conversation_id=prepared.conversation_id,
+                    question=prepared.question,
+                    reason=f"runtime_{error_code[:60].casefold()}",
+                    trace_id=None,
+                )
             claim = (
                 await session.execute(
                     select(IdempotencyKey)
@@ -1497,6 +1510,25 @@ def _policy_version(card: Card, scope: ConsentScope) -> str:
             policies.get("profile_personalization") or "profile-personalization-v1"
         )
     return str(policies.get("lead_consent") or "lead-consent-v1")
+
+
+def _looks_like_opportunity(question: str) -> bool:
+    normalized = question.casefold()
+    return any(
+        marker in normalized
+        for marker in (
+            "报价",
+            "预算",
+            "采购",
+            "合作",
+            "演示",
+            "联系",
+            "方案",
+            "price",
+            "budget",
+            "demo",
+        )
+    )
 
 
 def _company_profile_policy(company: Company) -> str:
