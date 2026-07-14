@@ -57,7 +57,7 @@ services:
       dockerfile: services/api/Dockerfile
     restart: "no"
     environment: &api-environment
-      APP_ENV: local
+      APP_ENV: ${APP_ENV:-local}
       APP_NAME: cf-ai-card
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cf_ai_card}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
       REDIS_URL: redis://redis:6379/0
@@ -136,6 +136,7 @@ services:
       dockerfile: apps/card-web/Dockerfile
       args:
         VITE_API_BASE_URL: /api/v1
+        VITE_PUBLIC_BASE: ${CARD_WEB_PUBLIC_BASE:-/}
     restart: unless-stopped
     depends_on:
       api:

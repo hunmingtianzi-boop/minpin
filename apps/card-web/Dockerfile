@@ -2,6 +2,7 @@ FROM node:24.18.0-alpine3.24 AS build
 
 ARG PNPM_VERSION=11.7.0
 ARG VITE_API_BASE_URL=/api/v1
+ARG VITE_PUBLIC_BASE=/
 
 WORKDIR /workspace
 RUN corepack enable && corepack prepare "pnpm@${PNPM_VERSION}" --activate
@@ -13,7 +14,8 @@ RUN pnpm install --frozen-lockfile --filter @cf/card-web...
 
 COPY apps/card-web apps/card-web
 ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
-RUN pnpm --filter @cf/card-web build
+ENV VITE_PUBLIC_BASE=${VITE_PUBLIC_BASE}
+RUN pnpm --filter @cf/card-web exec vite build --base "${VITE_PUBLIC_BASE}"
 
 FROM nginx:1.31.2-alpine3.23 AS runtime
 COPY apps/card-web/nginx.conf /etc/nginx/nginx.conf
