@@ -8,11 +8,14 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-cf_ai_card}
       POSTGRES_USER: ${POSTGRES_USER:-cf_ai_card}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-local-only}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-change-me-app-local-only}
+      WORKER_DB_PASSWORD: ${WORKER_DB_PASSWORD:-change-me-worker-local-only}
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/001_extensions.sql:/docker-entrypoint-initdb.d/001_extensions.sql:ro
+      - ./postgres/002_application_roles.sh:/docker-entrypoint-initdb.d/002_application_roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
