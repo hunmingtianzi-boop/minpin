@@ -13,7 +13,9 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # PostgreSQL 18 images store the cluster in a versioned subdirectory.
+      # Mount the parent directory so first boot and future pg_upgrade flows work.
+      - postgres_data:/var/lib/postgresql
       - ./postgres/001_extensions.sql:/docker-entrypoint-initdb.d/001_extensions.sql:ro
       - ./postgres/002_application_roles.sh:/docker-entrypoint-initdb.d/002_application_roles.sh:ro
     healthcheck:
