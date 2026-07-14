@@ -58,6 +58,8 @@ services:
     build:
       context: ..
       dockerfile: services/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: "no"
     environment: &api-environment
       APP_ENV: ${APP_ENV:-local}
@@ -90,6 +92,8 @@ services:
     build:
       context: ..
       dockerfile: services/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: "no"
     environment:
       <<: *api-environment
@@ -110,6 +114,8 @@ services:
     build:
       context: ..
       dockerfile: services/api/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
     environment:
       <<: *api-environment
@@ -191,6 +197,8 @@ services:
     build:
       context: ..
       dockerfile: services/worker/Dockerfile
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
     environment:
       <<: *api-environment
