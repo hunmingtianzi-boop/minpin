@@ -7,7 +7,7 @@ set -eu
 # `format(... %L ...)` safely quotes the environment-injected password.  This
 # keeps the application and Worker principals least-privileged without baking
 # development passwords into a production image or database volume.
-psql -v ON_ERROR_STOP=1 \
+psql -U "${POSTGRES_USER:-postgres}" -v ON_ERROR_STOP=1 \
   --set=app_db_password="$APP_DB_PASSWORD" \
   --set=worker_db_password="$WORKER_DB_PASSWORD" <<'SQL'
 SELECT format(
