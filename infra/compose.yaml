@@ -99,7 +99,9 @@ services:
     restart: "no"
     environment:
       <<: *api-environment
-      DATABASE_URL: postgresql+asyncpg://${APP_DB_USER:-cf_ai_card_app}:${APP_DB_PASSWORD:-change-me-app-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
+      # Initial seed writes tenant/company records before the restricted app
+      # principal receives its row-level grants. It runs once after migration.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cf_ai_card}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
     depends_on:
       migrate:
         condition: service_completed_successfully
