@@ -138,7 +138,7 @@ services:
       context: ..
       dockerfile: apps/card-web/Dockerfile
       args:
-        VITE_API_BASE_URL: /api/v1
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
         VITE_PUBLIC_BASE: ${CARD_WEB_PUBLIC_BASE:-/}
     restart: unless-stopped
     depends_on:
