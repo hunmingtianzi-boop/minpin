@@ -22,7 +22,11 @@ services:
     environment: *production-environment
 
   seed:
-    environment: *production-environment
+    environment:
+      <<: *production-environment
+      ADMIN_BOOTSTRAP_TENANT_SLUG: ${ADMIN_BOOTSTRAP_TENANT_SLUG:-}
+      ADMIN_BOOTSTRAP_ACCOUNT: ${ADMIN_BOOTSTRAP_ACCOUNT:-}
+      ADMIN_BOOTSTRAP_PASSWORD: ${ADMIN_BOOTSTRAP_PASSWORD:-}
 
   api:
     environment:
