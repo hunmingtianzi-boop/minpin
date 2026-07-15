@@ -141,6 +141,13 @@ services:
 
   worker:
     ports: !reset []
+    # Celery/billiard closes every descriptor up to RLIMIT_NOFILE when it
+    # forks. Some cloud Docker hosts expose a limit near one billion, which
+    # leaves the worker child burning a CPU core for hours during startup.
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       <<: *production-environment
       DATABASE_URL: postgresql+asyncpg://${WORKER_DB_USER:?required}:${WORKER_DB_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
