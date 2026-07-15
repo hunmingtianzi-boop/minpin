@@ -8,6 +8,9 @@ ROOT = Path(__file__).resolve().parents[3]
 MIGRATION = ROOT / "services/api/migrations/versions/20260711_0007_worker_outbox.py"
 SCHEDULED_MIGRATION = ROOT / "services/api/migrations/versions/20260712_0011_scheduled_publish.py"
 IMPORT_MIGRATION = ROOT / "services/api/migrations/versions/20260712_0012_knowledge_imports.py"
+ROLE_GRANT_MIGRATION = (
+    ROOT / "services/api/migrations/versions/20260715_0015_repair_database_role_grants.py"
+)
 
 
 def test_backoff_is_exponential_and_capped() -> None:
@@ -55,4 +58,15 @@ def test_knowledge_import_claim_is_leased_scoped_and_least_privilege() -> None:
     assert "claim_knowledge_import_items" in sql
     assert "payload_ciphertext" in sql
     assert "cf_ai_card_worker" in sql
+    assert "bypassrls" not in sql
+
+
+def test_role_repair_migration_restores_app_and_worker_least_privileges() -> None:
+    sql = ROLE_GRANT_MIGRATION.read_text(encoding="utf-8").lower()
+    assert "grant usage on schema public, app to cf_ai_card_app" in sql
+    assert "grant usage on schema public, app to cf_ai_card_worker" in sql
+    assert "app.claim_outbox_events(text, integer, integer)" in sql
+    assert "app.claim_knowledge_import_items(text, integer, integer)" in sql
+    assert "grant select, insert on lead_followups" in sql
+    assert "grant insert on security_events" in sql
     assert "bypassrls" not in sql

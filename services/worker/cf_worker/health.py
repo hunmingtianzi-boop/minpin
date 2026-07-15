@@ -28,7 +28,23 @@ async def readiness_probe(settings: WorkerSettings) -> tuple[bool, dict[str, Any
         )
         try:
             async with engine.connect() as connection:
-                return bool(await connection.scalar(text("SELECT 1")))
+                return bool(
+                    await connection.scalar(
+                        text(
+                            """
+                            SELECT has_schema_privilege(current_user, 'app', 'USAGE')
+                               AND has_function_privilege(
+                                 current_user,
+                                 'app.claim_outbox_events(text,integer,integer)',
+                                 'EXECUTE'
+                               )
+                               AND has_table_privilege(
+                                 current_user, 'outbox_events', 'SELECT'
+                               )
+                            """
+                        )
+                    )
+                )
         finally:
             await engine.dispose()
 

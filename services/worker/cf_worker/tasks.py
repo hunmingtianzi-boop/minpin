@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 import uuid
+from collections.abc import Awaitable, Callable
 
 from app.core.redaction import redact_sensitive_text
 from celery import shared_task
 from celery.utils.log import get_task_logger
+from sqlalchemy.exc import SQLAlchemyError
 
 from cf_worker.config import get_worker_settings
 from cf_worker.domain import ClaimedEvent
@@ -17,6 +20,28 @@ from cf_worker.scheduled_publish import ScheduledPublishExecutor
 from cf_worker.service import WorkerService
 
 logger = get_task_logger(__name__)
+
+_DATABASE_FAILURE_COOLDOWN_SECONDS = 30.0
+_database_paused_until = 0.0
+
+
+def _run_database_poll(task_name: str, run: Callable[[], Awaitable[int]]) -> int:
+    """Rate-limit infrastructure failures shared by all periodic DB pollers."""
+    global _database_paused_until
+    now = time.monotonic()
+    if now < _database_paused_until:
+        return 0
+    try:
+        result = asyncio.run(run())
+    except SQLAlchemyError as exc:
+        _database_paused_until = time.monotonic() + _DATABASE_FAILURE_COOLDOWN_SECONDS
+        logger.error(
+            "worker database poll paused",
+            extra={"task": task_name, "error_type": type(exc).__name__},
+        )
+        return 0
+    _database_paused_until = 0.0
+    return result
 
 
 def _service(
@@ -60,7 +85,7 @@ def poll_outbox() -> int:
         finally:
             await repository.close()
 
-    return asyncio.run(run())
+    return _run_database_poll("poll_outbox", run)
 
 
 @shared_task(
@@ -113,7 +138,7 @@ def purge_expired_visitor_profiles() -> int:
         finally:
             await repository.close()
 
-    deleted = asyncio.run(run())
+    deleted = _run_database_poll("purge_expired_visitor_profiles", run)
     logger.info("visitor profile retention purge completed", extra={"deleted": deleted})
     return deleted
 
@@ -151,7 +176,7 @@ def poll_scheduled_publishes() -> int:
         finally:
             await repository.close()
 
-    return asyncio.run(run())
+    return _run_database_poll("poll_scheduled_publishes", run)
 
 
 @shared_task(
@@ -187,7 +212,7 @@ def poll_knowledge_imports() -> int:
         finally:
             await repository.close()
 
-    return asyncio.run(run())
+    return _run_database_poll("poll_knowledge_imports", run)
 
 
 __all__ = [
