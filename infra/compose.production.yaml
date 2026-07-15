@@ -36,14 +36,14 @@ x-production-environment: &production-environment
   EMBEDDING_PROVIDER: local-fastembed
   EMBEDDING_BASE_URL: http://embedding:8010/v1
   EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:?required}
-  EMBEDDING_MODEL: intfloat/multilingual-e5-large
-  EMBEDDING_DIMENSION: "1024"
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
   EMBEDDING_TIMEOUT_SECONDS: ${EMBEDDING_TIMEOUT_SECONDS:-30}
 
 services:
   postgres:
     ports: !reset []
-    mem_limit: 700m
+    mem_limit: ${POSTGRES_MEMORY_LIMIT:-700m}
 
   redis:
     ports: !reset []
@@ -67,14 +67,14 @@ services:
       retries: 20
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
-    mem_limit: 192m
+    mem_limit: ${REDIS_MEMORY_LIMIT:-192m}
 
   minio:
     ports: !reset []
     environment:
       MINIO_ROOT_USER: ${OBJECT_STORAGE_ACCESS_KEY:?required}
       MINIO_ROOT_PASSWORD: ${OBJECT_STORAGE_SECRET_KEY:?required}
-    mem_limit: 320m
+    mem_limit: ${MINIO_MEMORY_LIMIT:-320m}
 
   embedding:
     build:
@@ -85,8 +85,8 @@ services:
     restart: unless-stopped
     environment:
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:?required}
-      EMBEDDING_MODEL: intfloat/multilingual-e5-large
-      EMBEDDING_DIMENSION: "1024"
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-large}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       FASTEMBED_CACHE_PATH: /models
       HF_ENDPOINT: ${HF_ENDPOINT:-https://hf-mirror.com}
       HF_HUB_ETAG_TIMEOUT: ${HF_HUB_ETAG_TIMEOUT:-30}
@@ -107,7 +107,7 @@ services:
       timeout: 8s
       retries: 40
       start_period: 10m
-    mem_limit: 2300m
+    mem_limit: ${EMBEDDING_MEMORY_LIMIT:-2300m}
 
   migrate:
     environment:
@@ -137,7 +137,7 @@ services:
     depends_on:
       embedding:
         condition: service_healthy
-    mem_limit: 700m
+    mem_limit: ${API_MEMORY_LIMIT:-700m}
 
   worker:
     ports: !reset []
@@ -149,26 +149,26 @@ services:
     depends_on:
       embedding:
         condition: service_healthy
-    mem_limit: 700m
+    mem_limit: ${WORKER_MEMORY_LIMIT:-700m}
 
   card-web:
     build:
       args:
         VITE_API_BASE_URL: /c/api/v1
         VITE_PUBLIC_BASE: /c/
-    mem_limit: 128m
+    mem_limit: ${CARD_WEB_MEMORY_LIMIT:-128m}
 
   admin-web:
     build:
       args:
         VITE_API_BASE_URL: /c/api/v1
         VITE_PUBLIC_BASE: /c/admin/
-    mem_limit: 128m
+    mem_limit: ${ADMIN_WEB_MEMORY_LIMIT:-128m}
 
   gateway:
     ports: !override
       - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_CARD_PORT:-18080}:8080"
-    mem_limit: 128m
+    mem_limit: ${GATEWAY_MEMORY_LIMIT:-128m}
 
 volumes:
   embedding_models:
