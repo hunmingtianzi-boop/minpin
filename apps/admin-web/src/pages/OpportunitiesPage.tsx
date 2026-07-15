@@ -16,6 +16,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PaginationBar } from "../components/PaginationBar";
 import { ResourceState } from "../components/ResourceState";
 import { useResource } from "../hooks/useResource";
+import { appHref } from "../routing";
 import { formatTimestamp } from "../utils/format";
 
 const PAGE_SIZE = 20;
@@ -98,7 +99,7 @@ export function OpportunitiesPage() {
                         <TableCell className="actions-column">
                           <a
                             className="inline-action-link"
-                            href={`/conversations?visitorId=${encodeURIComponent(opportunity.visitorId)}`}
+                            href={appHref(`/conversations?visitorId=${encodeURIComponent(opportunity.visitorId)}`)}
                           >
                             <Eye24Regular />
                             审阅对话

@@ -27,6 +27,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PaginationBar } from "../components/PaginationBar";
 import { ResourceState } from "../components/ResourceState";
 import { useResource } from "../hooks/useResource";
+import { appHref } from "../routing";
 import { formatTimestamp } from "../utils/format";
 import "./VisitorProfilesPage.css";
 
@@ -158,7 +159,7 @@ function ProfileDetail({ visitorId, onClose }: { visitorId: string; onClose: () 
           <section className="visitor-profile-overview-section">
             <div className="visitor-profile-overview-heading">
               <h3>关联 AI 对话</h3>
-              <a href={`/conversations?visitorId=${encodeURIComponent(visitorId)}`}>查看完整消息与引用</a>
+              <a href={appHref(`/conversations?visitorId=${encodeURIComponent(visitorId)}`)}>查看完整消息与引用</a>
             </div>
             {overview.conversations.length === 0 ? (
               <p className="muted-value">暂无可见对话。</p>

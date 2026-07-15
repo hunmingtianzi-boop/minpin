@@ -103,11 +103,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         runtime_settings = get_settings()
 
     configure_logging(runtime_settings.log_level)
+    api_docs_prefix = runtime_settings.api_prefix.rsplit("/", 1)[0]
+    if runtime_settings.api_docs_enabled:
+        docs_url = f"{api_docs_prefix}/docs"
+        openapi_url = f"{api_docs_prefix}/openapi.json"
+    elif runtime_settings.app_env == "production":
+        docs_url = None
+        openapi_url = None
+    else:
+        docs_url = "/docs"
+        openapi_url = "/openapi.json"
     app = FastAPI(
         title="创非凡数智名片 API",
         version="0.1.0",
-        docs_url=None if runtime_settings.app_env == "production" else "/docs",
+        docs_url=docs_url,
+        openapi_url=openapi_url,
         redoc_url=None,
+        root_path=runtime_settings.asgi_root_path,
         lifespan=lifespan,
     )
     app.state.settings = runtime_settings

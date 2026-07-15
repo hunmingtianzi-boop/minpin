@@ -1,0 +1,12 @@
+[Unit]
+Description=Shuzimingpian production backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/shuzimingpian/current/infra/ops/backup.sh
+User=root
+Group=root
+UMask=0077
+

@@ -34,6 +34,18 @@ def test_empty_embedding_settings_are_treated_as_unconfigured() -> None:
     assert settings.embedding_model is None
 
 
+def test_production_subpath_settings_are_normalized() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        asgi_root_path="c/",
+        api_docs_enabled=True,
+    )
+
+    assert settings.asgi_root_path == "/c"
+    assert settings.api_docs_enabled is True
+
+
 def test_staff_bootstrap_settings_are_all_or_none_and_secret_wrapped() -> None:
     with pytest.raises(ValueError, match="must be configured together"):
         Settings(

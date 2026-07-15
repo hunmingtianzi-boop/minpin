@@ -30,4 +30,4 @@ COPY packages/evals /eval-data
 USER worker
 EXPOSE 8020
 
-CMD ["celery", "-A", "cf_worker.celery_app:celery_app", "worker", "--beat", "--loglevel=INFO", "--queues=outbox.poll,outbox.process", "--concurrency=2"]
+CMD ["celery", "-A", "cf_worker.celery_app:celery_app", "worker", "--beat", "--schedule=/tmp/celerybeat-schedule", "--loglevel=INFO", "--queues=outbox.poll,outbox.process", "--concurrency=1"]

@@ -19,7 +19,7 @@ import { PageHeader } from "../components/PageHeader";
 import { PaginationBar } from "../components/PaginationBar";
 import { ResourceState } from "../components/ResourceState";
 import { useResource } from "../hooks/useResource";
-import { APP_PATHS, onInternalLinkClick } from "../routing";
+import { APP_PATHS, appHref, onInternalLinkClick } from "../routing";
 import { formatTimestamp } from "../utils/format";
 
 function formatRate(value: number): string {
@@ -79,7 +79,7 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
           {steps.map((step, index) => (
             <a
               key={step.path}
-              href={step.path}
+              href={appHref(step.path)}
               onClick={(event) => onInternalLinkClick(event, step.path)}
             >
               <span>{step.label}</span>

@@ -27,13 +27,35 @@ export type AppPath = (typeof APP_PATHS)[keyof typeof APP_PATHS];
 
 const knownPaths = new Set<string>(Object.values(APP_PATHS));
 
+function normalizeBasePath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === "/") return "/";
+  return `/${trimmed.replace(/^\/+|\/+$/g, "")}/`;
+}
+
+export const APP_BASE_PATH = normalizeBasePath(import.meta.env.BASE_URL);
+
+export function appHref(path: string): string {
+  if (APP_BASE_PATH === "/") return path;
+  if (path === "/") return APP_BASE_PATH;
+  return `${APP_BASE_PATH.slice(0, -1)}${path}`;
+}
+
+export function appPathFromBrowser(pathname: string): string {
+  if (APP_BASE_PATH === "/") return pathname;
+  const baseWithoutSlash = APP_BASE_PATH.slice(0, -1);
+  if (pathname === baseWithoutSlash || pathname === APP_BASE_PATH) return "/";
+  if (!pathname.startsWith(APP_BASE_PATH)) return pathname;
+  return `/${pathname.slice(APP_BASE_PATH.length)}`;
+}
+
 function subscribe(callback: () => void) {
   window.addEventListener("popstate", callback);
   return () => window.removeEventListener("popstate", callback);
 }
 
 function snapshot() {
-  return window.location.pathname;
+  return appPathFromBrowser(window.location.pathname);
 }
 
 export function usePathname(): string {
@@ -45,8 +67,9 @@ export function isAppPath(path: string): path is AppPath {
 }
 
 export function navigate(path: AppPath): void {
-  if (window.location.pathname === path) return;
-  window.history.pushState({}, "", path);
+  const browserPath = appHref(path);
+  if (window.location.pathname === browserPath) return;
+  window.history.pushState({}, "", browserPath);
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 

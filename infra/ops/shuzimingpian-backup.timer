@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Shuzimingpian production backup
+
+[Timer]
+OnCalendar=*-*-* 03:20:00 Asia/Shanghai
+RandomizedDelaySec=10m
+Persistent=true
+Unit=shuzimingpian-backup.service
+
+[Install]
+WantedBy=timers.target

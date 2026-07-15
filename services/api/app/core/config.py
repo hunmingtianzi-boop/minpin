@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     app_env: Literal["local", "test", "staging", "production"] = "local"
     app_name: str = "cf-ai-card"
     api_prefix: str = "/api/v1"
+    asgi_root_path: str = ""
+    api_docs_enabled: bool = False
     log_level: str = "INFO"
     metrics_bearer_token: SecretStr | None = None
     cors_allowed_origins: list[str] = Field(
@@ -114,6 +116,16 @@ class Settings(BaseSettings):
         if not value.startswith("/"):
             value = f"/{value}"
         return value.rstrip("/")
+
+    @field_validator("asgi_root_path")
+    @classmethod
+    def normalize_asgi_root_path(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized or normalized == "/":
+            return ""
+        if not normalized.startswith("/"):
+            normalized = f"/{normalized}"
+        return normalized.rstrip("/")
 
     @field_validator("cors_allowed_origins", mode="before")
     @classmethod

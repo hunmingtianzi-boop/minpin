@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_ROOT="${APP_ROOT:-/opt/shuzimingpian/current}"
+ENV_FILE="${ENV_FILE:-/opt/shuzimingpian/.env.production}"
+BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/shuzimingpian}"
+COMPOSE_PROJECT="${COMPOSE_PROJECT:-cf-ai-card}"
+MIN_FREE_KB="${MIN_FREE_KB:-1048576}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+FINAL_DIR="${BACKUP_ROOT}/daily/${STAMP}"
+PARTIAL_DIR="${FINAL_DIR}.partial"
+LOG_FILE="${BACKUP_ROOT}/backup.log"
+
+mkdir -p "${BACKUP_ROOT}"/{daily,weekly,monthly}
+touch "${LOG_FILE}"
+chmod 700 "${BACKUP_ROOT}" "${BACKUP_ROOT}"/{daily,weekly,monthly}
+chmod 600 "${LOG_FILE}"
+
+exec 9>"${BACKUP_ROOT}/.backup.lock"
+flock -n 9 || { echo "another backup is already running" >&2; exit 75; }
+
+log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" | tee -a "${LOG_FILE}"; }
+fail() { log "FAILED: $*"; rm -rf -- "${PARTIAL_DIR}"; exit 1; }
+trap 'fail "unexpected error at line ${LINENO}"' ERR
+
+[[ -f "${ENV_FILE}" ]] || fail "environment file is missing"
+[[ -f "${APP_ROOT}/infra/compose.yaml" ]] || fail "application release is missing"
+
+available_kb="$(df -Pk "${BACKUP_ROOT}" | awk 'NR==2 {print $4}')"
+(( available_kb >= MIN_FREE_KB )) || fail "less than ${MIN_FREE_KB} KiB free"
+
+rm -rf -- "${PARTIAL_DIR}"
+mkdir -p "${PARTIAL_DIR}"
+chmod 700 "${PARTIAL_DIR}"
+
+compose=(docker compose --project-name "${COMPOSE_PROJECT}" --env-file "${ENV_FILE}" -f "${APP_ROOT}/infra/compose.yaml" -f "${APP_ROOT}/infra/compose.production.yaml")
+
+log "starting PostgreSQL dump"
+"${compose[@]}" exec -T postgres sh -ceu \
+  'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --compress=9' \
+  >"${PARTIAL_DIR}/postgres.dump"
+[[ -s "${PARTIAL_DIR}/postgres.dump" ]] || fail "PostgreSQL dump is empty"
+
+log "starting object-storage dump"
+"${compose[@]}" exec -T minio tar -C /data -czf - . >"${PARTIAL_DIR}/object-storage.tar.gz"
+
+log "archiving deployment configuration"
+tar -C / -czf "${PARTIAL_DIR}/deployment-config.tar.gz" \
+  "${ENV_FILE#/}" \
+  "${APP_ROOT#/}/infra/compose.yaml" \
+  "${APP_ROOT#/}/infra/compose.production.yaml" \
+  "${APP_ROOT#/}/infra/host-nginx"
+
+if [[ -f "${APP_ROOT}/DEPLOYED_COMMIT" ]]; then
+  cp -- "${APP_ROOT}/DEPLOYED_COMMIT" "${PARTIAL_DIR}/DEPLOYED_COMMIT"
+fi
+
+(cd "${PARTIAL_DIR}" && sha256sum postgres.dump object-storage.tar.gz deployment-config.tar.gz >SHA256SUMS)
+cat >"${PARTIAL_DIR}/manifest.json" <<EOF
+{"created_at":"$(date -u +%FT%TZ)","host":"$(hostname -f)","project":"${COMPOSE_PROJECT}","status":"complete"}
+EOF
+
+mv -- "${PARTIAL_DIR}" "${FINAL_DIR}"
+
+day_of_week="$(date -u +%u)"
+day_of_month="$(date -u +%d)"
+if [[ "${day_of_week}" == "7" ]]; then cp -al -- "${FINAL_DIR}" "${BACKUP_ROOT}/weekly/${STAMP}"; fi
+if [[ "${day_of_month}" == "01" ]]; then cp -al -- "${FINAL_DIR}" "${BACKUP_ROOT}/monthly/${STAMP}"; fi
+
+find "${BACKUP_ROOT}/daily" -mindepth 1 -maxdepth 1 -type d -mtime +7 -exec rm -rf -- {} +
+find "${BACKUP_ROOT}/weekly" -mindepth 1 -maxdepth 1 -type d -mtime +28 -exec rm -rf -- {} +
+find "${BACKUP_ROOT}/monthly" -mindepth 1 -maxdepth 1 -type d -mtime +186 -exec rm -rf -- {} +
+
+trap - ERR
+log "backup completed: ${FINAL_DIR}"
+

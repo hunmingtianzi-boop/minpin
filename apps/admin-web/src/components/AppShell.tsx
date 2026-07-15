@@ -35,6 +35,7 @@ import { hasPermission } from "../auth/permissions";
 import type { AdminUser } from "../api/types";
 import {
   APP_PATHS,
+  appHref,
   onInternalLinkClick,
   type AppPath,
   usePathname,
@@ -145,7 +146,7 @@ function Navigation({ onNavigate }: { onNavigate?: () => void }) {
               return (
                 <a
                   key={item.path}
-                  href={item.path}
+                  href={appHref(item.path)}
                   className={active ? "nav-link active" : "nav-link"}
                   aria-current={active ? "page" : undefined}
                   onClick={(event) => {
