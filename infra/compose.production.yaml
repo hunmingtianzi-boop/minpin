@@ -166,7 +166,7 @@ services:
     mem_limit: 128m
 
   gateway:
-    ports: !reset
+    ports: !override
       - "${GATEWAY_BIND_ADDRESS:-127.0.0.1}:${GATEWAY_CARD_PORT:-18080}:8080"
     mem_limit: 128m
 
