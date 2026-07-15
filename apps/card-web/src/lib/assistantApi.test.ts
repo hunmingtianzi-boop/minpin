@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createAssistantIdempotencyKey,
   getAssistantSessionStorageKey,
   ensurePublicVisitorSession,
   parseAssistantEventStream,
@@ -92,6 +93,21 @@ describe("assistant API", () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("generates an RFC 4122 v4 idempotency key when randomUUID is unavailable", () => {
+    const getRandomValues = vi.fn((values: Uint8Array) => {
+      values.forEach((_, index) => {
+        values[index] = index;
+      });
+      return values;
+    });
+    vi.stubGlobal("crypto", { getRandomValues });
+
+    expect(createAssistantIdempotencyKey()).toBe(
+      "00010203-0405-4607-8809-0a0b0c0d0e0f",
+    );
+    expect(getRandomValues).toHaveBeenCalledOnce();
   });
 
   it("parses CRLF SSE frames and UTF-8 data split across arbitrary chunks", async () => {

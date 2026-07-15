@@ -91,12 +91,30 @@ export function getAssistantSessionStorageKey(cardSlug: string) {
 }
 
 export function createAssistantIdempotencyKey() {
-  if (!globalThis.crypto?.randomUUID) {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  if (typeof cryptoApi?.getRandomValues !== "function") {
     throw new AssistantApiError("当前浏览器不支持安全的请求标识。", {
       code: "RANDOM_UUID_UNAVAILABLE",
     });
   }
-  return globalThis.crypto.randomUUID();
+
+  // randomUUID is restricted to secure contexts, while getRandomValues remains
+  // a cryptographically secure Web Crypto primitive on legacy HTTP deployments.
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
+  return [
+    hex.slice(0, 4).join(""),
+    hex.slice(4, 6).join(""),
+    hex.slice(6, 8).join(""),
+    hex.slice(8, 10).join(""),
+    hex.slice(10, 16).join(""),
+  ].join("-");
 }
 
 function getSessionStorage() {
