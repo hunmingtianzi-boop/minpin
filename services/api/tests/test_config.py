@@ -20,6 +20,20 @@ def test_empty_provider_secrets_are_treated_as_unconfigured() -> None:
     assert settings.embedding_api_key is None
 
 
+def test_empty_embedding_settings_are_treated_as_unconfigured() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        embedding_provider="  ",
+        embedding_base_url="",
+        embedding_model="\t",
+    )
+
+    assert settings.embedding_provider is None
+    assert settings.embedding_base_url is None
+    assert settings.embedding_model is None
+
+
 def test_staff_bootstrap_settings_are_all_or_none_and_secret_wrapped() -> None:
     with pytest.raises(ValueError, match="must be configured together"):
         Settings(

@@ -176,6 +176,26 @@ class Settings(BaseSettings):
             return stripped or None
         return value
 
+    @field_validator(
+        "embedding_provider",
+        "embedding_base_url",
+        "embedding_model",
+        mode="before",
+    )
+    @classmethod
+    def empty_embedding_text_is_unconfigured(cls, value: object) -> object:
+        """Treat Compose's empty optional environment values as absent.
+
+        Docker Compose expands an unset ``${NAME:-}`` to an empty string.  These
+        fields are optional as a group so lexical-only retrieval can start
+        without an embedding endpoint; preserving an empty model name would
+        instead make RAG initialization fail during application startup.
+        """
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
         if self.app_env in {"staging", "production"}:
