@@ -42,7 +42,17 @@ log "starting PostgreSQL dump"
 [[ -s "${PARTIAL_DIR}/postgres.dump" ]] || fail "PostgreSQL dump is empty"
 
 log "starting object-storage dump"
-"${compose[@]}" exec -T minio tar -C /data -czf - . >"${PARTIAL_DIR}/object-storage.tar.gz"
+minio_container="$("${compose[@]}" ps -q minio)"
+redis_container="$("${compose[@]}" ps -q redis)"
+[[ -n "${minio_container}" && -n "${redis_container}" ]] || fail "backup containers are unavailable"
+minio_volume="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}' "${minio_container}")"
+helper_image="$(docker inspect --format '{{.Config.Image}}' "${redis_container}")"
+[[ -n "${minio_volume}" && -n "${helper_image}" ]] || fail "object-storage volume metadata is unavailable"
+docker run --rm --network none \
+  --volume "${minio_volume}:/data:ro" \
+  "${helper_image}" tar -C /data -czf - . \
+  >"${PARTIAL_DIR}/object-storage.tar.gz"
+[[ -s "${PARTIAL_DIR}/object-storage.tar.gz" ]] || fail "object-storage dump is empty"
 
 log "archiving deployment configuration"
 tar -C / -czf "${PARTIAL_DIR}/deployment-config.tar.gz" \
@@ -73,4 +83,3 @@ find "${BACKUP_ROOT}/monthly" -mindepth 1 -maxdepth 1 -type d -mtime +186 -exec 
 
 trap - ERR
 log "backup completed: ${FINAL_DIR}"
-
