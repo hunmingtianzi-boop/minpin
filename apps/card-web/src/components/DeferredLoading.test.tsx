@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PublicCardData } from "../lib/publicCardApi";
@@ -97,7 +97,12 @@ describe("deferred first-screen boundaries", () => {
     expect(screen.queryByRole("tab")).not.toBeInTheDocument();
     expect(observerCallbacks).toHaveLength(1);
 
-    observerCallbacks[0]([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    await act(async () => {
+      observerCallbacks[0](
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+    });
 
     expect(await screen.findByRole("tab", { name: /^产品与服务/ })).toBeInTheDocument();
   });

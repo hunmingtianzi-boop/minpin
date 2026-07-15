@@ -658,6 +658,48 @@ function CardSection({
   }
 }
 
+export function MobileActionBar({
+  heroId,
+  businessId,
+  contactId,
+  onAssistant,
+  onLead,
+}: {
+  heroId: string;
+  businessId: string;
+  contactId: string;
+  onAssistant: () => void;
+  onLead?: () => void;
+}) {
+  return (
+    <nav className="mobile-action-bar" aria-label="手机快捷操作">
+      <a href={`#${heroId}`} aria-label="返回名片首页">
+        <Target size={21} weight="bold" aria-hidden="true" />
+        <span>名片</span>
+      </a>
+      <a href={`#${businessId}`} aria-label="查看企业业务">
+        <CirclesThreePlus size={21} weight="bold" aria-hidden="true" />
+        <span>业务</span>
+      </a>
+      <button type="button" className="mobile-action-primary" onClick={onAssistant}>
+        <BookOpenText size={21} weight="bold" aria-hidden="true" />
+        <span>问 AI</span>
+      </button>
+      {onLead ? (
+        <button type="button" onClick={onLead}>
+          <Handshake size={21} weight="bold" aria-hidden="true" />
+          <span>联系</span>
+        </button>
+      ) : (
+        <a href={`#${contactId}`} aria-label="查看联系与合作方式">
+          <Handshake size={21} weight="bold" aria-hidden="true" />
+          <span>联系</span>
+        </a>
+      )}
+    </nav>
+  );
+}
+
 export default function App({
   tenant,
   publishedCard,
@@ -676,6 +718,11 @@ export default function App({
     [publishedCard, tenant.sections],
   );
   const closingIndex = tenant.sections.findIndex((section) => section.type === "closing");
+  const businessId = publishedCard ? "catalog" : (navItems[0]?.id ?? tenant.hero.id);
+  const contactId =
+    tenant.sections.find((section) => section.type === "closing")?.id ??
+    navItems.at(-1)?.id ??
+    tenant.hero.id;
 
   const openAssistant = (target: string) => {
     if (target === "open") assistantRef.current?.open();
@@ -805,6 +852,15 @@ export default function App({
         config={tenant.assistant}
         cardSlug={tenant.id}
         onLeadPrompt={
+          publishedCard ? () => publicExperienceRef.current?.openLead() : undefined
+        }
+      />
+      <MobileActionBar
+        heroId={tenant.hero.id}
+        businessId={businessId}
+        contactId={contactId}
+        onAssistant={() => openAssistant("open")}
+        onLead={
           publishedCard ? () => publicExperienceRef.current?.openLead() : undefined
         }
       />

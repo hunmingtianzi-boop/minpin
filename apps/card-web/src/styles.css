@@ -143,6 +143,10 @@ img {
   min-height: 100dvh;
 }
 
+.mobile-action-bar {
+  display: none;
+}
+
 .reveal {
   opacity: 0;
   transform: translateY(24px);
@@ -2353,6 +2357,64 @@ img {
     width: min(100% - 32px, var(--page-width));
   }
 
+  .app-shell {
+    padding-bottom: calc(82px + env(safe-area-inset-bottom, 0px));
+  }
+
+  .mobile-action-bar {
+    position: fixed;
+    z-index: 96;
+    right: 10px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    left: 10px;
+    display: grid;
+    min-height: 64px;
+    padding: 6px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    color: var(--text-soft);
+    background: color-mix(in srgb, var(--surface) 91%, transparent);
+    border: 1px solid var(--line-strong);
+    border-radius: 20px;
+    box-shadow: 0 18px 55px color-mix(in srgb, var(--hero-background) 28%, transparent);
+    backdrop-filter: blur(20px) saturate(150%);
+  }
+
+  .mobile-action-bar a,
+  .mobile-action-bar button {
+    display: flex;
+    min-width: 0;
+    min-height: 52px;
+    padding: 5px 4px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 3px;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 15px;
+    font: inherit;
+    font-size: 10px;
+    font-weight: 760;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+
+  .mobile-action-bar a:active,
+  .mobile-action-bar button:active {
+    transform: translateY(1px);
+  }
+
+  .mobile-action-bar .mobile-action-primary {
+    color: var(--on-action);
+    background: var(--action);
+  }
+
+  .mobile-action-bar a:focus-visible,
+  .mobile-action-bar button:focus-visible {
+    outline-offset: -2px;
+  }
+
   .header-inner {
     width: calc(100% - 28px);
   }
@@ -2655,12 +2717,7 @@ img {
   }
 
   .assistant-launcher {
-    right: 14px;
-    bottom: calc(14px + env(safe-area-inset-bottom, 0px));
-    min-width: 50px;
-    width: 50px;
-    height: 50px;
-    padding: 3px;
+    display: none;
   }
 
   .assistant-launcher-icon {
@@ -2860,11 +2917,14 @@ img {
 
 .public-recommendation-list {
   display: grid;
+  min-width: 0;
   gap: 8px;
 }
 
 .public-recommendation-list button {
   display: flex;
+  min-width: 0;
+  max-width: 100%;
   width: 100%;
   align-items: center;
   justify-content: space-between;
@@ -2886,6 +2946,7 @@ img {
 
 .public-recommendation-list span {
   min-width: 0;
+  overflow: hidden;
 }
 
 .public-recommendation-list small,
@@ -3695,6 +3756,10 @@ img {
     gap: 30px;
   }
 
+  .public-recommendations {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .contact-ledger {
     grid-template-columns: 1fr;
   }
@@ -3821,6 +3886,11 @@ img {
 
 @media (prefers-reduced-transparency: reduce) {
   .public-dialog-backdrop {
+    backdrop-filter: none;
+  }
+
+  .mobile-action-bar {
+    background: var(--surface);
     backdrop-filter: none;
   }
 }
