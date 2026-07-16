@@ -13,7 +13,7 @@ import type { PublicExperienceHandle } from "./PublicExperience";
 
 type PublicExperienceComponent =
   typeof import("./PublicExperience").PublicExperience;
-type PendingAction = "lead" | "share";
+type PendingAction = "lead" | "privacy" | "profile" | "share";
 
 let publicExperienceModulePromise: Promise<PublicExperienceComponent> | undefined;
 
@@ -33,9 +33,10 @@ export const DeferredPublicExperience = forwardRef<
   PublicExperienceHandle,
   {
     card: PublicCardData;
+    controllerOnly?: boolean;
     onAssistant: (question: string) => void;
   }
->(function DeferredPublicExperience({ card, onAssistant }, ref) {
+>(function DeferredPublicExperience({ card, controllerOnly = false, onAssistant }, ref) {
   const [Component, setComponent] = useState<PublicExperienceComponent | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
@@ -43,6 +44,7 @@ export const DeferredPublicExperience = forwardRef<
   const innerRef = useRef<PublicExperienceHandle>(null);
   const pendingAction = useRef<PendingAction | null>(null);
   const mounted = useRef(true);
+  const autoLoadAttempted = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -66,29 +68,41 @@ export const DeferredPublicExperience = forwardRef<
   }, [Component, isLoading]);
 
   useEffect(() => {
+    if (controllerOnly) {
+      if (autoLoadAttempted.current || Component) return undefined;
+      autoLoadAttempted.current = true;
+      void activate();
+      return undefined;
+    }
     const sentinel = sentinelRef.current;
-    if (!sentinel || Component) return undefined;
+    if (!sentinel || Component || autoLoadAttempted.current) return undefined;
     if (typeof IntersectionObserver === "undefined") {
-      const timer = window.setTimeout(() => void activate(), 1200);
+      const timer = window.setTimeout(() => {
+        autoLoadAttempted.current = true;
+        void activate();
+      }, 1200);
       return () => window.clearTimeout(timer);
     }
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
         observer.disconnect();
+        autoLoadAttempted.current = true;
         void activate();
       },
       { rootMargin: "700px 0px", threshold: 0 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [Component, activate]);
+  }, [Component, activate, controllerOnly]);
 
   const queueAction = useCallback(
     (action: PendingAction) => {
       pendingAction.current = action;
       if (innerRef.current) {
         if (action === "lead") innerRef.current.openLead();
+        else if (action === "privacy") innerRef.current.openPrivacy();
+        else if (action === "profile") innerRef.current.openProfile();
         else innerRef.current.openShare();
         pendingAction.current = null;
         return;
@@ -103,6 +117,8 @@ export const DeferredPublicExperience = forwardRef<
     const action = pendingAction.current;
     pendingAction.current = null;
     if (action === "lead") innerRef.current.openLead();
+    else if (action === "privacy") innerRef.current.openPrivacy();
+    else if (action === "profile") innerRef.current.openProfile();
     else innerRef.current.openShare();
   }, [Component]);
 
@@ -110,13 +126,35 @@ export const DeferredPublicExperience = forwardRef<
     ref,
     () => ({
       openLead: () => queueAction("lead"),
+      openPrivacy: () => queueAction("privacy"),
+      openProfile: () => queueAction("profile"),
       openShare: () => queueAction("share"),
     }),
     [queueAction],
   );
 
   if (Component) {
-    return <Component ref={innerRef} card={card} onAssistant={onAssistant} />;
+    return (
+      <Component
+        ref={innerRef}
+        card={card}
+        controllerOnly={controllerOnly}
+        onAssistant={onAssistant}
+      />
+    );
+  }
+
+  if (controllerOnly) {
+    return loadFailed ? (
+      <div className="public-controller-error" role="alert">
+        <span>互动功能加载失败</span>
+        <button type="button" onClick={() => void activate()}>
+          重新加载
+        </button>
+      </div>
+    ) : (
+      <span ref={sentinelRef} hidden aria-hidden="true" />
+    );
   }
 
   return (

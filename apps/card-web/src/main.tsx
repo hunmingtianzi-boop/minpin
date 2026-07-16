@@ -16,6 +16,24 @@ import { loadTenant, resolveTenantSlug } from "./tenants";
 
 const tenantSlug = resolveTenantSlug(window.location);
 const root = createRoot(document.getElementById("root")!);
+const PUBLIC_CARD_BOOTSTRAP_TIMEOUT_MS = 5_000;
+
+async function fetchPublishedCard(slug: string) {
+  const controller = new AbortController();
+  let timeoutId: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      controller.abort();
+      reject(new Error("Public card bootstrap timed out"));
+    }, PUBLIC_CARD_BOOTSTRAP_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([fetchPublicCard(slug, controller.signal), timeout]);
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+}
 
 function renderTenant(tenant: EnterpriseCardConfig, publishedCard?: PublicCardData) {
   const validation = validateTenantConfig(tenant);
@@ -56,15 +74,29 @@ if (tenantSlug) {
 
 async function bootstrapTenant() {
   if (!tenantSlug) return;
-  const publishedCardPromise = fetchPublicCard(tenantSlug)
+  const registeredTenantPromise = loadTenant(tenantSlug)
+    .then((tenant) => ({ tenant, error: undefined }))
+    .catch((error: unknown) => ({ tenant: undefined, error }));
+  const publishedCardPromise = fetchPublishedCard(tenantSlug)
     .then((card) => ({ card, error: undefined }))
     .catch((error: unknown) => ({ card: undefined, error }));
-  let registeredTenant: EnterpriseCardConfig | undefined;
-  try {
-    registeredTenant = await loadTenant(tenantSlug);
-    if (registeredTenant) renderTenant(registeredTenant);
 
-    const publishedResult = await publishedCardPromise;
+  const [registeredResult, publishedResult] = await Promise.all([
+    registeredTenantPromise,
+    publishedCardPromise,
+  ]);
+  const registeredTenant = registeredResult.tenant;
+
+  if (registeredResult.error) {
+    console.error("Registered tenant loading failed", {
+      errorType:
+        registeredResult.error instanceof Error
+          ? registeredResult.error.name
+          : typeof registeredResult.error,
+    });
+  }
+
+  try {
     if (publishedResult.error) throw publishedResult.error;
     const publishedCard = publishedResult.card;
     if (publishedCard) {
@@ -77,24 +109,30 @@ async function bootstrapTenant() {
       );
       return;
     }
-    if (!registeredTenant) {
-      root.render(
-        <StrictMode>
-          <TenantNotFound />
-        </StrictMode>,
-      );
+    if (registeredTenant) {
+      renderTenant(registeredTenant);
+      return;
     }
+
+    root.render(
+      <StrictMode>
+        <TenantNotFound />
+      </StrictMode>,
+    );
   } catch (error) {
     console.error("Published tenant loading failed", {
       errorType: error instanceof Error ? error.name : typeof error,
     });
-    if (!registeredTenant) {
-      root.render(
-        <StrictMode>
-          <TenantNotFound kind="runtime" onRetry={() => window.location.reload()} />
-        </StrictMode>,
-      );
+    if (registeredTenant) {
+      renderTenant(registeredTenant);
+      return;
     }
+
+    root.render(
+      <StrictMode>
+        <TenantNotFound kind="runtime" onRetry={() => window.location.reload()} />
+      </StrictMode>,
+    );
   }
 }
 

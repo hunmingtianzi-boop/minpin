@@ -1,11 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createRef } from "react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AssistantStreamEvent } from "../lib/assistantApi";
 import { templateTenant } from "../tenants/template/tenant";
-import { AIAssistant } from "./AIAssistant";
+import { AIAssistant, type AIAssistantHandle } from "./AIAssistant";
 
 const streamMock = vi.hoisted(() => vi.fn());
 
@@ -70,5 +71,64 @@ describe("AIAssistant lead handoff", () => {
 
     await waitFor(() => expect(onLeadPrompt).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("submits a recommended question when opened through the public card", async () => {
+    const ref = createRef<AIAssistantHandle>();
+    render(
+      <AIAssistant
+        ref={ref}
+        config={templateTenant.assistant}
+        cardSlug="tenant-a"
+      />,
+    );
+
+    act(() => ref.current?.openWithQuestion("企业主要做什么？"));
+
+    await waitFor(() =>
+      expect(streamMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cardSlug: "tenant-a",
+          content: "企业主要做什么？",
+        }),
+      ),
+    );
+  });
+
+  it("keeps the page width stable while the assistant locks scrolling", async () => {
+    const originalInnerWidth = window.innerWidth;
+    const originalClientWidth = document.documentElement.clientWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      value: 1184,
+    });
+
+    render(
+      <AIAssistant config={templateTenant.assistant} cardSlug="tenant-a" />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.assistant.launcherAriaLabel }),
+    );
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.body.style.paddingRight).toBe("16px");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.assistant.labels.closeButton }),
+    );
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.body.style.paddingRight).toBe("16px");
+    await waitFor(() => expect(document.body.style.overflow).toBe(""));
+    expect(document.body.style.paddingRight).toBe("");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+    });
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      value: originalClientWidth,
+    });
   });
 });

@@ -7085,6 +7085,63 @@
       }
     },
     "/platform/onboarding/{onboarding_id}/imports": {
+      "get": {
+        "tags": [
+          "Platform Onboarding"
+        ],
+        "summary": "Get Onboarding Import Status",
+        "operationId": "getPlatformOnboardingImportStatus",
+        "parameters": [
+          {
+            "name": "onboarding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Onboarding Id"
+            }
+          },
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformOnboardingImportStatusEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "post": {
         "tags": [
           "Platform Onboarding"
@@ -18031,6 +18088,46 @@
         ],
         "title": "PlatformLlmProfileRecord"
       },
+      "PlatformOnboardingImportStatusEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/PlatformOnboardingImportStatusRecord"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "PlatformOnboardingImportStatusEnvelope"
+      },
+      "PlatformOnboardingImportStatusRecord": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Session Id"
+          },
+          "settled": {
+            "type": "boolean",
+            "title": "Settled"
+          },
+          "batches": {
+            "items": {
+              "$ref": "#/components/schemas/KnowledgeImportBatchRecord"
+            },
+            "type": "array",
+            "title": "Batches"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "session_id",
+          "settled"
+        ],
+        "title": "PlatformOnboardingImportStatusRecord"
+      },
       "PlatformOnboardingSessionEnvelope": {
         "properties": {
           "data": {
@@ -18115,6 +18212,54 @@
               }
             ],
             "title": "Tenant Name"
+          },
+          "admin_account": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Account"
+          },
+          "admin_display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Display Name"
+          },
+          "initial_card_display_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 160
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Card Display Name"
+          },
+          "initial_card_title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Initial Card Title"
           },
           "version": {
             "type": "integer",

@@ -61,7 +61,7 @@ describe("hasNavPermission", () => {
     expect(paths).toContain(APP_PATHS.platformTasks);
     expect(paths).toContain(APP_PATHS.platformAudit);
     expect(paths).toContain(APP_PATHS.platformHealth);
-    expect(paths).not.toContain(APP_PATHS.platformOnboarding);
+    expect(paths).toContain(APP_PATHS.platformOnboarding);
     expect(paths).not.toContain(APP_PATHS.overview);
     expect(paths).not.toContain(APP_PATHS.company);
   });

@@ -105,6 +105,7 @@ const platformNavGroups: Array<{ label: string; items: NavItem[] }> = [
     label: "企业入驻",
     items: [
       { path: APP_PATHS.platformEnterprises, label: "企业管理", icon: Building24Regular, permission: "platform.enterprise.manage", role: "platform_admin" },
+      { path: APP_PATHS.platformOnboarding, label: "资料辅助建企", icon: Book24Regular, permission: "platform.enterprise.manage", role: "platform_admin" },
     ],
   },
   {

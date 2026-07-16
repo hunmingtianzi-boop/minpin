@@ -273,6 +273,16 @@ export function validateTenantConfig(config: unknown): TenantValidationResult {
     );
   }
   requireString(config.version, "version");
+  if (
+    config.isBlankTemplate !== undefined &&
+    typeof config.isBlankTemplate !== "boolean"
+  ) {
+    addError(
+      "invalid-config",
+      "isBlankTemplate",
+      "Blank-template state must be a boolean when provided.",
+    );
+  }
 
   const seo = requireObject(config.seo, "seo");
   if (seo) {

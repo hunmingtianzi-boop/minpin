@@ -350,6 +350,10 @@ export type PlatformOnboardingSession = {
   status: PlatformOnboardingStatus;
   tenantSlug: string;
   tenantName?: string;
+  adminAccount?: string;
+  adminDisplayName?: string;
+  initialCardDisplayName?: string;
+  initialCardTitle?: string;
   version: number;
   importBatchIds: string[];
   suggestions: PlatformOnboardingSuggestion[];
@@ -358,6 +362,29 @@ export type PlatformOnboardingSession = {
   confirmedEnterprise?: CreatedPlatformEnterprise;
   createdAt: string;
   updatedAt: string;
+};
+
+export type PlatformOnboardingImportItemStatus =
+  | "pending"
+  | "processing"
+  | "completed"
+  | "failed"
+  | "dead_letter";
+
+export type PlatformOnboardingImportItem = {
+  id: string;
+  fileName: string;
+  sourceType: string;
+  status: PlatformOnboardingImportItemStatus;
+  errorCode?: string;
+  createdAt: string;
+  completedAt?: string;
+};
+
+export type PlatformOnboardingImportStatus = {
+  sessionId: string;
+  settled: boolean;
+  items: PlatformOnboardingImportItem[];
 };
 
 export type ConfirmPlatformOnboardingInput = {

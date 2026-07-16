@@ -5,6 +5,7 @@ import {
   registeredTenantSlugs,
   resolveTenantSlug,
 } from ".";
+import { blankEnterpriseTenant } from "./blank/tenant";
 import { templateTenant } from "./template/tenant";
 import { tuotuTenant } from "./tuotu/tenant";
 
@@ -38,10 +39,23 @@ describe("tenant registry", () => {
   });
 
   it("registers the runnable generic template tenant", async () => {
-    expect(registeredTenantSlugs).toEqual(["template", "tuotu"]);
+    expect(registeredTenantSlugs).toEqual(["template", "blank-enterprise", "tuotu"]);
     await expect(loadTenant("template")).resolves.toBe(templateTenant);
     expect(resolveTenantSlug({ pathname: "/c/template", search: "" })).toBe(
       "template",
+    );
+  });
+
+  it("registers a neutral blank enterprise without client facts", async () => {
+    await expect(loadTenant("blank-enterprise")).resolves.toBe(
+      blankEnterpriseTenant,
+    );
+    expect(
+      resolveTenantSlug({ pathname: "/c/blank-enterprise", search: "" }),
+    ).toBe("blank-enterprise");
+    expect(blankEnterpriseTenant.isBlankTemplate).toBe(true);
+    expect(JSON.stringify(blankEnterpriseTenant)).not.toMatch(
+      /tuotu|拓浙|拓拓|浙江大学/i,
     );
   });
 

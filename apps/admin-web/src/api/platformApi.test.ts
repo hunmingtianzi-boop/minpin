@@ -41,6 +41,10 @@ function onboardingResponse(overrides: Record<string, unknown> = {}) {
     status: "review",
     tenant_slug: "acme-demo",
     tenant_name: "Acme",
+    admin_account: "admin@acme.example",
+    admin_display_name: "Acme 管理员",
+    initial_card_display_name: "Acme 顾问",
+    initial_card_title: "企业顾问",
     version: 3,
     import_batch_ids: ["batch-1"],
     suggestions: [
@@ -521,6 +525,14 @@ describe("platformApi", () => {
     );
 
     expect(session.suggestions[0].sources[0].fileName).toBe("company.txt");
+    expect(session).toEqual(
+      expect.objectContaining({
+        adminAccount: "admin@acme.example",
+        adminDisplayName: "Acme 管理员",
+        initialCardDisplayName: "Acme 顾问",
+        initialCardTitle: "企业顾问",
+      }),
+    );
     expect(client.postForm).toHaveBeenCalledWith(
       "/platform/onboarding/session%2Fone/imports",
       expect.any(FormData),
@@ -529,6 +541,75 @@ describe("platformApi", () => {
     expect([...form.keys()]).toEqual(["files"]);
     expect(JSON.stringify(session)).not.toContain("tenant_id");
     expect(JSON.stringify(session)).not.toContain("raw_text");
+  });
+
+  it("reads and flattens only session-scoped onboarding import progress", async () => {
+    const client = {
+      get: vi.fn().mockResolvedValue({
+        data: {
+          session_id: "session/one",
+          settled: false,
+          batches: [
+            {
+              id: "batch-1",
+              status: "processing",
+              total_items: 2,
+              pending_items: 1,
+              succeeded_items: 1,
+              failed_items: 0,
+              auto_publish: false,
+              created_at: "2026-07-16T09:00:00Z",
+              completed_at: null,
+              items: [
+                {
+                  id: "item-1",
+                  file_name: "company.pdf",
+                  source_type: "pdf",
+                  status: "completed",
+                  error_code: null,
+                  created_at: "2026-07-16T09:00:00Z",
+                  completed_at: "2026-07-16T09:00:02Z",
+                },
+                {
+                  id: "item-2",
+                  file_name: "catalog.xlsx",
+                  source_type: "xlsx",
+                  status: "processing",
+                  error_code: null,
+                  created_at: "2026-07-16T09:00:00Z",
+                  completed_at: null,
+                },
+              ],
+            },
+          ],
+        },
+      }),
+    } as unknown as ApiClient;
+
+    const status = await createPlatformApi(client).getOnboardingImports(
+      "session/one",
+    );
+
+    expect(client.get).toHaveBeenCalledWith(
+      "/platform/onboarding/session%2Fone/imports",
+    );
+    expect(status).toEqual({
+      sessionId: "session/one",
+      settled: false,
+      items: [
+        expect.objectContaining({
+          id: "item-1",
+          fileName: "company.pdf",
+          status: "completed",
+        }),
+        expect.objectContaining({
+          id: "item-2",
+          fileName: "catalog.xlsx",
+          status: "processing",
+        }),
+      ],
+    });
+    expect(JSON.stringify(status)).not.toMatch(/tenant_id|company_id|payload/);
   });
 
   it("sends optimistic versions for onboarding generation and confirmation", async () => {

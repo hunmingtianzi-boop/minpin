@@ -1,11 +1,15 @@
 import "@testing-library/jest-dom/vitest";
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode, useEffect, useRef } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PublicCardData } from "../lib/publicCardApi";
 import { templateTenant } from "../tenants/template/tenant";
-import { DeferredAIAssistant } from "./DeferredAIAssistant";
+import {
+  DeferredAIAssistant,
+  type AIAssistantHandle,
+} from "./DeferredAIAssistant";
 import { DeferredPublicExperience } from "./DeferredPublicExperience";
 
 vi.mock("motion/react", async () => {
@@ -76,6 +80,23 @@ class TestIntersectionObserver {
   }
 }
 
+function InitialQuestionHarness() {
+  const ref = useRef<AIAssistantHandle>(null);
+  const question = templateTenant.assistant.knowledgeBase[0].shortQuestion;
+
+  useEffect(() => {
+    ref.current?.openWithQuestion(question);
+  }, [question]);
+
+  return (
+    <DeferredAIAssistant
+      ref={ref}
+      config={templateTenant.assistant}
+      cardSlug="tenant-a"
+    />
+  );
+}
+
 describe("deferred first-screen boundaries", () => {
   beforeAll(async () => {
     await Promise.all([import("./PublicExperience"), import("./AIAssistant")]);
@@ -140,6 +161,21 @@ describe("deferred first-screen boundaries", () => {
     );
     expect(
       await screen.findByRole("dialog", { name: templateTenant.assistant.title }),
+    ).toBeInTheDocument();
+  });
+
+  it("preserves an initial recommended question through a StrictMode lazy mount", async () => {
+    render(
+      <StrictMode>
+        <InitialQuestionHarness />
+      </StrictMode>,
+    );
+
+    expect(
+      (await screen.findAllByText(templateTenant.assistant.knowledgeBase[0].shortQuestion)).length,
+    ).toBeGreaterThan(0);
+    expect(
+      await screen.findByText(templateTenant.assistant.knowledgeBase[0].answer),
     ).toBeInTheDocument();
   });
 });

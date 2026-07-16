@@ -2,11 +2,22 @@ import type { EnterpriseCardConfig } from "../domain/card";
 
 const tenantLoaders = {
   template: () => import("./template/tenant").then((module) => module.templateTenant),
+  "blank-enterprise": () =>
+    import("./blank/tenant").then((module) => module.blankEnterpriseTenant),
   tuotu: () => import("./tuotu/tenant").then((module) => module.tuotuTenant),
 } satisfies Record<string, () => Promise<EnterpriseCardConfig>>;
 
-export const registeredTenantSlugs = Object.freeze(Object.keys(tenantLoaders));
 export type TenantSlug = keyof typeof tenantLoaders;
+
+export const blankEnterpriseTemplateEnabled =
+  import.meta.env.DEV ||
+  import.meta.env.VITE_ENABLE_BLANK_ENTERPRISE_TEMPLATE === "true";
+
+export const registeredTenantSlugs = Object.freeze(
+  Object.keys(tenantLoaders).filter(
+    (slug) => slug !== "blank-enterprise" || blankEnterpriseTemplateEnabled,
+  ),
+);
 
 const normalizeSlug = (value: string | null | undefined) =>
   value?.trim().toLocaleLowerCase("en-US") ?? "";
@@ -36,6 +47,9 @@ export function resolveTenantSlug(
 export async function loadTenant(
   slug: string | null | undefined,
 ): Promise<EnterpriseCardConfig | undefined> {
+  if (slug === "blank-enterprise" && !blankEnterpriseTemplateEnabled) {
+    return undefined;
+  }
   return slug && isTenantSlug(slug) ? tenantLoaders[slug]() : undefined;
 }
 
