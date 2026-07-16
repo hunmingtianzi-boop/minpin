@@ -327,6 +327,7 @@ class MemberStore:
     ) -> MemberRecord:
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
+            await self._acquire_company_admin_guard(session, scope=scope)
             membership, user, credential = await self._member_row(
                 session,
                 scope=scope,
@@ -469,6 +470,7 @@ class MemberStore:
         desired = LifecycleStatus(status)
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
+            await self._acquire_company_admin_guard(session, scope=scope)
             membership, user, credential = await self._member_row(
                 session,
                 scope=scope,
@@ -556,6 +558,7 @@ class MemberStore:
         scope: MemberScope,
         row: BulkMemberRow,
     ) -> tuple[str, MemberRecord]:
+        await self._acquire_company_admin_guard(session, scope=scope)
         await session.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
             {"key": f"staff-account:{row.account}"},
@@ -827,12 +830,7 @@ class MemberStore:
         scope: MemberScope,
         exclude_membership_id: uuid.UUID,
     ) -> None:
-        # Serialize admin demotions/disables so concurrent requests cannot each
-        # observe the other administrator and lock the company out.
-        await session.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
-            {"key": f"company-admin-guard:{scope.tenant_id}:{scope.company_id}"},
-        )
+        await self._acquire_company_admin_guard(session, scope=scope)
         other_admin = await session.scalar(
             select(Membership.id)
             .join(StaffCredential, StaffCredential.membership_id == Membership.id)
@@ -852,6 +850,20 @@ class MemberStore:
                 "LAST_COMPANY_ADMIN_REQUIRED",
                 "At least one active company administrator must remain.",
             )
+
+    async def _acquire_company_admin_guard(
+        self,
+        session: AsyncSession,
+        *,
+        scope: MemberScope,
+    ) -> None:
+        # Take the company lock before any member/account row lock. Every path
+        # that can remove an active administrator follows this order, avoiding
+        # advisory-lock/row-lock cycles under concurrent mutations.
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+            {"key": f"company-admin-guard:{scope.tenant_id}:{scope.company_id}"},
+        )
 
     async def _guard_admin_transition(
         self,

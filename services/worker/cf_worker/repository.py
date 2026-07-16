@@ -184,6 +184,7 @@ class PostgresOutboxRepository:
                         parse_status='completed', publish_status=:publish_status,
                         published_at=CASE WHEN :published THEN clock_timestamp() ELSE NULL END
                     WHERE id=:item_id AND lock_token=:lock_token AND status='processing'
+                      AND lease_expires_at > clock_timestamp()
                     """
                 ),
                 {
@@ -196,7 +197,41 @@ class PostgresOutboxRepository:
                 },
             )
             if result.rowcount != 1:
-                raise RuntimeError("stale_import_lease")
+                completed_result = await connection.execute(
+                    text(
+                        """
+                            SELECT batch_id, status, attempts, document_id, version_id,
+                                   publish_status, published_at
+                            FROM knowledge_import_items
+                            WHERE id=:item_id
+                            FOR UPDATE
+                        """
+                    ),
+                    {"item_id": claim.id},
+                )
+                completed = completed_result.mappings().one_or_none()
+                if completed is None or completed["status"] != "completed":
+                    raise RuntimeError("stale_import_lease")
+                if int(completed["attempts"]) != claim.attempts:
+                    raise RuntimeError("stale_import_lease")
+                if published:
+                    publish_result_matches = (
+                        completed["publish_status"] == "published"
+                        and completed["published_at"] is not None
+                    )
+                else:
+                    publish_result_matches = (
+                        completed["publish_status"] == "not_requested"
+                        and completed["published_at"] is None
+                    )
+                if not (
+                    completed["batch_id"] == claim.batch_id
+                    and completed["document_id"] == document_id
+                    and completed["version_id"] == version_id
+                    and publish_result_matches
+                ):
+                    raise RuntimeError("completed_import_result_mismatch")
+                return
             await self._refresh_import_batch(connection, claim.batch_id)
 
     async def fail_knowledge_import(

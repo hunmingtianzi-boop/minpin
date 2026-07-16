@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import uuid
+from dataclasses import replace
 
 import pytest
 from app.core.config import Settings as ApiSettings
@@ -137,7 +138,8 @@ async def test_real_knowledge_import_rls_lease_draft_cleanup_retry_and_idempoten
                     text(
                         """
                             SELECT item.status AS item_status, item.payload_ciphertext,
-                                   item.document_id, document.status AS document_status,
+                                   item.document_id, item.version_id,
+                                   document.status AS document_status,
                                    version.review_status,
                                (SELECT count(*) FROM knowledge_chunks
                                 WHERE version_id=item.version_id) AS chunks
@@ -161,6 +163,56 @@ async def test_real_knowledge_import_rls_lease_draft_cleanup_retry_and_idempoten
                     {"source": f"import:{item_ids[0]}"},
                 )
                 == 1
+            )
+
+        with pytest.raises(RuntimeError, match="completed_import_result_mismatch"):
+            await repository.complete_knowledge_import(
+                claimed[item_ids[0]],
+                row.document_id,
+                row.version_id,
+                published=True,
+            )
+
+        with pytest.raises(RuntimeError, match="stale_import_lease"):
+            await repository.complete_knowledge_import(
+                replace(claimed[item_ids[0]], attempts=0),
+                row.document_id,
+                row.version_id,
+                published=False,
+            )
+
+        with pytest.raises(RuntimeError, match="stale_import_lease"):
+            await repository.complete_knowledge_import(
+                replace(claimed[item_ids[1]], lock_token=uuid.uuid4()),
+                uuid.uuid4(),
+                uuid.uuid4(),
+                published=False,
+            )
+
+        async with owner.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE knowledge_import_items "
+                    "SET lease_expires_at=clock_timestamp()-interval '1 second' "
+                    "WHERE id=:id"
+                ),
+                {"id": item_ids[1]},
+            )
+        with pytest.raises(RuntimeError, match="stale_import_lease"):
+            await repository.complete_knowledge_import(
+                claimed[item_ids[1]],
+                uuid.uuid4(),
+                uuid.uuid4(),
+                published=False,
+            )
+        async with owner.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE knowledge_import_items "
+                    "SET lease_expires_at=clock_timestamp()+interval '30 seconds' "
+                    "WHERE id=:id"
+                ),
+                {"id": item_ids[1]},
             )
 
         assert (
