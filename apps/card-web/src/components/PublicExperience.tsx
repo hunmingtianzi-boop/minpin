@@ -62,6 +62,7 @@ import { encodeQrMatrix, qrPathData } from "../lib/qrCode";
 type DialogState =
   | { type: "lead" }
   | { type: "privacy" }
+  | { type: "profile" }
   | { type: "share" }
   | { type: "product"; item: PublicProduct }
   | { type: "case"; item: PublicCaseStudy }
@@ -90,6 +91,8 @@ type PrivacyFields = {
 
 export type PublicExperienceHandle = {
   openLead: () => void;
+  openPrivacy: () => void;
+  openProfile: () => void;
   openShare: () => void;
 };
 
@@ -251,7 +254,7 @@ function DetailContent({
   onAssistant,
   onLead,
 }: {
-  dialog: Exclude<DialogState, null | { type: "lead" | "privacy" | "share" }>;
+  dialog: Exclude<DialogState, null | { type: "lead" | "privacy" | "profile" | "share" }>;
   detail: AsyncState<PublicProduct | PublicCaseStudy>;
   retry: () => void;
   onAssistant: (question: string) => void;
@@ -357,9 +360,10 @@ export const PublicExperience = forwardRef<
   PublicExperienceHandle,
   {
     card: PublicCardData;
+    controllerOnly?: boolean;
     onAssistant: (question: string) => void;
   }
->(function PublicExperience({ card, onAssistant }, ref) {
+>(function PublicExperience({ card, controllerOnly = false, onAssistant }, ref) {
   const configured = isPublicExperienceConfigured();
   const [catalog, setCatalog] = useState<AsyncState<PublicCatalog>>({ status: "idle" });
   const [catalogAttempt, setCatalogAttempt] = useState(0);
@@ -391,10 +395,24 @@ export const PublicExperience = forwardRef<
     detailController.current = null;
     setDialog({ type: "share" });
   }, []);
-  useImperativeHandle(ref, () => ({ openLead, openShare }), [openLead, openShare]);
+  const openPrivacy = useCallback(() => {
+    detailController.current?.abort();
+    detailController.current = null;
+    setDialog({ type: "privacy" });
+  }, []);
+  const openProfile = useCallback(() => {
+    detailController.current?.abort();
+    detailController.current = null;
+    setDialog({ type: "profile" });
+  }, []);
+  useImperativeHandle(
+    ref,
+    () => ({ openLead, openPrivacy, openProfile, openShare }),
+    [openLead, openPrivacy, openProfile, openShare],
+  );
 
   useEffect(() => {
-    if (!configured) return undefined;
+    if (!configured || controllerOnly) return undefined;
     const controller = new AbortController();
     setCatalog({ status: "loading" });
     void fetchPublicCatalog(card.slug, controller.signal)
@@ -410,10 +428,10 @@ export const PublicExperience = forwardRef<
         });
       });
     return () => controller.abort();
-  }, [card.slug, catalogAttempt, configured]);
+  }, [card.slug, catalogAttempt, configured, controllerOnly]);
 
   useEffect(() => {
-    if (!configured) return undefined;
+    if (!configured || controllerOnly) return undefined;
     const controller = new AbortController();
     setRecommendations({ status: "loading" });
     void fetchPublicRecommendations(card.slug, controller.signal)
@@ -426,10 +444,10 @@ export const PublicExperience = forwardRef<
         });
       });
     return () => controller.abort();
-  }, [card.slug, configured]);
+  }, [card.slug, configured, controllerOnly]);
 
   const loadDetail = useCallback(
-    (target: Exclude<DialogState, null | { type: "lead" | "privacy" | "share" }>) => {
+    (target: Exclude<DialogState, null | { type: "lead" | "privacy" | "profile" | "share" }>) => {
       detailController.current?.abort();
       const controller = new AbortController();
       detailController.current = controller;
@@ -456,7 +474,7 @@ export const PublicExperience = forwardRef<
   );
 
   const openDetail = useCallback(
-    (target: Exclude<DialogState, null | { type: "lead" | "privacy" | "share" }>) => {
+    (target: Exclude<DialogState, null | { type: "lead" | "privacy" | "profile" | "share" }>) => {
       setDialog(target);
       loadDetail(target);
     },
@@ -505,7 +523,7 @@ export const PublicExperience = forwardRef<
 
   return (
     <>
-      <section className="section public-experience" id="catalog" aria-labelledby="catalog-title">
+      {!controllerOnly && <section className="section public-experience" id="catalog" aria-labelledby="catalog-title">
         <div className="page-width">
           <div className="public-experience-heading">
             <div className="section-heading">
@@ -733,7 +751,7 @@ export const PublicExperience = forwardRef<
             />
           </div>
         </div>
-      </section>
+      </section>}
 
       <AnimatePresence>
         {dialog?.type === "lead" && (
@@ -753,6 +771,17 @@ export const PublicExperience = forwardRef<
               policies={policies}
               refreshPolicies={refreshPolicies}
               onClose={closeDialog}
+            />
+          </ModalShell>
+        )}
+        {dialog?.type === "profile" && (
+          <ModalShell eyebrow="长期访客画像" title="个性化授权" onClose={closeDialog}>
+            <ProfilePersonalizationControl
+              cardSlug={card.slug}
+              companyId={card.company.id}
+              policies={policies}
+              refreshPolicies={refreshPolicies}
+              configured={configured}
             />
           </ModalShell>
         )}

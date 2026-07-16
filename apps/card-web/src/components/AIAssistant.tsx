@@ -98,6 +98,7 @@ export const AIAssistant = forwardRef<
   ]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [requestFailure, setRequestFailure] = useState<RequestFailure | null>(null);
   const shouldReduceMotion = useReducedMotion();
   const nextId = useRef(2);
@@ -107,7 +108,6 @@ export const AIAssistant = forwardRef<
   const launcherRef = useRef<HTMLButtonElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | null>(null);
-  const questionTimerRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
 
@@ -122,6 +122,7 @@ export const AIAssistant = forwardRef<
 
   const closeAssistant = useCallback(() => {
     cancelActiveRequest();
+    setPendingQuestion(null);
     setIsLoading(false);
     setIsOpen(false);
   }, [cancelActiveRequest]);
@@ -162,10 +163,6 @@ export const AIAssistant = forwardRef<
     window.addEventListener("keydown", handleDialogKeys);
     return () => {
       window.clearTimeout(focusTimer);
-      if (questionTimerRef.current) {
-        window.clearTimeout(questionTimerRef.current);
-        questionTimerRef.current = null;
-      }
       cancelActiveRequest();
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleDialogKeys);
@@ -192,7 +189,6 @@ export const AIAssistant = forwardRef<
     return () => {
       mountedRef.current = false;
       cancelActiveRequest();
-      if (questionTimerRef.current) window.clearTimeout(questionTimerRef.current);
     };
   }, [cancelActiveRequest]);
 
@@ -356,17 +352,20 @@ export const AIAssistant = forwardRef<
     ],
   );
 
+  useEffect(() => {
+    if (!isOpen || !pendingQuestion) return;
+    const question = pendingQuestion;
+    setPendingQuestion(null);
+    ask(question);
+  }, [ask, isOpen, pendingQuestion]);
+
   useImperativeHandle(
     ref,
     () => ({
       open: () => setIsOpen(true),
       openWithQuestion: (question: string) => {
         setIsOpen(true);
-        if (questionTimerRef.current) window.clearTimeout(questionTimerRef.current);
-        questionTimerRef.current = window.setTimeout(() => {
-          ask(question);
-          questionTimerRef.current = null;
-        }, 120);
+        setPendingQuestion(question);
       },
     }),
     [ask],
