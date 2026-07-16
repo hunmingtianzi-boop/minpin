@@ -33,6 +33,8 @@ from app.core.rate_limit import RateLimitBackendUnavailable, RedisRateLimiter
 from app.core.request_context import request_id_ctx
 from app.core.request_security import request_ip_hash, security_subject_hash
 from app.core.tokens import VisitorPrincipal
+from app.services.ai_runtime import ResolvedRAGRuntime, resolve_rag_runtime
+from app.services.platform_llm_profiles import LLMRuntimeUnavailable, is_chat_available
 from app.services.public_store import (
     PreparedMessage,
     PublicStore,
@@ -57,7 +59,38 @@ def _store(request: Request) -> PublicStore:
 )
 async def get_public_card(slug: str, request: Request) -> PublicCardEnvelope:
     card = await _store(request).get_public_card(slug=slug)
+    llm_available = await is_chat_available(
+        request.app.state.session_factory,
+        request.app.state.settings,
+    )
+    card = card.model_copy(
+        update={
+            "ai_assistant": card.ai_assistant.model_copy(
+                update={"available": card.ai_assistant.available and llm_available}
+            )
+        }
+    )
     return PublicCardEnvelope(data=card)
+
+
+def _runtime_semaphore(request: Request, runtime: ResolvedRAGRuntime) -> asyncio.Semaphore:
+    """Return a bounded semaphore for the exact profile/version runtime."""
+
+    cache: dict[tuple[str, int], asyncio.Semaphore] = getattr(
+        request.app.state, "ai_runtime_semaphores", {}
+    )
+    request.app.state.ai_runtime_semaphores = cache
+    profile_key = str(runtime.config.profile_id or "environment")
+    key = (profile_key, runtime.config.version)
+    semaphore = cache.get(key)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(runtime.settings.llm_max_concurrency)
+        cache[key] = semaphore
+        # Profiles are versioned; retain only a small number of old semaphores
+        # while in-flight requests finish.
+        while len(cache) > 16:
+            cache.pop(next(iter(cache)))
+    return semaphore
 
 
 @router.post(
@@ -252,24 +285,31 @@ async def _generate_and_persist(
 ) -> StoredAnswer:
     # This function is deliberately independent from the response stream so it
     # can finish and persist after a client disconnect.
-    settings = request.app.state.settings
+    base_settings = request.app.state.settings
     metrics: MetricsRegistry | None = getattr(request.app.state, "metrics", None)
-    api_key = settings.llm_api_key
-    if api_key is None:
+    try:
+        runtime = await resolve_rag_runtime(
+            settings=base_settings,
+            http_client=request.app.state.http_client,
+            session_factory=request.app.state.session_factory,
+        )
+    except LLMRuntimeUnavailable as exc:
         if metrics is not None:
             metrics.observe_ai_error(
-                provider=settings.llm_provider,
-                model=settings.llm_model,
-                category="configuration",
+                provider=base_settings.llm_provider,
+                model=base_settings.llm_model,
+                category=exc.code,
             )
         await store.persist_ai_failure(
             prepared=prepared,
             principal=principal,
-            error_code="LLM_API_KEY_MISSING",
+            error_code=f"LLM_{exc.code.upper()}",
         )
-        raise ApiError(503, "MODEL_UNAVAILABLE", "AI 服务尚未配置")
+        raise ApiError(503, "MODEL_UNAVAILABLE", "AI 服务尚未配置") from exc
 
-    semaphore: asyncio.Semaphore = request.app.state.ai_semaphore
+    settings = runtime.settings
+    api_key = runtime.config.api_key
+    semaphore = _runtime_semaphore(request, runtime)
     acquired = False
     try:
         await store.assert_model_budget(principal=principal)
@@ -287,7 +327,10 @@ async def _generate_and_persist(
             principal=principal,
         )
         forbidden_topics = await store.load_forbidden_topic_rules(principal=principal)
-        result = await request.app.state.rag_orchestrator.answer(
+        orchestrator = getattr(request.app.state, "rag_orchestrator", None)
+        if orchestrator is None:
+            orchestrator = runtime.orchestrator
+        result = await orchestrator.answer(
             RAGRequest(
                 tenant_id=str(principal.tenant_id),
                 company_id=str(principal.company_id),

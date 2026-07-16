@@ -132,11 +132,12 @@ class CollisionHarness(CatalogStore):
         if len(self.attempts) == 1:
             raise IntegrityError("INSERT", {}, _ConstraintError("collision"))
         body = cast(CreateCardRequest, kwargs["body"])
-        owner_user_id = cast(uuid.UUID, kwargs["owner_user_id"])
+        owner_user_id = cast(uuid.UUID | None, kwargs["owner_user_id"])
         now = datetime.now(UTC)
         share_url = f"http://127.0.0.1:4173/c/{slug}"
         return ManagedCardRecord(
             id=uuid.uuid4(),
+            card_kind=body.card_kind,
             owner_user_id=owner_user_id,
             slug=slug,
             display_name=body.display_name,
@@ -178,6 +179,39 @@ async def test_card_owner_cannot_create_a_card_for_another_user() -> None:
             body=CreateCardRequest(
                 owner_user_id=uuid.uuid4(),
                 display_name="越权名片",
+                title="不应创建",
+            ),
+        )
+
+    assert captured.value.status_code == 403
+    assert store.attempts == []
+
+
+async def test_company_admin_can_create_employee_independent_enterprise_card() -> None:
+    store = CollisionHarness(["c-" + "a" * 36, "c-" + "b" * 36])
+
+    result = await store.create_card(
+        scope=_scope(),
+        body=CreateCardRequest(
+            card_kind="enterprise",
+            display_name="示例企业官方名片",
+            title="企业官方主页",
+        ),
+    )
+
+    assert result.card_kind == "enterprise"
+    assert result.owner_user_id is None
+
+
+async def test_card_owner_cannot_create_enterprise_official_card() -> None:
+    store = CollisionHarness(["c-" + "a" * 36])
+
+    with pytest.raises(ApiError) as captured:
+        await store.create_card(
+            scope=_scope(role="card_owner"),
+            body=CreateCardRequest(
+                card_kind="enterprise",
+                display_name="越权企业名片",
                 title="不应创建",
             ),
         )

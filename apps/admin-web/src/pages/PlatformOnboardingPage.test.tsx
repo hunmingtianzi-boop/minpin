@@ -1,0 +1,300 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { PlatformOnboardingSession } from "../api/types";
+import {
+  PlatformOnboardingPage,
+  type PlatformOnboardingPageProps,
+} from "./PlatformOnboardingPage";
+
+const reviewSession: PlatformOnboardingSession = {
+  id: "onboarding-session-7",
+  status: "review",
+  tenantSlug: "atlas-labs",
+  tenantName: "",
+  version: 7,
+  importBatchIds: ["batch-1"],
+  suggestions: [
+    {
+      field: "company_name",
+      value: "阿特拉斯材料实验室",
+      confidence: 0.91,
+      generationVersion: 3,
+      sources: [
+        {
+          importItemId: "item-1",
+          documentId: "draft-1",
+          fileName: "企业介绍.pdf",
+          excerpt: "阿特拉斯材料实验室专注复合材料研发。",
+        },
+      ],
+    },
+  ],
+  businessProfile: [
+    {
+      field: "business_positioning",
+      value: "面向先进制造企业的复合材料研发服务商",
+      confidence: 0.88,
+      generationVersion: 3,
+      sources: [
+        {
+          importItemId: "item-1",
+          documentId: "draft-1",
+          fileName: "企业介绍.pdf",
+          excerpt: "阿特拉斯材料实验室专注复合材料研发。",
+        },
+      ],
+    },
+  ],
+  createdAt: "2026-07-15T12:00:00Z",
+  updatedAt: "2026-07-15T12:05:00Z",
+};
+
+function props(overrides: Partial<PlatformOnboardingPageProps> = {}): PlatformOnboardingPageProps {
+  return {
+    session: reviewSession,
+    importItems: [
+      { id: "item-1", fileName: "企业介绍.pdf", status: "completed" },
+    ],
+    adminSummary: { account: "admin@atlas.example", displayName: "陈管理员" },
+    llmAvailability: "ready",
+    onStart: vi.fn().mockResolvedValue(undefined),
+    onUpload: vi.fn().mockResolvedValue(undefined),
+    onGenerate: vi.fn().mockResolvedValue(undefined),
+    onConfirm: vi.fn().mockResolvedValue(undefined),
+    onCancel: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
+async function fillConfirmationGate(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("checkbox", { name: "我已逐项复核企业信息" }));
+  await user.click(
+    screen.getByRole("checkbox", { name: "我已核对管理员账号与交付对象" }),
+  );
+  await user.click(
+    screen.getByRole("checkbox", { name: "我已核对初始名片，并确认保持草稿" }),
+  );
+}
+
+afterEach(() => {
+  Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+});
+
+describe("PlatformOnboardingPage", () => {
+  it("keeps parsed drafts usable when LLM is unavailable and uploads only to the server session", async () => {
+    const user = userEvent.setup();
+    const onUpload = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          session: { ...reviewSession, status: "manual_required", suggestions: [] },
+          llmAvailability: "unavailable",
+          onUpload,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("LLM 当前不可用，已切换为人工填写")).toBeInTheDocument();
+    expect(screen.getByText(/已成功解析的资料草稿不会回滚/)).toBeInTheDocument();
+    expect(screen.getByText("当前使用人工填写")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始智能分析" })).toBeDisabled();
+
+    const file = new File(["company profile"], "补充资料.txt", { type: "text/plain" });
+    await user.upload(screen.getByLabelText("选择建企资料"), file);
+    await user.click(screen.getByRole("button", { name: "上传并解析（1）" }));
+
+    await waitFor(() => expect(onUpload).toHaveBeenCalledTimes(1));
+    expect(onUpload).toHaveBeenCalledWith(reviewSession.id, [file]);
+    expect(JSON.stringify(onUpload.mock.calls[0])).not.toMatch(/tenantId|companyId/);
+  });
+
+  it("shows source evidence and never applies a suggestion until the user chooses it", async () => {
+    const user = userEvent.setup();
+    render(<PlatformOnboardingPage {...props()} />);
+
+    const companyInput = await screen.findByLabelText("企业名称");
+    expect(companyInput).toHaveValue("");
+    const suggestion = screen.getByLabelText("企业名称建议");
+    expect(within(suggestion).getByText("阿特拉斯材料实验室专注复合材料研发。")).toBeInTheDocument();
+    expect(within(suggestion).getByText("导入项：item-1")).toBeInTheDocument();
+    expect(within(suggestion).getByText("高置信 · 生成版本 3")).toBeInTheDocument();
+    await user.click(within(suggestion).getByRole("button", { name: "采用建议" }));
+    expect(companyInput).toHaveValue("阿特拉斯材料实验室");
+  });
+
+  it("shows a sourced business profile without applying it to public fields", () => {
+    render(<PlatformOnboardingPage {...props()} />);
+    expect(screen.getByRole("heading", { name: "企业业务画像（待审核）" })).toBeInTheDocument();
+    expect(screen.getByText("面向先进制造企业的复合材料研发服务商")).toBeInTheDocument();
+    expect(screen.getByLabelText("业务定位建议")).not.toHaveTextContent("采用建议");
+    expect(screen.getByRole("region", { name: "资料分析进度" })).toHaveTextContent(
+      "分析完成，等待复核",
+    );
+    expect(screen.queryByText("服务端会话")).not.toBeInTheDocument();
+    expect(screen.queryByText("当前版本")).not.toBeInTheDocument();
+    expect(screen.getByText("查看处理编号")).toBeInTheDocument();
+  });
+
+  it("shows truthful analysis feedback while the generation request is pending", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    const onGenerate = vi.fn(
+      () => new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+    );
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          session: { ...reviewSession, suggestions: [], businessProfile: [] },
+          onGenerate,
+        })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "开始智能分析" }));
+    expect(screen.getByRole("button", { name: "正在分析企业资料" })).toBeDisabled();
+    expect(screen.getByRole("region", { name: "资料分析进度" })).toHaveTextContent(
+      "正在识别业务定位、产品服务、客户与资料缺口",
+    );
+    finish();
+    await waitFor(() => expect(onGenerate).toHaveBeenCalledWith(reviewSession.id, reviewSession.version));
+  });
+
+  it("offers a clear next step after a company is confirmed", async () => {
+    const user = userEvent.setup();
+    const onStartAnother = vi.fn();
+    const onOpenEnterprises = vi.fn();
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          session: {
+            ...reviewSession,
+            status: "confirmed",
+            confirmedEnterprise: {
+              tenantId: "tenant-1",
+              tenantSlug: "atlas-labs",
+              tenantName: "阿特拉斯租户",
+              companyId: "company-1",
+              companyName: "阿特拉斯材料实验室",
+              status: "active",
+              adminUserId: "user-1",
+              adminMembershipId: "membership-1",
+              initialCardId: "card-1",
+              initialCardSlug: "atlas-card",
+              createdAt: "2026-07-15T12:10:00Z",
+            },
+          },
+          onRefresh: vi.fn(),
+          onStartAnother,
+          onOpenEnterprises,
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "刷新结果" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "继续开通新企业" }));
+    expect(onStartAnother).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "前往企业中心" }));
+    expect(onOpenEnterprises).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires explicit enterprise, admin and draft-card review and submits expectedVersion", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          initialReview: {
+            tenantName: "阿特拉斯租户",
+            companyName: "阿特拉斯材料实验室",
+            initialCardDisplayName: "陈工程师",
+          },
+          onConfirm,
+        })}
+      />,
+    );
+
+    const confirm = screen.getByRole("button", { name: "确认并激活企业" });
+    await waitFor(() => expect(screen.getByLabelText("租户名称")).toHaveValue("阿特拉斯租户"));
+    expect(confirm).toBeDisabled();
+    await fillConfirmationGate(user);
+    expect(confirm).toBeEnabled();
+    await user.click(confirm);
+
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    expect(onConfirm).toHaveBeenCalledWith(
+      reviewSession.id,
+      expect.objectContaining({
+        expectedVersion: 7,
+        tenantName: "阿特拉斯租户",
+        companyName: "阿特拉斯材料实验室",
+        initialCardDisplayName: "陈工程师",
+      }),
+    );
+  });
+
+  it("keeps review open on a version conflict and requires a cancel reason", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn().mockRejectedValue({ status: 409, code: "VERSION_CONFLICT" });
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          initialReview: {
+            tenantName: "阿特拉斯租户",
+            companyName: "阿特拉斯材料实验室",
+            initialCardDisplayName: "陈工程师",
+          },
+          onConfirm,
+          onCancel,
+        })}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("企业名称")).toHaveValue("阿特拉斯材料实验室"));
+    await fillConfirmationGate(user);
+    await user.click(screen.getByRole("button", { name: "确认并激活企业" }));
+    expect(await screen.findByText("会话版本冲突")).toBeInTheDocument();
+    expect(screen.getByText(/请刷新后重新复核/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "人工复核与确认" })).toBeInTheDocument();
+
+    const cancelOpener = screen.getByRole("button", { name: "取消会话" });
+    await user.click(cancelOpener);
+    const dialog = screen.getByRole("dialog", { name: "取消资料辅助建企会话" });
+    const cancelConfirm = within(dialog).getByRole("button", { name: "确认取消会话" });
+    expect(cancelConfirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("取消原因"), {
+      target: { value: "wrong-customer-document" },
+    });
+    expect(cancelConfirm).toBeEnabled();
+    await user.click(cancelConfirm);
+    await waitFor(() =>
+      expect(onCancel).toHaveBeenCalledWith(reviewSession.id, "wrong-customer-document", 7),
+    );
+    await waitFor(() => expect(cancelOpener).toHaveFocus());
+  });
+
+  it("retains named landmarks and reachable primary actions at a 390px viewport", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    window.dispatchEvent(new Event("resize"));
+    render(
+      <PlatformOnboardingPage
+        {...props({
+          session: { ...reviewSession, status: "manual_required", suggestions: [] },
+          llmAvailability: "failed",
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("navigation", { name: "资料辅助建企进度" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "资料分析与业务归纳" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "人工复核与确认" })).toBeInTheDocument();
+    expect(screen.getByLabelText("开通会话主操作")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "取消会话" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "确认并激活企业" })).toBeVisible();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+});

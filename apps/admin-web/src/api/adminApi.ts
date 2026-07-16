@@ -293,9 +293,27 @@ function normalizeManagedCard(rawValue: unknown): ManagedCard {
   const policies = isRecord(rawValue.policy_versions)
     ? rawValue.policy_versions
     : {};
+  const cardKind = optionalString(rawValue.card_kind);
+  if (cardKind !== "enterprise" && cardKind !== "employee") {
+    throw new ApiError("名片包含无法识别的业务类型。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  const ownerUserId = optionalString(rawValue.owner_user_id) || undefined;
+  if (cardKind === "employee" && !ownerUserId) {
+    throw new ApiError("员工名片缺少有效所有者。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  if (cardKind === "enterprise" && ownerUserId) {
+    throw new ApiError("企业官方名片不能绑定员工所有者。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
   return {
     id: requireId(rawValue, "名片"),
-    ownerUserId: requireString(rawValue.owner_user_id, "名片 owner_user_id"),
+    cardKind,
+    ownerUserId,
     slug: requireString(rawValue.slug, "名片 slug"),
     displayName: optionalString(rawValue.display_name),
     title: optionalString(rawValue.title),
@@ -426,7 +444,7 @@ function forbiddenTopicPayload(input: ForbiddenTopicInput) {
 
 function managedCardPayload(input: ManagedCardInput, requireOwner: boolean) {
   const ownerUserId = input.ownerUserId?.trim();
-  if (requireOwner && !ownerUserId) {
+  if (input.cardKind === "employee" && requireOwner && !ownerUserId) {
     throw new ApiError("编辑名片时必须保留有效的所有者。", {
       code: "INVALID_CARD_OWNER",
     });
@@ -441,7 +459,10 @@ function managedCardPayload(input: ManagedCardInput, requireOwner: boolean) {
       .filter(([, value]) => value.length > 0),
   );
   return {
-    ...(ownerUserId ? { owner_user_id: ownerUserId } : {}),
+    card_kind: input.cardKind,
+    ...(input.cardKind === "employee" && ownerUserId
+      ? { owner_user_id: ownerUserId }
+      : {}),
     display_name: input.displayName.trim(),
     title: input.title.trim(),
     avatar_url: nullableString(input.avatarUrl),

@@ -204,6 +204,7 @@ describe("adminApi real contract", () => {
     };
     const card = {
       id: "card-1",
+      card_kind: "employee",
       owner_user_id: "user-1",
       slug: "c-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       display_name: "林顾问",

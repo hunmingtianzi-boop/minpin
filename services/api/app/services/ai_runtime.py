@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -23,6 +24,19 @@ from app.ai import (
 )
 from app.ai.protocols import AsyncSqlExecutor
 from app.core.config import Settings
+from app.services.platform_llm_profiles import (
+    EffectiveChatConfig,
+    resolve_effective_chat_config,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedRAGRuntime:
+    """Request-local Chat runtime resolved from the current active profile."""
+
+    config: EffectiveChatConfig
+    settings: Settings
+    orchestrator: RAGOrchestrator
 
 
 class ScopedSessionExecutor(AsyncSqlExecutor):
@@ -129,3 +143,31 @@ def build_rag_orchestrator(
             max_tokens=settings.llm_max_output_tokens,
         ),
     )
+
+
+async def resolve_rag_runtime(
+    *,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> ResolvedRAGRuntime:
+    """Resolve and build Chat for one request without mutating process settings.
+
+    The resolver reads the active database profile on every call. Embedding and
+    import configuration continue to come from the existing process settings.
+    """
+
+    config = await resolve_effective_chat_config(session_factory, settings)
+    runtime_settings = config.apply_to_settings(settings)
+    return ResolvedRAGRuntime(
+        config=config,
+        settings=runtime_settings,
+        orchestrator=build_rag_orchestrator(
+            settings=runtime_settings,
+            http_client=http_client,
+            session_factory=session_factory,
+        ),
+    )
+
+
+__all__ = ["ResolvedRAGRuntime", "build_rag_orchestrator", "resolve_rag_runtime"]

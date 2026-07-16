@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     cors_allowed_origins: list[str] = Field(
         default_factory=lambda: ["http://127.0.0.1:4173", "http://localhost:4173"]
     )
+    public_card_base_url: str = "http://127.0.0.1:4173"
 
     database_url: str = (
         "postgresql+asyncpg://cf_ai_card_app:change-me-app-local-only@localhost:5432/cf_ai_card"

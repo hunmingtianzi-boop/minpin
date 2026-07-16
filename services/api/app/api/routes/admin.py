@@ -46,7 +46,7 @@ from app.api.scheduled_publish_schemas import (
 )
 from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
-from app.db.models import ContentStatus, ScheduledPublishResourceType
+from app.db.models import CardKind, ContentStatus, ScheduledPublishResourceType
 from app.services.admin_store import AdminScope, AdminStore
 from app.services.catalog_knowledge import CatalogKnowledgeSynchronizer
 from app.services.catalog_store import CatalogScope, CatalogStore, require_version
@@ -444,6 +444,7 @@ async def list_products(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     content_status: Annotated[ContentStatus | None, Query(alias="status")] = None,
+    card_kind: Annotated[CardKind | None, Query(alias="card_kind")] = None,
 ) -> ProductListEnvelope:
     _require_permission(principal, "catalog.read")
     records, total = await _catalog_store(request).list_products(
@@ -451,6 +452,7 @@ async def list_products(
         limit=limit,
         offset=offset,
         status=content_status,
+        card_kind=card_kind,
     )
     return ProductListEnvelope(data=records, total=total, limit=limit, offset=offset)
 
@@ -1130,6 +1132,7 @@ async def list_cards(
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
     content_status: Annotated[ContentStatus | None, Query(alias="status")] = None,
+    card_kind: Annotated[CardKind | None, Query(alias="card_kind")] = None,
 ) -> ManagedCardListEnvelope:
     _require_permission(principal, "card.read")
     records, total = await _catalog_store(request).list_cards(
@@ -1137,6 +1140,7 @@ async def list_cards(
         limit=limit,
         offset=offset,
         status=content_status,
+        card_kind=card_kind,
     )
     return ManagedCardListEnvelope(data=records, total=total, limit=limit, offset=offset)
 

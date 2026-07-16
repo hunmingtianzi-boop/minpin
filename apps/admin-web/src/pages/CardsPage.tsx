@@ -21,6 +21,7 @@ import {
   Add24Regular,
   Copy24Regular,
   Edit24Regular,
+  Open24Regular,
   QrCode24Regular,
   Send24Regular,
   Share24Regular,
@@ -32,6 +33,7 @@ import { useState } from "react";
 import { adminApi } from "../api/adminApi";
 import { ApiError } from "../api/client";
 import type { ManagedCard } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import { ActionConfirmDialog } from "../components/ActionConfirmDialog";
 import { CardEditor } from "../components/CardEditor";
 import { CardContentOverridesDialog } from "../components/CardContentOverridesDialog";
@@ -62,10 +64,147 @@ export async function copyManagedCardText(value: string): Promise<void> {
   if (!copied) throw new Error("copy failed");
 }
 
+type CardTableProps = {
+  cards: ManagedCard[];
+  kind: ManagedCard["cardKind"];
+  onCreate?: () => void;
+  onEdit: (card: ManagedCard) => void;
+  onShare: (card: ManagedCard) => void;
+  onOverride: (card: ManagedCard) => void;
+  onAction: (type: CardAction["type"], card: ManagedCard) => void;
+};
+
+function CardTable({
+  cards,
+  kind,
+  onCreate,
+  onEdit,
+  onShare,
+  onOverride,
+  onAction,
+}: CardTableProps) {
+  const enterprise = kind === "enterprise";
+  if (cards.length === 0) {
+    return (
+      <div className="catalog-empty-inline">
+        <p>
+          {enterprise
+            ? "尚未创建企业官方名片。它归企业所有，不需要选择员工。"
+            : "尚未创建员工名片。员工名片需要绑定企业有效成员。"}
+        </p>
+        {onCreate && (
+          <Button appearance={enterprise ? "primary" : "secondary"} onClick={onCreate}>
+            {enterprise ? "创建企业名片" : "创建员工名片"}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="table-scroll">
+      <Table aria-label={enterprise ? "企业名片列表" : "员工名片列表"} size="small">
+        <TableHeader>
+          <TableRow>
+            <TableHeaderCell>{enterprise ? "企业官方名片" : "员工名片"}</TableHeaderCell>
+            <TableHeaderCell className="status-column">状态</TableHeaderCell>
+            <TableHeaderCell className="updated-column">更新时间</TableHeaderCell>
+            <TableHeaderCell className="catalog-actions-column">操作</TableHeaderCell>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {cards.map((card) => (
+            <TableRow key={card.id}>
+              <TableCell>
+                <div className="entity-title-cell">
+                  <strong>{card.displayName || (enterprise ? "未命名企业" : "未命名员工")}</strong>
+                  <span>
+                    {card.title || (enterprise ? "业务定位未填写" : "职务未填写")}
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell className="status-column">
+                <StatusBadge status={card.status} />
+              </TableCell>
+              <TableCell className="updated-column">
+                {formatTimestamp(card.updatedAt)}
+              </TableCell>
+              <TableCell className="catalog-actions-column">
+                <div className="row-actions catalog-row-actions">
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<Edit24Regular />}
+                    onClick={() => onEdit(card)}
+                  >
+                    编辑
+                  </Button>
+                  {card.status === "published" && (
+                    <>
+                      <Button
+                        as="a"
+                        appearance="primary"
+                        size="small"
+                        icon={<Open24Regular />}
+                        href={card.shareUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        打开公开页
+                      </Button>
+                      <Button
+                        appearance="subtle"
+                        size="small"
+                        icon={<Share24Regular />}
+                        onClick={() => onShare(card)}
+                      >
+                        分享
+                      </Button>
+                    </>
+                  )}
+                  <Button
+                    appearance="subtle"
+                    size="small"
+                    icon={<Settings24Regular />}
+                    onClick={() => onOverride(card)}
+                  >
+                    内容覆盖
+                  </Button>
+                  {card.status !== "published" ? (
+                    <Button
+                      appearance="subtle"
+                      size="small"
+                      icon={<Send24Regular />}
+                      onClick={() => onAction("publish", card)}
+                    >
+                      发布
+                    </Button>
+                  ) : (
+                    <Button
+                      appearance="subtle"
+                      size="small"
+                      icon={<ToggleRight24Regular />}
+                      onClick={() => onAction("deactivate", card)}
+                    >
+                      停用
+                    </Button>
+                  )}
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 export function CardsPage() {
+  const auth = useAuth();
   const resource = useResource(() => adminApi.listManagedCards());
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<ManagedCard>();
+  const [createKind, setCreateKind] = useState<ManagedCard["cardKind"]>("enterprise");
   const [shareTarget, setShareTarget] = useState<ManagedCard>();
   const [overrideTarget, setOverrideTarget] = useState<ManagedCard>();
   const [copyNotice, setCopyNotice] = useState<string>();
@@ -75,7 +214,8 @@ export function CardsPage() {
   const [actionError, setActionError] = useState<ApiError>();
   const [notice, setNotice] = useState<string>();
 
-  const openCreate = () => {
+  const openCreate = (kind: ManagedCard["cardKind"]) => {
+    setCreateKind(kind);
     setEditing(undefined);
     setEditorOpen(true);
     setNotice(undefined);
@@ -132,17 +272,47 @@ export function CardsPage() {
   };
 
   const deactivating = action?.type === "deactivate";
+  const canManageEnterpriseCards = auth.user?.role === "company_admin";
+  const enterpriseCards = resource.data?.filter((card) => card.cardKind === "enterprise") ?? [];
+  const employeeCards = resource.data?.filter((card) => card.cardKind === "employee") ?? [];
+
+  const edit = (card: ManagedCard) => {
+    setEditing(card);
+    setEditorOpen(true);
+    setNotice(undefined);
+  };
+
+  const share = (card: ManagedCard) => {
+    setShareTarget(card);
+    setCopyNotice(undefined);
+    setCopyError(undefined);
+  };
 
   return (
     <main className="page-stack">
       <PageHeader
-        title="名片管理"
-        description="创建和维护多张名片。安全链接、所有者范围和公开状态均由服务端确认。"
+        title="企业与员工名片"
+        description="企业官方名片归企业所有并可独立发布；员工名片绑定具体成员。两类名片共享同一安全公开页合同。"
         actions={
           resource.status === "permission" ? undefined : (
-            <Button appearance="primary" icon={<Add24Regular />} onClick={openCreate}>
-              新建名片
-            </Button>
+            <div className="row-actions">
+              {canManageEnterpriseCards && (
+                <Button
+                  appearance="primary"
+                  icon={<Add24Regular />}
+                  onClick={() => openCreate("enterprise")}
+                >
+                  新建企业名片
+                </Button>
+              )}
+              <Button
+                appearance={canManageEnterpriseCards ? "secondary" : "primary"}
+                icon={<Add24Regular />}
+                onClick={() => openCreate("employee")}
+              >
+                新建员工名片
+              </Button>
+            </div>
           )
         }
       />
@@ -153,120 +323,93 @@ export function CardsPage() {
         </MessageBar>
       )}
 
-      <section className="content-panel catalog-panel">
-        {resource.status !== "ready" && (
+      {resource.status !== "ready" && (
+        <section className="content-panel catalog-panel">
           <ResourceState
             status={resource.status}
             title={resource.status === "empty" ? "尚未创建名片" : undefined}
             description={
               resource.status === "empty"
-                ? "创建第一张名片后，可在这里发布、停用和复制分享链接。"
+                ? "企业管理员可先创建企业官方名片；员工名片在绑定成员后单独管理。"
                 : resource.error?.message
             }
             errorCode={resource.error?.code}
             requestId={resource.error?.requestId}
             onRetry={resource.status === "error" ? resource.reload : undefined}
             emptyAction={
-              <Button appearance="primary" icon={<Add24Regular />} onClick={openCreate}>
-                新建名片
-              </Button>
+              <div className="row-actions">
+                {canManageEnterpriseCards && (
+                  <Button
+                    appearance="primary"
+                    icon={<Add24Regular />}
+                    onClick={() => openCreate("enterprise")}
+                  >
+                    创建企业名片
+                  </Button>
+                )}
+                <Button
+                  appearance={canManageEnterpriseCards ? "secondary" : "primary"}
+                  icon={<Add24Regular />}
+                  onClick={() => openCreate("employee")}
+                >
+                  创建员工名片
+                </Button>
+              </div>
             }
           />
-        )}
+        </section>
+      )}
 
-        {resource.status === "ready" && resource.data && (
-          <div className="table-scroll">
-            <Table aria-label="名片列表" size="small">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>名片与所有者</TableHeaderCell>
-                  <TableHeaderCell className="status-column">状态</TableHeaderCell>
-                  <TableHeaderCell className="updated-column">更新时间</TableHeaderCell>
-                  <TableHeaderCell className="catalog-actions-column">操作</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {resource.data.map((card) => (
-                  <TableRow key={card.id}>
-                    <TableCell>
-                      <div className="entity-title-cell">
-                        <strong>{card.displayName || "未命名名片"}</strong>
-                        <span>{card.title || "职务未填写"}</span>
-                        <code>{card.slug}</code>
-                      </div>
-                    </TableCell>
-                    <TableCell className="status-column">
-                      <StatusBadge status={card.status} />
-                    </TableCell>
-                    <TableCell className="updated-column">
-                      {formatTimestamp(card.updatedAt)}
-                    </TableCell>
-                    <TableCell className="catalog-actions-column">
-                      <div className="row-actions catalog-row-actions">
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<Edit24Regular />}
-                          onClick={() => {
-                            setEditing(card);
-                            setEditorOpen(true);
-                            setNotice(undefined);
-                          }}
-                        >
-                          编辑
-                        </Button>
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<Share24Regular />}
-                          onClick={() => {
-                            setShareTarget(card);
-                            setCopyNotice(undefined);
-                            setCopyError(undefined);
-                          }}
-                        >
-                          分享
-                        </Button>
-                        <Button
-                          appearance="subtle"
-                          size="small"
-                          icon={<Settings24Regular />}
-                          onClick={() => setOverrideTarget(card)}
-                        >
-                          内容覆盖
-                        </Button>
-                        {card.status !== "published" ? (
-                          <Button
-                            appearance="subtle"
-                            size="small"
-                            icon={<Send24Regular />}
-                            onClick={() => requestAction("publish", card)}
-                          >
-                            发布
-                          </Button>
-                        ) : (
-                          <Button
-                            appearance="subtle"
-                            size="small"
-                            icon={<ToggleRight24Regular />}
-                            onClick={() => requestAction("deactivate", card)}
-                          >
-                            停用
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </section>
+      {resource.status === "ready" && (
+        <>
+          <section
+            className="content-panel catalog-panel catalog-section-panel"
+            aria-labelledby="enterprise-card-title"
+          >
+            <div className="section-heading-row">
+              <div>
+                <h2 id="enterprise-card-title">企业官方名片</h2>
+                <p>企业官方公开主页，不绑定员工，可由企业管理员独立发布。</p>
+              </div>
+            </div>
+            <CardTable
+              cards={enterpriseCards}
+              kind="enterprise"
+              onCreate={canManageEnterpriseCards ? () => openCreate("enterprise") : undefined}
+              onEdit={edit}
+              onShare={share}
+              onOverride={setOverrideTarget}
+              onAction={requestAction}
+            />
+          </section>
+
+          <section
+            className="content-panel catalog-panel catalog-section-panel"
+            aria-labelledby="employee-card-title"
+          >
+            <div className="section-heading-row">
+              <div>
+                <h2 id="employee-card-title">员工名片</h2>
+                <p>绑定具体企业成员，用于个人对外展示与客户跟进。</p>
+              </div>
+            </div>
+            <CardTable
+              cards={employeeCards}
+              kind="employee"
+              onCreate={() => openCreate("employee")}
+              onEdit={edit}
+              onShare={share}
+              onOverride={setOverrideTarget}
+              onAction={requestAction}
+            />
+          </section>
+        </>
+      )}
 
       <CardEditor
         open={editorOpen}
         item={editing}
+        createKind={createKind}
         onClose={() => setEditorOpen(false)}
         onSaved={saved}
       />
@@ -349,7 +492,7 @@ export function CardsPage() {
                     className="share-open-link"
                     href={shareTarget.shareUrl}
                     target="_blank"
-                    rel="noreferrer"
+                    rel="noopener noreferrer"
                   >
                     打开公开名片
                   </a>

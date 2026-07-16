@@ -1068,6 +1068,7 @@ def _card_profile(card: Card) -> CardProfile:
     policies = settings.get("policy_versions")
     return CardProfile(
         id=card.id,
+        card_kind=card.card_kind.value,
         owner_user_id=card.owner_user_id,
         slug=card.slug,
         display_name=card.display_name,

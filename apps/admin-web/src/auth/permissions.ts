@@ -1,5 +1,9 @@
 import type { AdminUser } from "../api/types";
 
+export type AdminWorkspace = "platform" | "enterprise";
+
+export const PLATFORM_ROLE = "platform_admin" as const;
+
 export const permissionAliases: Record<string, string[]> = {
   "company.read": ["company.profile.read", "company.profile.write", "company.manage"],
   "card.read": ["card.read", "card.write", "card.manage"],
@@ -47,11 +51,28 @@ export function hasPermission(
 ): boolean {
   if (!permission) return true;
   if (!user) return false;
-  if (user.role === "company_admin" || user.role === "platform_admin") return true;
+  const platformPermission = permission.startsWith("platform.");
+  if (platformPermission) return user.role === PLATFORM_ROLE;
+  if (user.role === PLATFORM_ROLE) return false;
+  if (user.role === "company_admin") return true;
   if (options.allowCardOwner && user.role === "card_owner") return true;
   const granted = new Set(user.permissions);
   if (granted.has("*") || granted.has("admin:*")) return true;
   return (permissionAliases[permission] ?? [permission]).some((value) =>
     granted.has(value),
   );
+}
+
+export function adminWorkspaceForUser(
+  user: AdminUser | undefined,
+): AdminWorkspace | undefined {
+  if (!user?.role) return undefined;
+  return user.role === PLATFORM_ROLE ? "platform" : "enterprise";
+}
+
+export function canAccessAdminWorkspace(
+  user: AdminUser | undefined,
+  workspace: AdminWorkspace,
+): boolean {
+  return adminWorkspaceForUser(user) === workspace;
 }

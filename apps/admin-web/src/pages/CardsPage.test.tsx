@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { adminApi } from "../api/adminApi";
 import type { ManagedCard } from "../api/types";
+import { AuthContext } from "../auth/AuthContext";
+import type { AuthContextValue } from "../auth/AuthContext";
 import { adminLightTheme } from "../theme";
 import { CardsPage } from "./CardsPage";
 
 const draftCard: ManagedCard = {
   id: "card-1",
+  cardKind: "employee",
   ownerUserId: "user-1",
   slug: "c-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   displayName: "林顾问",
@@ -30,10 +33,29 @@ const draftCard: ManagedCard = {
   updatedAt: "2026-07-11T00:00:00Z",
 };
 
+const companyAdminAuth: AuthContextValue = {
+  status: "authenticated",
+  user: {
+    id: "user-1",
+    displayName: "企业管理员",
+    membershipId: "membership-1",
+    tenantId: "tenant-1",
+    companyId: "company-1",
+    role: "company_admin",
+    permissions: [],
+  },
+  loginPending: false,
+  apiConfigured: true,
+  login: async () => undefined,
+  logout: async () => undefined,
+};
+
 function renderPage() {
   return render(
     <FluentProvider theme={adminLightTheme}>
-      <CardsPage />
+      <AuthContext.Provider value={companyAdminAuth}>
+        <CardsPage />
+      </AuthContext.Provider>
     </FluentProvider>,
   );
 }
@@ -70,6 +92,10 @@ describe("CardsPage", () => {
     renderPage();
 
     await screen.findByText("林顾问");
+    const publicLink = screen.getByRole("link", { name: "打开公开页" });
+    expect(publicLink).toHaveAttribute("href", publishedCard.shareUrl);
+    expect(publicLink).toHaveAttribute("target", "_blank");
+    expect(publicLink).toHaveAttribute("rel", "noopener noreferrer");
     await user.click(screen.getByRole("button", { name: "分享" }));
     await user.click(screen.getByRole("button", { name: "复制分享链接" }));
     expect(writeText).toHaveBeenCalledWith(publishedCard.shareUrl);
@@ -78,6 +104,19 @@ describe("CardsPage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "分享名片" })).not.toBeInTheDocument(),
     );
+  });
+
+  it("does not expose a public-page action for draft cards", async () => {
+    vi.spyOn(adminApi, "listManagedCards").mockResolvedValue([draftCard]);
+    renderPage();
+
+    await screen.findByText("林顾问");
+    expect(
+      screen.queryByRole("link", { name: "打开公开页" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "分享" }),
+    ).not.toBeInTheDocument();
   });
 
   it("confirms deactivation before invalidating a public card", async () => {
@@ -96,14 +135,14 @@ describe("CardsPage", () => {
     await waitFor(() => expect(deactivate).toHaveBeenCalledWith("card-1", 7));
   });
 
-  it("creates a card without allowing the browser to choose a slug", async () => {
+  it("creates an employee card without allowing the browser to choose a slug", async () => {
     const user = userEvent.setup();
     vi.spyOn(adminApi, "listManagedCards").mockResolvedValue([]);
     const create = vi.spyOn(adminApi, "createManagedCard").mockResolvedValue(draftCard);
     renderPage();
 
     await screen.findByText("尚未创建名片");
-    await user.click(screen.getAllByRole("button", { name: "新建名片" })[0]);
+    await user.click(screen.getByRole("button", { name: "新建员工名片" }));
     fireEvent.change(screen.getByRole("textbox", { name: /展示姓名/ }), {
       target: { value: "林顾问" },
     });
@@ -115,5 +154,46 @@ describe("CardsPage", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalled());
     expect(create.mock.calls[0][0]).not.toHaveProperty("slug");
+    expect(create.mock.calls[0][0]).toMatchObject({ cardKind: "employee" });
+  });
+
+  it("creates an enterprise official card without an employee owner", async () => {
+    const user = userEvent.setup();
+    const enterpriseCard: ManagedCard = {
+      ...draftCard,
+      id: "card-enterprise",
+      cardKind: "enterprise",
+      ownerUserId: undefined,
+      displayName: "拓途商务",
+      title: "企业数字化服务",
+    };
+    vi.spyOn(adminApi, "listManagedCards").mockResolvedValue([]);
+    const create = vi
+      .spyOn(adminApi, "createManagedCard")
+      .mockResolvedValue(enterpriseCard);
+    renderPage();
+
+    await screen.findByText("尚未创建名片");
+    await user.click(screen.getByRole("button", { name: "新建企业名片" }));
+    expect(
+      screen.getByText("归企业所有，不绑定任何员工；发布后作为企业公开主页。"),
+    ).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: /企业名称/ }), {
+      target: { value: "拓途商务" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /业务定位或品牌标语/ }), {
+      target: { value: "企业数字化服务" },
+    });
+    expect(
+      screen.queryByRole("textbox", { name: /所有者用户 ID/ }),
+    ).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存名片" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0]).toMatchObject({
+      cardKind: "enterprise",
+      displayName: "拓途商务",
+    });
+    expect(create.mock.calls[0][0].ownerUserId).toBe("");
   });
 });

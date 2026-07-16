@@ -133,6 +133,7 @@ def _company_profile(*, version: int) -> CompanyProfile:
 def _card_profile(*, version: int) -> CardProfile:
     return CardProfile(
         id=uuid.uuid4(),
+        card_kind="employee",
         owner_user_id=uuid.uuid4(),
         slug="example-card",
         display_name="示例名片",
@@ -257,7 +258,10 @@ def test_card_uses_etag_and_if_match_version(
             "assistant_name": "企业助手",
             "welcome_message": "欢迎咨询",
             "suggested_questions": ["你们提供什么服务？"],
-            "policy_versions": {"privacy": "privacy-v2"},
+            "policy_versions": {
+                "privacy": "privacy-v2",
+                "profile_personalization": "profile-personalization-v2",
+            },
         },
     )
 

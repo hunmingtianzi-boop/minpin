@@ -17,24 +17,28 @@ import { ApiError } from "../api/client";
 import type { ManagedCard, ManagedCardInput } from "../api/types";
 import { FormFeedback } from "./FormFeedback";
 
-const emptyCard: ManagedCardInput = {
-  ownerUserId: "",
-  displayName: "",
-  title: "",
-  avatarUrl: "",
-  assistantName: "",
-  welcomeMessage: "",
-  suggestedQuestions: [],
-  policyVersions: {
-    privacy: "",
-    chatNotice: "",
-    leadConsent: "",
-  },
-};
+function emptyCard(cardKind: ManagedCard["cardKind"]): ManagedCardInput {
+  return {
+    cardKind,
+    ownerUserId: "",
+    displayName: "",
+    title: "",
+    avatarUrl: "",
+    assistantName: "",
+    welcomeMessage: "",
+    suggestedQuestions: [],
+    policyVersions: {
+      privacy: "",
+      chatNotice: "",
+      leadConsent: "",
+    },
+  };
+}
 
 function cardInput(item?: ManagedCard): ManagedCardInput {
-  if (!item) return emptyCard;
+  if (!item) return emptyCard("employee");
   return {
+    cardKind: item.cardKind,
     ownerUserId: item.ownerUserId,
     displayName: item.displayName,
     title: item.title,
@@ -57,12 +61,19 @@ function toApiError(error: unknown): ApiError {
 type CardEditorProps = {
   open: boolean;
   item?: ManagedCard;
+  createKind?: ManagedCard["cardKind"];
   onClose: () => void;
   onSaved: () => void;
 };
 
-export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
-  const [form, setForm] = useState<ManagedCardInput>(emptyCard);
+export function CardEditor({
+  open,
+  item,
+  createKind = "employee",
+  onClose,
+  onSaved,
+}: CardEditorProps) {
+  const [form, setForm] = useState<ManagedCardInput>(() => emptyCard(createKind));
   const [questionsText, setQuestionsText] = useState("");
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -70,12 +81,12 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
 
   useEffect(() => {
     if (!open) return;
-    const input = cardInput(item);
+    const input = item ? cardInput(item) : emptyCard(createKind);
     setForm(input);
     setQuestionsText(input.suggestedQuestions.join("\n"));
     setAttempted(false);
     setError(undefined);
-  }, [item, open]);
+  }, [createKind, item, open]);
 
   const update = (field: keyof ManagedCardInput, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -96,7 +107,8 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
     .filter(Boolean);
   const questionsValid =
     questions.length <= 6 && questions.every((value) => value.length <= 200);
-  const ownerValid = !item || Boolean(form.ownerUserId?.trim());
+  const ownerValid =
+    form.cardKind === "enterprise" || !item || Boolean(form.ownerUserId?.trim());
   const valid =
     ownerValid &&
     Boolean(form.displayName.trim()) &&
@@ -145,7 +157,9 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
             />
           }
         >
-          {item ? "编辑名片" : "新建名片"}
+          {item
+            ? `编辑${item.cardKind === "enterprise" ? "企业" : "员工"}名片`
+            : `新建${createKind === "enterprise" ? "企业" : "员工"}名片`}
         </DrawerHeaderTitle>
       </DrawerHeader>
       <DrawerBody>
@@ -162,13 +176,17 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
 
           <div className="form-grid two-columns">
             <Field
-              label="展示姓名"
+              label={form.cardKind === "enterprise" ? "企业名称" : "展示姓名"}
               required
               validationState={
                 attempted && !form.displayName.trim() ? "error" : "none"
               }
               validationMessage={
-                attempted && !form.displayName.trim() ? "请输入展示姓名。" : undefined
+                attempted && !form.displayName.trim()
+                  ? form.cardKind === "enterprise"
+                    ? "请输入企业名称。"
+                    : "请输入展示姓名。"
+                  : undefined
               }
             >
               <Input
@@ -178,11 +196,17 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
               />
             </Field>
             <Field
-              label="职务或头衔"
+              label={
+                form.cardKind === "enterprise" ? "业务定位或品牌标语" : "职务或头衔"
+              }
               required
               validationState={attempted && !form.title.trim() ? "error" : "none"}
               validationMessage={
-                attempted && !form.title.trim() ? "请输入职务或头衔。" : undefined
+                attempted && !form.title.trim()
+                  ? form.cardKind === "enterprise"
+                    ? "请输入业务定位或品牌标语。"
+                    : "请输入职务或头衔。"
+                  : undefined
               }
             >
               <Input
@@ -193,28 +217,38 @@ export function CardEditor({ open, item, onClose, onSaved }: CardEditorProps) {
             </Field>
           </div>
 
-          <Field
-            label="所有者用户 ID"
-            required={Boolean(item)}
-            hint={
-              item
-                ? "企业管理员可将名片转移给本企业有效成员。"
-                : "留空时，服务端会将当前账号设为所有者。"
-            }
-            validationState={attempted && !ownerValid ? "error" : "none"}
-            validationMessage={
-              attempted && !ownerValid ? "请保留有效的所有者用户 ID。" : undefined
-            }
-          >
-            <Input
-              value={form.ownerUserId ?? ""}
-              onChange={(_, data) => update("ownerUserId", data.value)}
-              disabled={saving}
-            />
-          </Field>
+          {form.cardKind === "employee" ? (
+            <Field
+              label="所有者用户 ID"
+              required={Boolean(item)}
+              hint={
+                item
+                  ? "企业管理员可将员工名片转移给本企业有效成员。"
+                  : "留空时，服务端会将当前账号设为所有者。"
+              }
+              validationState={attempted && !ownerValid ? "error" : "none"}
+              validationMessage={
+                attempted && !ownerValid ? "请保留有效的所有者用户 ID。" : undefined
+              }
+            >
+              <Input
+                value={form.ownerUserId ?? ""}
+                onChange={(_, data) => update("ownerUserId", data.value)}
+                disabled={saving}
+              />
+            </Field>
+          ) : (
+            <div className="immutable-resource-note">
+              <strong>企业官方名片</strong>
+              <span>归企业所有，不绑定任何员工；发布后作为企业公开主页。</span>
+            </div>
+          )}
 
           <div className="form-grid two-columns">
-            <Field label="头像地址" hint="允许站内路径或公开 HTTPS 地址。">
+            <Field
+              label={form.cardKind === "enterprise" ? "企业 Logo 地址" : "头像地址"}
+              hint="允许站内路径或公开 HTTPS 地址。"
+            >
               <Input
                 value={form.avatarUrl}
                 onChange={(_, data) => update("avatarUrl", data.value)}

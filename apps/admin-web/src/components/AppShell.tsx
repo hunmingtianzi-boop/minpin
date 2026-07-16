@@ -56,7 +56,7 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     items: [{ path: APP_PATHS.overview, label: "业务概览", icon: Home24Regular }],
   },
   {
-    label: "客户旅程",
+    label: "客户经营",
     items: [
       { path: APP_PATHS.visits, label: "访问记录", icon: Eye24Regular, permission: "visits.read", allowCardOwner: true },
       { path: APP_PATHS.visitorProfiles, label: "访客画像", icon: PeopleTeam24Regular, permission: "visits.read", allowCardOwner: true },
@@ -67,32 +67,19 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
     ],
   },
   {
-    label: "知识运营",
+    label: "AI 与知识",
     items: [
       { path: APP_PATHS.knowledgeGaps, label: "知识缺口", icon: Lightbulb24Regular, permission: "knowledge.read", allowCardOwner: true },
-      { path: APP_PATHS.notifications, label: "通知中心", icon: Alert24Regular },
       { path: APP_PATHS.knowledge, label: "知识 FAQ", icon: Book24Regular, permission: "knowledge.read" },
       { path: APP_PATHS.forbiddenTopics, label: "禁答主题", icon: ShieldError24Regular, permission: "forbidden_topic.read" },
     ],
   },
   {
-    label: "内容资产",
+    label: "内容与名片",
     items: [
       { path: APP_PATHS.cards, label: "名片管理", icon: ContactCardGroup24Regular, permission: "card.read" },
       { path: APP_PATHS.products, label: "产品管理", icon: Box24Regular, permission: "catalog.read" },
       { path: APP_PATHS.cases, label: "案例管理", icon: Briefcase24Regular, permission: "catalog.read" },
-    ],
-  },
-  {
-    label: "平台治理",
-    items: [
-      {
-        path: APP_PATHS.platformEnterprises,
-        label: "企业开通",
-        icon: Building24Regular,
-        permission: "platform.enterprise.manage",
-        role: "platform_admin",
-      },
     ],
   },
   {
@@ -108,13 +95,45 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
 const platformNavGroups: Array<{ label: string; items: NavItem[] }> = [
   {
     label: "平台运营",
-    items: [{ path: APP_PATHS.platformOverview, label: "运营概览", icon: Home24Regular, role: "platform_admin" }],
+    items: [
+      { path: APP_PATHS.platformOverview, label: "运营概览", icon: Home24Regular, role: "platform_admin" },
+      { path: APP_PATHS.platformEmployees, label: "员工概览", icon: PeopleSettings24Regular, permission: "platform.analytics.read", role: "platform_admin" },
+      { path: APP_PATHS.platformVisitors, label: "访客概览", icon: Eye24Regular, permission: "platform.analytics.read", role: "platform_admin" },
+    ],
   },
   {
     label: "企业入驻",
-    items: [{ path: APP_PATHS.platformEnterprises, label: "企业管理", icon: Building24Regular, permission: "platform.enterprise.manage", role: "platform_admin" }],
+    items: [
+      { path: APP_PATHS.platformEnterprises, label: "企业管理", icon: Building24Regular, permission: "platform.enterprise.manage", role: "platform_admin" },
+    ],
+  },
+  {
+    label: "治理与运维",
+    items: [
+      { path: APP_PATHS.platformTasks, label: "任务中心", icon: Briefcase24Regular, permission: "platform.task.read", role: "platform_admin" },
+      { path: APP_PATHS.platformAudit, label: "审计记录", icon: ShieldLock24Regular, permission: "platform.audit.read", role: "platform_admin" },
+      { path: APP_PATHS.platformHealth, label: "服务健康", icon: Alert24Regular, permission: "platform.health.read", role: "platform_admin" },
+    ],
+  },
+  {
+    label: "平台设置",
+    items: [
+      {
+        path: APP_PATHS.platformLlmSettings,
+        label: "LLM API 配置",
+        icon: Lightbulb24Regular,
+        permission: "platform.llm.manage",
+        role: "platform_admin",
+      },
+    ],
   },
 ];
+
+export function getPlatformNavigationPaths(): AppPath[] {
+  return platformNavGroups.flatMap((group) =>
+    group.items.map((item) => item.path),
+  );
+}
 
 export function hasNavPermission(
   user: AdminUser | undefined,
@@ -207,6 +226,20 @@ export function AppShell({ children }: { children: ReactNode }) {
           />
           <div className="mobile-brand">{isPlatform ? "平台运营" : "企业管理"}</div>
           <div className="topbar-user">
+            {!isPlatform && (
+              <Tooltip content="通知中心" relationship="label">
+                <Button
+                  as="a"
+                  appearance="subtle"
+                  icon={<Alert24Regular />}
+                  aria-label="通知中心"
+                  href={appHref(APP_PATHS.notifications)}
+                  onClick={(event) =>
+                    onInternalLinkClick(event, APP_PATHS.notifications)
+                  }
+                />
+              </Tooltip>
+            )}
             <Avatar
               name={auth.user?.displayName || "管理员"}
               size={28}

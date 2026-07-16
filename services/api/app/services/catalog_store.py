@@ -32,6 +32,7 @@ from app.api.catalog_schemas import (
 from app.api.errors import ApiError
 from app.db.models import (
     Card,
+    CardKind,
     CaseStudy,
     ContentStatus,
     ForbiddenTopic,
@@ -99,7 +100,12 @@ def managed_card_filters(scope: CatalogScope) -> tuple[Any, ...]:
         Card.deleted_at.is_(None),
     ]
     if scope.is_card_owner:
-        filters.append(Card.owner_user_id == scope.actor_user_id)
+        filters.extend(
+            (
+                Card.card_kind == CardKind.EMPLOYEE,
+                Card.owner_user_id == scope.actor_user_id,
+            )
+        )
     return tuple(filters)
 
 
@@ -157,6 +163,7 @@ class CatalogStore:
         limit: int,
         offset: int,
         status: ContentStatus | None = None,
+        card_kind: CardKind | None = None,
     ) -> tuple[list[ProductRecord], int]:
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
@@ -734,12 +741,15 @@ class CatalogStore:
         limit: int,
         offset: int,
         status: ContentStatus | None = None,
+        card_kind: CardKind | None = None,
     ) -> tuple[list[ManagedCardRecord], int]:
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
             filters = list(managed_card_filters(scope))
             if status is not None:
                 filters.append(Card.status == status)
+            if card_kind is not None:
+                filters.append(Card.card_kind == card_kind)
             total = int(
                 await session.scalar(select(func.count()).select_from(Card).where(*filters)) or 0
             )
@@ -766,9 +776,16 @@ class CatalogStore:
         body: CreateCardRequest,
         trace_id: str | None = None,
     ) -> ManagedCardRecord:
-        owner_user_id = body.owner_user_id or scope.actor_user_id
-        if scope.is_card_owner and owner_user_id != scope.actor_user_id:
-            raise ApiError(403, "FORBIDDEN", "名片所有者只能为当前账号")
+        if body.card_kind == "enterprise":
+            if scope.is_card_owner:
+                raise ApiError(403, "FORBIDDEN", "名片所有者不能创建企业官方名片")
+            owner_user_id = None
+            responsible_user_id = scope.actor_user_id
+        else:
+            owner_user_id = body.owner_user_id or scope.actor_user_id
+            responsible_user_id = owner_user_id
+            if scope.is_card_owner and owner_user_id != scope.actor_user_id:
+                raise ApiError(403, "FORBIDDEN", "名片所有者只能为当前账号")
         for _attempt in range(_CARD_SLUG_ATTEMPTS):
             slug = self._slug_factory()
             try:
@@ -776,6 +793,7 @@ class CatalogStore:
                     scope=scope,
                     body=body,
                     owner_user_id=owner_user_id,
+                    responsible_user_id=responsible_user_id,
                     slug=slug,
                     trace_id=trace_id,
                 )
@@ -790,18 +808,21 @@ class CatalogStore:
         *,
         scope: CatalogScope,
         body: CreateCardRequest,
-        owner_user_id: uuid.UUID,
+        owner_user_id: uuid.UUID | None,
+        responsible_user_id: uuid.UUID,
         slug: str,
         trace_id: str | None,
     ) -> ManagedCardRecord:
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
-            await self._validate_owner(session, scope, owner_user_id)
+            await self._validate_owner(session, scope, responsible_user_id)
             card = Card(
                 id=uuid.uuid4(),
                 tenant_id=scope.tenant_id,
                 company_id=scope.company_id,
+                card_kind=CardKind(body.card_kind),
                 owner_user_id=owner_user_id,
+                responsible_user_id=responsible_user_id,
                 slug=slug,
                 display_name=body.display_name,
                 status=ContentStatus.DRAFT,
@@ -817,6 +838,7 @@ class CatalogStore:
                 resource_id=card.id,
                 trace_id=trace_id,
                 event_data={
+                    "card_kind": body.card_kind,
                     "owner_user_id": owner_user_id,
                     "slug": slug,
                     "version": card.version,
@@ -835,15 +857,21 @@ class CatalogStore:
         body: UpdateManagedCardRequest,
         trace_id: str | None = None,
     ) -> ManagedCardRecord:
-        if scope.is_card_owner and body.owner_user_id != scope.actor_user_id:
-            raise ApiError(403, "FORBIDDEN", "名片所有者不能转移给其他账号")
         async with self._sessions() as session, session.begin():
             await self._set_scope(session, scope)
             card = await self._card(session, scope, card_id, for_update=True)
             require_version(card.version, expected_version)
-            if body.owner_user_id != card.owner_user_id:
-                await self._validate_owner(session, scope, body.owner_user_id)
-            card.owner_user_id = body.owner_user_id
+            if body.card_kind != card.card_kind.value:
+                raise ApiError(422, "CARD_KIND_IMMUTABLE", "名片类型创建后不能修改")
+            if card.card_kind == CardKind.EMPLOYEE:
+                if body.owner_user_id is None:
+                    raise ApiError(422, "INVALID_CARD_OWNER", "员工名片必须绑定有效员工")
+                if scope.is_card_owner and body.owner_user_id != scope.actor_user_id:
+                    raise ApiError(403, "FORBIDDEN", "名片所有者不能转移给其他账号")
+                if body.owner_user_id != card.owner_user_id:
+                    await self._validate_owner(session, scope, body.owner_user_id)
+                card.owner_user_id = body.owner_user_id
+                card.responsible_user_id = body.owner_user_id
             card.display_name = body.display_name
             card.settings = _card_settings(body)
             card.version += 1
@@ -855,6 +883,7 @@ class CatalogStore:
                 resource_id=card.id,
                 trace_id=trace_id,
                 event_data={
+                    "card_kind": card.card_kind.value,
                     "owner_user_id": card.owner_user_id,
                     "slug": card.slug,
                     "version": card.version,
@@ -1200,6 +1229,7 @@ class CatalogStore:
         share_url = f"{self._public_card_base_url}/c/{card.slug}"
         return ManagedCardRecord(
             id=card.id,
+            card_kind=card.card_kind.value,
             owner_user_id=card.owner_user_id,
             slug=card.slug,
             display_name=card.display_name,

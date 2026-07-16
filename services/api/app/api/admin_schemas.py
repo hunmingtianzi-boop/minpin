@@ -13,6 +13,18 @@ class AdminStrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
 
+class EnterpriseReadinessRecord(AdminStrictModel):
+    generated_at: datetime
+    llm_ready: bool
+    unpublished_card_count: int = Field(ge=0)
+    processing_import_batch_count: int = Field(ge=0)
+    failed_import_batch_count: int = Field(ge=0)
+
+
+class EnterpriseReadinessEnvelope(AdminStrictModel):
+    data: EnterpriseReadinessRecord
+
+
 class CompanyProfile(AdminStrictModel):
     id: uuid.UUID
     name: str
@@ -43,7 +55,8 @@ class UpdateCompanyProfileRequest(AdminStrictModel):
 
 class CardProfile(AdminStrictModel):
     id: uuid.UUID
-    owner_user_id: uuid.UUID
+    card_kind: Literal["enterprise", "employee"]
+    owner_user_id: uuid.UUID | None = None
     slug: str
     display_name: str
     title: str
@@ -86,7 +99,12 @@ class UpdateCardRequest(AdminStrictModel):
     @field_validator("policy_versions")
     @classmethod
     def validate_policy_versions(cls, values: dict[str, str]) -> dict[str, str]:
-        allowed = {"privacy", "chat_notice", "lead_consent"}
+        allowed = {
+            "privacy",
+            "chat_notice",
+            "lead_consent",
+            "profile_personalization",
+        }
         if set(values) - allowed:
             raise ValueError("unsupported policy version key")
         if any(not value or len(value) > 64 for value in values.values()):

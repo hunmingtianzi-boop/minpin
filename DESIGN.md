@@ -1,0 +1,335 @@
+# cf-ai-card Design Constitution
+
+> Approval status: approved
+> Approval receipt: sha256:41c2e47c6ba7a34898c6bafbe4d736375965268192c59b2fab01d6ea82018be5
+> Source scan: sha256:0609c1c7ac80924055d4bb0c12f80e6263d9c10feb1552e1caefe45943a01f1d
+> Truth rule: 本文件冻结后是项目唯一设计真源；工具适配文件只能从本文件派生。
+
+## User and Product Goals
+
+- [代码事实形成的候选；批准本 digest 即确认] - `python -m tools.perf.cli http ...` measures a deployed HTTP endpoint.；CF AI Card Worker；HTTP / RAG performance harness；This directory contains two distinct gates:；`card-web` 是创非凡数智名片的通用访客端，不是某一家企业的独立网站。页面由通用渲染器、运行时 tenant 解析和企业内容包组成。；创非凡数智名片；多企业 H5 的当前实现入口是 [12-通用数智名片引擎与企业初始化.md](12-通用数智名片引擎与企业初始化.md)。拓浙 AI 生态仅作为首个 `tuotu` seed，不能反向定义通用渲染器。；开发文档索引；当前实现以通用渲染器为产品主体。企业信息通过独立内容包接入，运行时根据 tenant 选择企业实例。根地址和 `/c/template` 展示无真实企业品牌的通用模板，拓浙 AI 生态只是首个企业 seed，tenant key 为 `tuotu`。；当前有两个可运行内容包：`template` 是无真实企业品牌的通用模板，`tuotu` 是首个企业 seed。通用模板用于复制接入结构，`tuotu` 用于验证真实资料整理、品牌主题、响应式页面、受控 FAQ、引用和拒答。；本目录是 2026-07-10 开发启动基线。业务意图以 2026-07-06《开发需求说明书》为源头；工程边界优先采用 2026-07-08《技术方案评审稿》和 2026-07-10《详细开发文档》的收敛结论。冲突项不会静默覆盖，统一记录在决策文档中。；核心保证：；独立 Celery/Redis Worker，负责从 PostgreSQL transactional outbox 领取并处理异步事件。；通用数智名片 H5；项目定位：面向多企业的数智名片生成与运行平台，以响应式 H5 为入口，承载企业展示、受控 AI 接待、访客行动和线索沉淀。
+- [代码事实] 项目根：D:/xsh/cursor/商务名片2/yeshuangmingpian
+- [代码事实] 已识别技术栈：@playwright/test@1.61.1, react@19.2.7, react@^19.2.7, tailwindcss@^4.3.2, vite@8.1.4, vite@^8.1.4
+
+## Brand Personality and Emotional Goal
+
+- [用户确认方向] 克制、清晰、可信；优先继承项目已有重复模式
+- Selected profile: `inherit`
+
+## Visual Direction and Anti-Examples
+
+- [用户确认方向] 保持现有视觉语言，只修复明显不一致，不主动重塑品牌
+- 反例：无依据地套用流行模板、渐变玻璃或陌生品牌风格
+
+## Tokens
+
+### Existing token facts
+- `--accent`: `#0f4cbd` — apps/admin-web/src/styles.css
+- `--accent-hover`: `#0c3f9e` — apps/admin-web/src/styles.css
+- `--ink`: `#20242c` — apps/admin-web/src/styles.css
+- `--muted`: `#5e6470` — apps/admin-web/src/styles.css
+- `--subtle`: `#777e8a` — apps/admin-web/src/styles.css
+- `--canvas`: `#f4f6f8` — apps/admin-web/src/styles.css
+- `--surface`: `#fdfdfd` — apps/admin-web/src/styles.css
+- `--surface-subtle`: `#f7f8fa` — apps/admin-web/src/styles.css
+- `--border`: `#d9dde3` — apps/admin-web/src/styles.css
+- `--border-strong`: `#c3c8d0` — apps/admin-web/src/styles.css
+- `--sidebar-width`: `236px` — apps/admin-web/src/styles.css
+- `--topbar-height`: `56px` — apps/admin-web/src/styles.css
+- `--radius`: `8px` — apps/admin-web/src/styles.css
+- `--accent`: `#126a58` — apps/admin-web/src/styles.css
+- `--accent-hover`: `#0d5547` — apps/admin-web/src/styles.css
+- `--canvas`: `#f3f7f6` — apps/admin-web/src/styles.css
+- `--surface-subtle`: `#edf4f1` — apps/admin-web/src/styles.css
+- `---`: `| ---: | ---: |` — apps/card-web/PERFORMANCE.md
+- `---`: `| ---: |` — apps/card-web/PERFORMANCE.md
+- `---`: `| ---: | --- |` — apps/card-web/PERFORMANCE.md
+- `--page-width`: `1240px` — apps/card-web/src/styles.css
+- `--accent`: `var(--tenant-accent-light, #089bb5)` — apps/card-web/src/styles.css
+- `--accent-strong`: `var(--tenant-accent-strong-light, #007a91)` — apps/card-web/src/styles.css
+- `--accent-soft`: `var(--tenant-accent-soft-light, rgba(8, 155, 181, 0.12))` — apps/card-web/src/styles.css
+- `--action`: `var(--tenant-action, #64e3f6)` — apps/card-web/src/styles.css
+- `--action-hover`: `color-mix(in srgb, var(--action) 76%, white)` — apps/card-web/src/styles.css
+- `--on-action`: `var(--tenant-on-action, #041014)` — apps/card-web/src/styles.css
+- `--bg`: `var(--tenant-bg-light, #f1f4f5)` — apps/card-web/src/styles.css
+- `--surface`: `var(--tenant-surface-light, #fbfcfc)` — apps/card-web/src/styles.css
+- `--surface-raised`: `var(--tenant-surface-raised-light, #f6f9fa)` — apps/card-web/src/styles.css
+- `--surface-muted`: `var(--tenant-surface-muted-light, #e8edef)` — apps/card-web/src/styles.css
+- `--text`: `var(--tenant-text-light, #0a1720)` — apps/card-web/src/styles.css
+- `--text-soft`: `var(--tenant-text-soft-light, #54636b)` — apps/card-web/src/styles.css
+- `--text-faint`: `var(--tenant-text-faint-light, #718089)` — apps/card-web/src/styles.css
+- `--line`: `var(--tenant-line-light, rgba(10, 23, 32, 0.13))` — apps/card-web/src/styles.css
+- `--line-strong`: `var(--tenant-line-strong-light, rgba(10, 23, 32, 0.22))` — apps/card-web/src/styles.css
+- `--shadow`: `var(--tenant-shadow-light, 0 28px 80px rgba(24, 43, 53, 0.12))` — apps/card-web/src/styles.css
+- `--radius-card`: `var(--tenant-radius-card, 24px)` — apps/card-web/src/styles.css
+- `--radius-control`: `var(--tenant-radius-control, 999px)` — apps/card-web/src/styles.css
+- `--radius-small`: `var(--tenant-radius-small, 12px)` — apps/card-web/src/styles.css
+- `--header-height`: `74px` — apps/card-web/src/styles.css
+- `--hero-background`: `var(--tenant-hero-light, #eef3f5)` — apps/card-web/src/styles.css
+- `--hero-overlay`: `var(--tenant-hero-overlay-light, rgba(238, 243, 245, 0.14))` — apps/card-web/src/styles.css
+- `--hero-text`: `#0a1720` — apps/card-web/src/styles.css
+- `--hero-text-soft`: `rgba(10, 23, 32, 0.68)` — apps/card-web/src/styles.css
+- `--accent`: `var(--tenant-accent-dark, #48d7ee)` — apps/card-web/src/styles.css
+- `--accent-strong`: `var(--tenant-accent-strong-dark, #8be8f6)` — apps/card-web/src/styles.css
+- `--accent-soft`: `var(--tenant-accent-soft-dark, rgba(72, 215, 238, 0.12))` — apps/card-web/src/styles.css
+- `--bg`: `var(--tenant-bg-dark, #071017)` — apps/card-web/src/styles.css
+- `--surface`: `var(--tenant-surface-dark, #0d1921)` — apps/card-web/src/styles.css
+- `--surface-raised`: `var(--tenant-surface-raised-dark, #12212a)` — apps/card-web/src/styles.css
+- `--surface-muted`: `var(--tenant-surface-muted-dark, #172730)` — apps/card-web/src/styles.css
+- `--text`: `var(--tenant-text-dark, #f4f8fa)` — apps/card-web/src/styles.css
+- `--text-soft`: `var(--tenant-text-soft-dark, #a7b5bc)` — apps/card-web/src/styles.css
+- `--text-faint`: `var(--tenant-text-faint-dark, #7d8d96)` — apps/card-web/src/styles.css
+- `--line`: `var(--tenant-line-dark, rgba(211, 236, 242, 0.14))` — apps/card-web/src/styles.css
+- `--line-strong`: `var(--tenant-line-strong-dark, rgba(211, 236, 242, 0.24))` — apps/card-web/src/styles.css
+- `--shadow`: `var(--tenant-shadow-dark, 0 28px 90px rgba(0, 0, 0, 0.34))` — apps/card-web/src/styles.css
+- `--hero-background`: `var(--tenant-hero-dark, #07111f)` — apps/card-web/src/styles.css
+- `--hero-overlay`: `var(--tenant-hero-overlay-dark, rgba(2, 10, 17, 0.28))` — apps/card-web/src/styles.css
+- `--hero-text`: `#f4f8fa` — apps/card-web/src/styles.css
+- `--hero-text-soft`: `rgba(232, 244, 247, 0.72)` — apps/card-web/src/styles.css
+- `--header-height`: `66px` — apps/card-web/src/styles.css
+- `--radius-card`: `20px` — apps/card-web/src/styles.css
+- `---`: `|---|---|` — docs/11-拓浙AI生态样板企业资料包.md
+- `---`: `|---|` — docs/18-性能压测与SLA验收.md
+- `---`: `|---:|---:|---|` — docs/templates/性能验收报告模板.md
+- `---`: `|---:|---:|---:|---:|---:|---|` — docs/templates/性能验收报告模板.md
+- `---`: `|---:|---|` — docs/templates/性能验收报告模板.md
+
+### Typography and fonts
+- 暂未从代码中确认
+
+- [已知缺口；批准本候选表示暂不冻结] 未从代码确认的颜色、字号、间距、圆角、阴影和层级规则保持未冻结。
+
+## Layout and Information Architecture
+
+### Existing surfaces
+- apps/admin-web/src/components/BootScreen.tsx
+- apps/admin-web/src/pages/CardSettingsPage.tsx
+- apps/admin-web/src/pages/CardsPage.test.tsx
+- apps/admin-web/src/pages/CardsPage.tsx
+- apps/admin-web/src/pages/CatalogPage.test.tsx
+- apps/admin-web/src/pages/CatalogPage.tsx
+- apps/admin-web/src/pages/CompanyProfilePage.tsx
+- apps/admin-web/src/pages/ConversationsPage.tsx
+- apps/admin-web/src/pages/ExportsPage.test.tsx
+- apps/admin-web/src/pages/ExportsPage.tsx
+- apps/admin-web/src/pages/ForbiddenTopicsPage.test.tsx
+- apps/admin-web/src/pages/ForbiddenTopicsPage.tsx
+- apps/admin-web/src/pages/KnowledgeGapsPage.tsx
+- apps/admin-web/src/pages/KnowledgePage.test.tsx
+- apps/admin-web/src/pages/KnowledgePage.tsx
+- apps/admin-web/src/pages/LeadsPage.tsx
+- apps/admin-web/src/pages/LoginPage.test.tsx
+- apps/admin-web/src/pages/LoginPage.tsx
+- apps/admin-web/src/pages/MembersPage.test.tsx
+- apps/admin-web/src/pages/MembersPage.tsx
+- apps/admin-web/src/pages/NotificationsPage.tsx
+- apps/admin-web/src/pages/OpportunitiesPage.tsx
+- apps/admin-web/src/pages/OverviewPage.test.tsx
+- apps/admin-web/src/pages/OverviewPage.tsx
+- apps/admin-web/src/pages/PlatformEnterprisesPage.tsx
+- apps/admin-web/src/pages/PlatformOverviewPage.tsx
+- apps/admin-web/src/pages/PrivacyRequestsPage.tsx
+- apps/admin-web/src/pages/VisitorProfilesPage.css
+- apps/admin-web/src/pages/VisitorProfilesPage.test.tsx
+- apps/admin-web/src/pages/VisitorProfilesPage.tsx
+- apps/admin-web/src/pages/VisitsPage.tsx
+- services/api/app/__init__.py
+- services/api/app/ai/__init__.py
+- services/api/app/ai/errors.py
+- services/api/app/ai/orchestrator.py
+- services/api/app/ai/policy.py
+- services/api/app/ai/prompts.py
+- services/api/app/ai/protocols.py
+- services/api/app/ai/providers.py
+- services/api/app/ai/retrieval.py
+- services/api/app/ai/schemas.py
+- services/api/app/api/__init__.py
+- services/api/app/api/admin_schemas.py
+- services/api/app/api/auth_schemas.py
+- services/api/app/api/catalog_schemas.py
+- services/api/app/api/dependencies.py
+- services/api/app/api/enterprise_schemas.py
+- services/api/app/api/errors.py
+- services/api/app/api/export_schemas.py
+- services/api/app/api/knowledge_import_schemas.py
+- services/api/app/api/knowledge_ops_schemas.py
+- services/api/app/api/member_schemas.py
+- services/api/app/api/middleware.py
+- services/api/app/api/platform_schemas.py
+- services/api/app/api/routes/__init__.py
+- services/api/app/api/routes/admin.py
+- services/api/app/api/routes/auth.py
+- services/api/app/api/routes/crm.py
+- services/api/app/api/routes/enterprise_content.py
+- services/api/app/api/routes/exports.py
+- services/api/app/api/routes/health.py
+- services/api/app/api/routes/knowledge_ops.py
+- services/api/app/api/routes/members.py
+- services/api/app/api/routes/platform.py
+- services/api/app/api/routes/public_catalog.py
+- services/api/app/api/routes/public_conversations.py
+- services/api/app/api/routes/visitor_profiles.py
+- services/api/app/api/routes/workflow.py
+- services/api/app/api/scheduled_publish_schemas.py
+- services/api/app/api/schemas.py
+- services/api/app/api/sse.py
+- services/api/app/api/workflow_schemas.py
+- services/api/app/cli/__init__.py
+- services/api/app/cli/bootstrap_platform_admin.py
+- services/api/app/cli/evaluate_rag.py
+- services/api/app/cli/index_embeddings.py
+- services/api/app/cli/seed_content.py
+- services/api/app/core/__init__.py
+- services/api/app/core/config.py
+- services/api/app/core/logging.py
+- services/api/app/core/metrics.py
+- services/api/app/core/pii.py
+- services/api/app/core/rate_limit.py
+- services/api/app/core/redaction.py
+- services/api/app/core/request_context.py
+- services/api/app/core/request_security.py
+- services/api/app/core/staff_auth.py
+- services/api/app/core/text_integrity.py
+- services/api/app/core/tokens.py
+- services/api/app/db/__init__.py
+- services/api/app/db/base.py
+- services/api/app/db/models.py
+- services/api/app/db/session.py
+- services/api/app/evaluation/__init__.py
+- services/api/app/evaluation/metrics.py
+- services/api/app/main.py
+- services/api/app/services/__init__.py
+- services/api/app/services/admin_store.py
+- services/api/app/services/ai_runtime.py
+- services/api/app/services/audit.py
+- services/api/app/services/auth_store.py
+- services/api/app/services/catalog_knowledge.py
+- services/api/app/services/catalog_store.py
+- services/api/app/services/crm_store.py
+- services/api/app/services/enterprise_content_store.py
+- services/api/app/services/export_store.py
+- services/api/app/services/knowledge_import_store.py
+- services/api/app/services/knowledge_import.py
+- services/api/app/services/knowledge_ops_store.py
+- services/api/app/services/member_store.py
+- services/api/app/services/platform_store.py
+- services/api/app/services/public_store.py
+- services/api/app/services/scheduled_publish_store.py
+- services/api/app/services/summary_provider.py
+- services/api/app/services/visitor_profile_store.py
+- services/api/app/services/workflow_store.py
+
+- [AI 推断，需确认] 先继承现有页面结构，再在功能级 DESIGN Delta 中提出改变。
+
+## Component Language
+
+- apps/admin-web/src/components/ActionConfirmDialog.tsx
+- apps/admin-web/src/components/AppShell.test.ts
+- apps/admin-web/src/components/AppShell.tsx
+- apps/admin-web/src/components/BootScreen.tsx
+- apps/admin-web/src/components/CardContentOverridesDialog.tsx
+- apps/admin-web/src/components/CardEditor.tsx
+- apps/admin-web/src/components/CatalogEditor.tsx
+- apps/admin-web/src/components/ContentDistributionControl.tsx
+- apps/admin-web/src/components/ForbiddenTopicEditor.tsx
+- apps/admin-web/src/components/FormFeedback.tsx
+- apps/admin-web/src/components/KnowledgeEditor.test.tsx
+- apps/admin-web/src/components/KnowledgeEditor.tsx
+- apps/admin-web/src/components/KnowledgeImportPanel.test.tsx
+- apps/admin-web/src/components/KnowledgeImportPanel.tsx
+- apps/admin-web/src/components/OperationFeedback.test.tsx
+- apps/admin-web/src/components/OperationFeedback.tsx
+- apps/admin-web/src/components/PageHeader.tsx
+- apps/admin-web/src/components/PaginationBar.tsx
+- apps/admin-web/src/components/ResourceState.test.tsx
+- apps/admin-web/src/components/ResourceState.tsx
+- apps/admin-web/src/components/ScheduledPublicationActions.test.tsx
+- apps/admin-web/src/components/ScheduledPublicationActions.tsx
+- apps/admin-web/src/components/StatusBadge.tsx
+- apps/card-web/src/components/AIAssistant.test.tsx
+- apps/card-web/src/components/AIAssistant.tsx
+- apps/card-web/src/components/AppErrorBoundary.tsx
+- apps/card-web/src/components/DeferredAIAssistant.tsx
+- apps/card-web/src/components/DeferredLoading.test.tsx
+- apps/card-web/src/components/DeferredPublicExperience.tsx
+- apps/card-web/src/components/PublicExperience.test.tsx
+- apps/card-web/src/components/PublicExperience.tsx
+- apps/card-web/src/components/TenantLoading.tsx
+- apps/card-web/src/components/TenantNotFound.tsx
+- apps/card-web/src/components/ThemeControl.tsx
+- apps/card-web/src/domain/card.ts
+- apps/card-web/src/lib/publicCard.ts
+
+- [已知缺口；批准本候选表示暂不冻结] 核心共享组件的视觉特色与交互手感。
+
+## Motion
+
+- [已知缺口；批准本候选表示暂不冻结] 动效强度、持续时间和反馈风格。
+- [默认安全规则] 尊重 reduced-motion；动效不能阻塞主要任务。
+
+## Responsive
+
+- [默认安全规则] 关键流程必须覆盖 desktop 与 mobile；不允许仅缩放桌面布局。
+
+## Accessibility
+
+- 已观察到无障碍相关实现：apps/admin-web/src/components/AppShell.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/BootScreen.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/CardEditor.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/CatalogEditor.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/ContentDistributionControl.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/ForbiddenTopicEditor.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/KnowledgeEditor.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/KnowledgeImportPanel.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/PaginationBar.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/components/ResourceState.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/CardsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/CatalogPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/ConversationsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/ExportsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/ForbiddenTopicsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/KnowledgeGapsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/KnowledgePage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/LeadsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/LoginPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/MembersPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/NotificationsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/OpportunitiesPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/OverviewPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/PlatformEnterprisesPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/PlatformOverviewPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/PrivacyRequestsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/VisitorProfilesPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/pages/VisitsPage.tsx
+- 已观察到无障碍相关实现：apps/admin-web/src/styles.css
+- 已观察到无障碍相关实现：apps/card-web/src/App.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/AIAssistant.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/DeferredAIAssistant.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/DeferredPublicExperience.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/PublicExperience.test.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/PublicExperience.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/TenantLoading.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/TenantNotFound.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/components/ThemeControl.tsx
+- 已观察到无障碍相关实现：apps/card-web/src/styles.css
+- 已观察到无障碍相关实现：pnpm-lock.yaml
+
+- [默认安全规则] 键盘可达、可见焦点、语义标签、对比度与状态反馈是硬要求。
+
+## Do
+
+- 继承已批准的项目规则。
+- 功能级变化记录为 Feature DESIGN Delta。
+- 宪法级变化先展示差异，再由用户批准。
+
+## Don't
+
+- 不从单张图片或一次功能反馈静默改写项目宪法。
+- 不把 .impeccable.md、截图或 Feature Delta 当成第二设计真源。
+- 不把 Design Init 自动晋升为全局审美记忆。
+
+## Rule Provenance and Approval
+
+- 代码事实来源：scan manifest `sha256:0609c1c7ac80924055d4bb0c12f80e6263d9c10feb1552e1caefe45943a01f1d`。
+- AI 推断始终标记“需确认”，不得伪装成事实。
+- 本候选只有在用户明确批准其 digest 后才能写入项目根 DESIGN.md。

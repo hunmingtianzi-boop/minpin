@@ -35,7 +35,11 @@ artifacts/
 playwright-report/
 test-results/
 .playwright-mcp/
+.playwright-cli/
 .runtime/
 .tmp/
 .codegraph/
+output/
+.codex/
+openspec/changes/*/runs/
 ~$*.docx

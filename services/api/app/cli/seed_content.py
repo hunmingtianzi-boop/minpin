@@ -297,7 +297,9 @@ async def seed_package(
             id=card_id,
             tenant_id=tenant_id,
             company_id=company_id,
-            owner_user_id=owner_id,
+            card_kind="enterprise",
+            owner_user_id=None,
+            responsible_user_id=owner_id,
             slug=slug,
             display_name=package.company.name,
             status=ContentStatus.PUBLISHED,
@@ -315,7 +317,14 @@ async def seed_package(
                 },
             },
         )
-        .on_conflict_do_nothing(index_elements=[Card.id])
+        .on_conflict_do_update(
+            index_elements=[Card.id],
+            set_={
+                "card_kind": "enterprise",
+                "owner_user_id": None,
+                "responsible_user_id": owner_id,
+            },
+        )
     )
 
     cipher = PiiCipher.from_settings(settings)

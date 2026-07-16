@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 ContentStatusValue = Literal["draft", "review_pending", "published", "archived"]
+CardKindValue = Literal["enterprise", "employee"]
 VisibilityValue = Literal["public", "authenticated", "internal"]
 ForbiddenAction = Literal["refuse", "handoff", "safe_template"]
 
@@ -284,7 +285,12 @@ class CardWriteFields(CatalogStrictModel):
     @field_validator("policy_versions")
     @classmethod
     def validate_policy_versions(cls, values: dict[str, str]) -> dict[str, str]:
-        allowed = {"privacy", "chat_notice", "lead_consent"}
+        allowed = {
+            "privacy",
+            "chat_notice",
+            "lead_consent",
+            "profile_personalization",
+        }
         if set(values) - allowed:
             raise ValueError("unsupported policy version key")
         if any(not value.strip() or len(value) > 64 for value in values.values()):
@@ -293,16 +299,33 @@ class CardWriteFields(CatalogStrictModel):
 
 
 class CreateCardRequest(CardWriteFields):
+    card_kind: CardKindValue = "employee"
     owner_user_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_card_identity(self) -> Self:
+        if self.card_kind == "enterprise" and self.owner_user_id is not None:
+            raise ValueError("enterprise cards must not have an employee owner")
+        return self
 
 
 class UpdateManagedCardRequest(CardWriteFields):
-    owner_user_id: uuid.UUID
+    card_kind: CardKindValue
+    owner_user_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def validate_card_identity(self) -> Self:
+        if self.card_kind == "enterprise" and self.owner_user_id is not None:
+            raise ValueError("enterprise cards must not have an employee owner")
+        if self.card_kind == "employee" and self.owner_user_id is None:
+            raise ValueError("employee cards require an owner")
+        return self
 
 
 class ManagedCardRecord(CardWriteFields):
     id: uuid.UUID
-    owner_user_id: uuid.UUID
+    card_kind: CardKindValue
+    owner_user_id: uuid.UUID | None = None
     slug: str
     status: ContentStatusValue
     published_at: datetime | None = None

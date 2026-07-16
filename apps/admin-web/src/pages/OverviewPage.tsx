@@ -11,7 +11,12 @@ import {
 import { ArrowClockwise24Regular } from "@fluentui/react-icons";
 import { useState } from "react";
 
-import type { DashboardOverview, EmployeeAnalyticsPage } from "../api/types";
+import { enterpriseReadinessApi } from "../api/enterpriseReadinessApi";
+import type {
+  DashboardOverview,
+  EmployeeAnalyticsPage,
+  EnterpriseReadiness,
+} from "../api/types";
 import { workflowApi } from "../api/workflowApi";
 import { useAuth } from "../auth/AuthContext";
 import { hasPermission } from "../auth/permissions";
@@ -35,6 +40,84 @@ function Metric({ label, value }: { label: string; value: string | number }) {
       <strong>{value}</strong>
       <span>{label}</span>
     </div>
+  );
+}
+
+function EnterpriseReadinessPanel() {
+  const resource = useResource<EnterpriseReadiness>(() => enterpriseReadinessApi.get());
+  if (resource.status !== "ready" || !resource.data) {
+    return (
+      <section className="content-panel" aria-labelledby="readiness-title">
+        <div className="section-heading-inline">
+          <div>
+            <h2 id="readiness-title">运营就绪状态</h2>
+            <p>只显示企业侧可行动项，不展示平台 LLM 配置或密钥。</p>
+          </div>
+        </div>
+        <ResourceState
+          compact
+          status={resource.status === "ready" ? "empty" : resource.status}
+          description={resource.error?.message}
+          errorCode={resource.error?.code}
+          requestId={resource.error?.requestId}
+          onRetry={resource.status === "error" ? resource.reload : undefined}
+        />
+      </section>
+    );
+  }
+  const data = resource.data;
+  const items = [
+    {
+      label: "名片 AI",
+      value: data.llmReady ? "可用" : "待平台配置",
+      detail: data.llmReady ? "公开问答已具备运行配置" : "联系平台管理员完成 LLM 测试与启用",
+      path: APP_PATHS.cards,
+    },
+    {
+      label: "未发布名片",
+      value: data.unpublishedCardCount,
+      detail: data.unpublishedCardCount ? "完成内容复核后再发布" : "所有名片均已发布",
+      path: APP_PATHS.cards,
+    },
+    {
+      label: "资料处理中",
+      value: data.processingImportBatchCount,
+      detail: "解析完成后仍保持草稿，需人工复核",
+      path: APP_PATHS.knowledge,
+    },
+    {
+      label: "资料导入异常",
+      value: data.failedImportBatchCount,
+      detail: data.failedImportBatchCount ? "查看逐文件错误并重新上传" : "当前没有失败批次",
+      path: APP_PATHS.knowledge,
+    },
+  ];
+  return (
+    <section className="content-panel" aria-labelledby="readiness-title">
+      <div className="section-heading-inline">
+        <div>
+          <h2 id="readiness-title">运营就绪状态</h2>
+          <p>优先处理影响公开名片、AI 问答和资料上线的问题。</p>
+        </div>
+        <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={resource.reload}>
+          刷新状态
+        </Button>
+      </div>
+      <div className="dashboard-metrics">
+        {items.map((item) => (
+          <a
+            className="dashboard-metric"
+            key={item.label}
+            href={appHref(item.path)}
+            onClick={(event) => onInternalLinkClick(event, item.path)}
+          >
+            <strong>{item.value}</strong>
+            <span>{item.label}</span>
+            <small>{item.detail}</small>
+          </a>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -67,6 +150,8 @@ function DashboardContent({ data }: { data: DashboardOverview }) {
           服务端统计生成于 {formatTimestamp(data.generatedAt)}
         </div>
       </section>
+
+      {auth.user?.role === "company_admin" && <EnterpriseReadinessPanel />}
 
       <section className="content-panel workflow-strip" aria-labelledby="workflow-title">
         <div className="section-heading-inline">

@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdminUser } from "../api/types";
-import { hasNavPermission } from "./AppShell";
+import { APP_PATHS } from "../routing";
+import { getPlatformNavigationPaths, hasNavPermission } from "./AppShell";
 
 function user(role: string, permissions: string[] = []): AdminUser {
   return {
@@ -48,5 +49,20 @@ describe("hasNavPermission", () => {
     const operator = user("staff", ["members.write"]);
     expect(hasNavPermission(operator, "members.manage")).toBe(true);
     expect(hasNavPermission(operator, "privacy.manage")).toBe(false);
+  });
+
+  it("keeps the LLM API entry inside the grouped platform navigation", () => {
+    const paths = getPlatformNavigationPaths();
+
+    expect(paths).toContain(APP_PATHS.platformLlmSettings);
+    expect(paths).toContain(APP_PATHS.platformOverview);
+    expect(paths).toContain(APP_PATHS.platformEmployees);
+    expect(paths).toContain(APP_PATHS.platformVisitors);
+    expect(paths).toContain(APP_PATHS.platformTasks);
+    expect(paths).toContain(APP_PATHS.platformAudit);
+    expect(paths).toContain(APP_PATHS.platformHealth);
+    expect(paths).not.toContain(APP_PATHS.platformOnboarding);
+    expect(paths).not.toContain(APP_PATHS.overview);
+    expect(paths).not.toContain(APP_PATHS.company);
   });
 });

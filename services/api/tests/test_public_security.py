@@ -17,6 +17,7 @@ from app.core.config import Settings
 from app.core.tokens import VisitorPrincipal, issue_profile_link_token
 from app.db.models import (
     Card,
+    CardKind,
     ConsentRecord,
     ConsentScope,
     ContentStatus,
@@ -100,6 +101,9 @@ def _card(*, chat_notice: str = "chat-v2", privacy: str = "privacy-v2") -> Card:
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         company_id=company_id,
+        card_kind=CardKind.ENTERPRISE,
+        owner_user_id=None,
+        responsible_user_id=uuid.uuid4(),
         slug="secure-card",
         display_name="安全名片",
         status=ContentStatus.PUBLISHED,

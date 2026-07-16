@@ -237,7 +237,11 @@ class PublicStore:
                     for source_id, item in list(faq_by_source.items())[:30]
                 ],
                 ai_assistant=AiAssistantPublicConfig(
-                    available=bool(self._settings.llm_api_key and knowledge_count > 0),
+                    # This value represents card/content readiness only. The
+                    # public route combines it with the same dynamic LLM
+                    # resolver used by Chat so database profiles take effect
+                    # without a process restart.
+                    available=knowledge_count > 0,
                     display_name=str(
                         card_settings.get("assistant_name") or f"{company.name} AI 助手"
                     ),

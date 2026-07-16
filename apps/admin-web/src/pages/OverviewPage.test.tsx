@@ -1,9 +1,10 @@
 import { FluentProvider } from "@fluentui/react-components";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api/client";
+import { enterpriseReadinessApi } from "../api/enterpriseReadinessApi";
 import type { DashboardOverview, EmployeeAnalyticsPage } from "../api/types";
 import { workflowApi } from "../api/workflowApi";
 import { AuthContext, type AuthContextValue } from "../auth/AuthContext";
@@ -88,6 +89,15 @@ function renderPage() {
 }
 
 describe("OverviewPage employee analytics", () => {
+  beforeEach(() => {
+    vi.spyOn(enterpriseReadinessApi, "get").mockResolvedValue({
+      generatedAt: "2026-07-12T03:00:00Z",
+      llmReady: true,
+      unpublishedCardCount: 2,
+      processingImportBatchCount: 1,
+      failedImportBatchCount: 0,
+    });
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it("shows employee metrics and reconciliation notes", async () => {
@@ -99,6 +109,9 @@ describe("OverviewPage employee analytics", () => {
     expect(screen.getByText("与业务总览已对账")).toBeInTheDocument();
     expect(screen.getByText(/员工独立访客合计 15/)).toBeInTheDocument();
     expect(screen.getByRole("table", { name: "员工表现" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "运营就绪状态" })).toBeInTheDocument();
+    expect(screen.getByText("名片 AI")).toBeInTheDocument();
+    expect(screen.getByText("未发布名片")).toBeInTheDocument();
   });
 
   it("keeps the employee query period in sync and resets pagination", async () => {

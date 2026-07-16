@@ -21,11 +21,32 @@ export const APP_PATHS = {
   knowledge: "/knowledge",
   platformOverview: "/platform",
   platformEnterprises: "/platform/enterprises",
+  platformOnboarding: "/platform/onboarding",
+  platformEmployees: "/platform/employees",
+  platformVisitors: "/platform/visitors",
+  platformTasks: "/platform/tasks",
+  platformAudit: "/platform/audit",
+  platformHealth: "/platform/health",
+  platformLlmSettings: "/platform/settings/llm",
 } as const;
 
 export type AppPath = (typeof APP_PATHS)[keyof typeof APP_PATHS];
+export type AdminWorkspace = "platform" | "enterprise";
+
+export const PLATFORM_PATHS = [
+  APP_PATHS.platformOverview,
+  APP_PATHS.platformEnterprises,
+  APP_PATHS.platformOnboarding,
+  APP_PATHS.platformEmployees,
+  APP_PATHS.platformVisitors,
+  APP_PATHS.platformTasks,
+  APP_PATHS.platformAudit,
+  APP_PATHS.platformHealth,
+  APP_PATHS.platformLlmSettings,
+] as const satisfies readonly AppPath[];
 
 const knownPaths = new Set<string>(Object.values(APP_PATHS));
+const platformPaths = new Set<string>(PLATFORM_PATHS);
 
 function normalizeBasePath(value: string): string {
   const trimmed = value.trim();
@@ -64,6 +85,11 @@ export function usePathname(): string {
 
 export function isAppPath(path: string): path is AppPath {
   return knownPaths.has(path);
+}
+
+export function adminWorkspaceForPath(path: string): AdminWorkspace | undefined {
+  if (!isAppPath(path)) return undefined;
+  return platformPaths.has(path) ? "platform" : "enterprise";
 }
 
 export function navigate(path: AppPath): void {

@@ -158,13 +158,17 @@ def _card(*, version: int) -> ManagedCardRecord:
     share_url = f"https://cards.example.com/c/{slug}"
     return ManagedCardRecord(
         id=uuid.uuid4(),
+        card_kind="employee",
         owner_user_id=uuid.uuid4(),
         slug=slug,
         display_name="张三的名片",
         title="企业解决方案顾问",
         assistant_name="小创",
         suggested_questions=["你们能解决什么问题？"],
-        policy_versions={"privacy": "privacy-v1"},
+        policy_versions={
+            "privacy": "privacy-v1",
+            "profile_personalization": "profile-personalization-v1",
+        },
         status="draft",
         version=version,
         share_url=share_url,

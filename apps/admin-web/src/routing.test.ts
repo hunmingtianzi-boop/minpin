@@ -31,4 +31,32 @@ describe("admin subpath routing", () => {
     expect(routing.appPathFromBrowser("/c/admin/")).toBe("/");
     expect(routing.appPathFromBrowser("/unrelated")).toBe("/unrelated");
   });
+
+  it("classifies every platform shell without changing base-path link generation", async () => {
+    const routing = await loadRouting("/c/admin/");
+
+    expect(routing.PLATFORM_PATHS).toEqual(
+      expect.arrayContaining([
+        routing.APP_PATHS.platformOverview,
+        routing.APP_PATHS.platformEnterprises,
+        routing.APP_PATHS.platformOnboarding,
+        routing.APP_PATHS.platformEmployees,
+        routing.APP_PATHS.platformVisitors,
+        routing.APP_PATHS.platformTasks,
+        routing.APP_PATHS.platformAudit,
+        routing.APP_PATHS.platformHealth,
+        routing.APP_PATHS.platformLlmSettings,
+      ]),
+    );
+    expect(routing.adminWorkspaceForPath(routing.APP_PATHS.platformLlmSettings)).toBe(
+      "platform",
+    );
+    expect(routing.adminWorkspaceForPath(routing.APP_PATHS.knowledge)).toBe(
+      "enterprise",
+    );
+    expect(routing.adminWorkspaceForPath("/not-an-admin-route")).toBeUndefined();
+    expect(routing.appHref(routing.APP_PATHS.platformLlmSettings)).toBe(
+      "/c/admin/platform/settings/llm",
+    );
+  });
 });

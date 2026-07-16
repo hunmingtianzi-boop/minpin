@@ -9,6 +9,7 @@ import pytest
 from app.core.config import Settings
 from app.db.models import (
     Card,
+    CardKind,
     Company,
     ConsentRecord,
     ConsentScope,
@@ -89,11 +90,14 @@ class _AggregationSession:
 @pytest.mark.asyncio
 async def test_summary_interest_aggregation_is_encrypted_explainable_and_idempotent() -> None:
     tenant_id, company_id, visitor_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    owner_user_id = uuid.uuid4()
     card = Card(
         id=uuid.uuid4(),
         tenant_id=tenant_id,
         company_id=company_id,
-        owner_user_id=uuid.uuid4(),
+        card_kind=CardKind.EMPLOYEE,
+        owner_user_id=owner_user_id,
+        responsible_user_id=owner_user_id,
         slug="profile-card",
         display_name="画像名片",
         status=ContentStatus.PUBLISHED,

@@ -1,0 +1,6 @@
+schema: spec-driven
+
+context: |
+  Project-local OpenSpec contains change artifacts only.
+  Codex Skills and execution capability stay in the user-level Harness.
+  Harness plan.md remains the agent execution progress view when present.

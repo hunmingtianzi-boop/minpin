@@ -20,11 +20,15 @@ from app.api.routes import (
     auth,
     crm,
     enterprise_content,
+    enterprise_readiness,
     exports,
     health,
     knowledge_ops,
     members,
     platform,
+    platform_llm,
+    platform_onboarding,
+    platform_operations,
     public_catalog,
     public_conversations,
     visitor_profiles,
@@ -34,7 +38,6 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import MetricsMiddleware, MetricsRegistry
 from app.core.request_context import request_id_ctx
-from app.services.ai_runtime import build_rag_orchestrator
 
 logger = structlog.get_logger(__name__)
 
@@ -73,12 +76,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = redis
     app.state.http_client = http_client
     app.state.ai_semaphore = asyncio.Semaphore(settings.llm_max_concurrency)
+    app.state.ai_runtime_semaphores = {}
     app.state.ai_tasks = set()
-    app.state.rag_orchestrator = build_rag_orchestrator(
-        settings=settings,
-        http_client=http_client,
-        session_factory=app.state.session_factory,
-    )
+    # Chat is intentionally built per request from the current active platform
+    # profile. Tests may still inject ``rag_orchestrator`` as an explicit stub.
+    app.state.rag_orchestrator = None
     try:
         yield
     finally:
@@ -123,6 +125,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.settings = runtime_settings
+    app.state.public_card_base_url = runtime_settings.public_card_base_url
     app.state.require_staff_session_validation = True
     app.state.metrics = MetricsRegistry()
 
@@ -180,9 +183,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router, prefix=runtime_settings.api_prefix)
     app.include_router(admin.router, prefix=runtime_settings.api_prefix)
     app.include_router(enterprise_content.router, prefix=runtime_settings.api_prefix)
+    app.include_router(enterprise_readiness.router, prefix=runtime_settings.api_prefix)
     app.include_router(members.router, prefix=runtime_settings.api_prefix)
     app.include_router(knowledge_ops.router, prefix=runtime_settings.api_prefix)
     app.include_router(platform.router, prefix=runtime_settings.api_prefix)
+    app.include_router(platform_llm.router, prefix=runtime_settings.api_prefix)
+    app.include_router(platform_onboarding.router, prefix=runtime_settings.api_prefix)
+    app.include_router(platform_operations.router, prefix=runtime_settings.api_prefix)
     app.include_router(crm.router, prefix=runtime_settings.api_prefix)
     app.include_router(exports.router, prefix=runtime_settings.api_prefix)
     app.include_router(public_conversations.router, prefix=runtime_settings.api_prefix)

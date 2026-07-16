@@ -74,6 +74,11 @@ class ContentStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class CardKind(StrEnum):
+    ENTERPRISE = "enterprise"
+    EMPLOYEE = "employee"
+
+
 class DistributedContentType(StrEnum):
     PRODUCT = "product"
     CASE_STUDY = "case_study"
@@ -464,6 +469,9 @@ class Card(
             ondelete="CASCADE",
         ),
         ForeignKeyConstraint(["owner_user_id"], ["users.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["responsible_user_id"], ["users.id"], ondelete="RESTRICT"
+        ),
         UniqueConstraint("slug", name="uq_cards_slug"),
         UniqueConstraint("tenant_id", "company_id", "id", name="uq_cards_scope_id"),
         CheckConstraint("slug = btrim(slug)", name="slug_trimmed"),
@@ -471,7 +479,20 @@ class Card(
             "slug ~ '^[a-z0-9][a-z0-9-]{1,94}[a-z0-9]$'",
             name="slug_public_format",
         ),
+        CheckConstraint(
+            "(card_kind = 'enterprise' AND owner_user_id IS NULL) OR "
+            "(card_kind = 'employee' AND owner_user_id IS NOT NULL "
+            "AND responsible_user_id = owner_user_id)",
+            name="kind_owner_consistent",
+        ),
         Index("ix_cards_company_status_updated", "company_id", "status", "updated_at"),
+        Index(
+            "ix_cards_company_kind_status_updated",
+            "company_id",
+            "card_kind",
+            "status",
+            "updated_at",
+        ),
         Index(
             "ix_cards_public_slug",
             "slug",
@@ -479,7 +500,14 @@ class Card(
         ),
     )
 
-    owner_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    card_kind: Mapped[CardKind] = mapped_column(
+        db_enum(CardKind, "card_kind"),
+        nullable=False,
+        default=CardKind.EMPLOYEE,
+        server_default=text("'employee'"),
+    )
+    owner_user_id: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+    responsible_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
     slug: Mapped[str] = mapped_column(String(96), nullable=False)
     display_name: Mapped[str] = mapped_column(String(160), nullable=False)
     status: Mapped[ContentStatus] = mapped_column(
@@ -1192,6 +1220,262 @@ class PromptVersion(UUIDPrimaryKeyMixin, TimestampMixin, CompanyScopeMixin, Base
     )
     published_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class PlatformLLMProfile(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticVersionMixin, Base):
+    """Platform-owned main Chat provider profile.
+
+    Provider credentials are authenticated ciphertext.  This model deliberately
+    has no plaintext key attribute and is not company-scoped: platform-only RLS
+    controls writes while the API runtime receives read-only access so a public
+    Chat request can resolve the selected profile without impersonation.
+    """
+
+    __tablename__ = "platform_llm_profiles"
+    __table_args__ = (
+        CheckConstraint("btrim(name) <> ''", name="name_not_blank"),
+        CheckConstraint("purpose = 'chat_main'", name="purpose_allowed"),
+        CheckConstraint("btrim(provider) <> ''", name="provider_not_blank"),
+        CheckConstraint("btrim(base_url) <> ''", name="base_url_not_blank"),
+        CheckConstraint("btrim(model) <> ''", name="model_not_blank"),
+        CheckConstraint(
+            "thinking IN ('enabled', 'disabled')",
+            name="thinking_allowed",
+        ),
+        CheckConstraint(
+            "reasoning_effort IS NULL OR reasoning_effort IN ('high', 'max')",
+            name="reasoning_effort_allowed",
+        ),
+        CheckConstraint(
+            "timeout_seconds >= 2 AND timeout_seconds <= 120",
+            name="timeout_seconds_range",
+        ),
+        CheckConstraint("max_retries >= 0 AND max_retries <= 5", name="max_retries_range"),
+        CheckConstraint(
+            "max_concurrency >= 1 AND max_concurrency <= 500",
+            name="max_concurrency_range",
+        ),
+        CheckConstraint(
+            "max_output_tokens >= 128 AND max_output_tokens <= 8192",
+            name="max_output_tokens_range",
+        ),
+        CheckConstraint("temperature >= 0 AND temperature <= 2", name="temperature_range"),
+        CheckConstraint(
+            "thinking = 'disabled' OR temperature = 0.1",
+            name="thinking_temperature_neutral",
+        ),
+        CheckConstraint("daily_budget_cny >= 0", name="daily_budget_non_negative"),
+        CheckConstraint(
+            "input_price_cny_per_million >= 0",
+            name="input_price_non_negative",
+        ),
+        CheckConstraint(
+            "output_price_cny_per_million >= 0",
+            name="output_price_non_negative",
+        ),
+        CheckConstraint(
+            "last_test_status IN ('untested', 'succeeded', 'failed')",
+            name="last_test_status_allowed",
+        ),
+        CheckConstraint(
+            "(last_test_status = 'untested' AND last_test_latency_ms IS NULL "
+            "AND last_tested_at IS NULL) OR "
+            "(last_test_status IN ('succeeded', 'failed') "
+            "AND last_test_latency_ms >= 0 AND last_tested_at IS NOT NULL)",
+            name="last_test_state_consistent",
+        ),
+        CheckConstraint("version > 0", name="version_positive"),
+        CheckConstraint(
+            "(api_key_ciphertext IS NULL AND api_key_key_ref IS NULL AND api_key_hint IS NULL) "
+            "OR (api_key_ciphertext IS NOT NULL AND api_key_key_ref IS NOT NULL "
+            "AND api_key_hint IS NOT NULL)",
+            name="api_key_state",
+        ),
+        Index(
+            "uq_platform_llm_profiles_name_normalized",
+            func.lower(func.btrim(sql_text("name"))),
+            unique=True,
+        ),
+        Index(
+            "uq_platform_llm_profiles_one_active",
+            "is_active",
+            unique=True,
+            postgresql_where=sql_text("is_active"),
+        ),
+    )
+
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        String(32),
+        nullable=False,
+        default="chat_main",
+        server_default=text("'chat_main'"),
+    )
+    provider: Mapped[str] = mapped_column(String(80), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2_048), nullable=False)
+    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    api_key_key_ref: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    api_key_hint: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model: Mapped[str] = mapped_column(String(160), nullable=False)
+    thinking: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="disabled",
+        server_default=text("'disabled'"),
+    )
+    reasoning_effort: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
+    )
+    timeout_seconds: Mapped[Decimal] = mapped_column(
+        Numeric(6, 2),
+        nullable=False,
+        default=Decimal("30"),
+        server_default=text("30"),
+    )
+    max_retries: Mapped[int] = mapped_column(
+        SmallInteger,
+        nullable=False,
+        default=2,
+        server_default=text("2"),
+    )
+    max_concurrency: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=20,
+        server_default=text("20"),
+    )
+    max_output_tokens: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1_000,
+        server_default=text("1000"),
+    )
+    temperature: Mapped[Decimal] = mapped_column(
+        Numeric(4, 3),
+        nullable=False,
+        default=Decimal("0.1"),
+        server_default=text("0.1"),
+    )
+    daily_budget_cny: Mapped[Decimal] = mapped_column(
+        Numeric(12, 2),
+        nullable=False,
+        default=Decimal("100"),
+        server_default=text("100"),
+    )
+    input_price_cny_per_million: Mapped[Decimal] = mapped_column(
+        Numeric(14, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    output_price_cny_per_million: Mapped[Decimal] = mapped_column(
+        Numeric(14, 6),
+        nullable=False,
+        default=Decimal("0"),
+        server_default=text("0"),
+    )
+    enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    last_test_status: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default="untested",
+        server_default=text("'untested'"),
+    )
+    last_test_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_by: Mapped[UUID | None] = mapped_column(PG_UUID(as_uuid=True), nullable=True)
+
+
+class PlatformOnboardingSession(
+    UUIDPrimaryKeyMixin,
+    TimestampMixin,
+    OptimisticVersionMixin,
+    Base,
+):
+    """Platform-owned handle for one isolated provisional enterprise scope."""
+
+    __tablename__ = "platform_onboarding_sessions"
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["company_id"], ["companies.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["admin_user_id"], ["users.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["admin_membership_id"], ["memberships.id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["credential_id"], ["staff_credentials.id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(["initial_card_id"], ["cards.id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(["created_by"], ["users.id"], ondelete="RESTRICT"),
+        UniqueConstraint("tenant_id", name="uq_platform_onboarding_tenant"),
+        UniqueConstraint("company_id", name="uq_platform_onboarding_company"),
+        UniqueConstraint("credential_id", name="uq_platform_onboarding_credential"),
+        CheckConstraint(
+            "status IN ('draft','processing','review','manual_required',"
+            "'ready_to_confirm','confirmed','cancelled','expired','failed')",
+            name="status_allowed",
+        ),
+        CheckConstraint("version > 0", name="version_positive"),
+        CheckConstraint(
+            "(status = 'confirmed') = (confirmed_at IS NOT NULL)",
+            name="confirmed_state",
+        ),
+        CheckConstraint(
+            "(status = 'cancelled') = (cancelled_at IS NOT NULL)",
+            name="cancelled_state",
+        ),
+        Index("ix_platform_onboarding_status_created", "status", "created_at"),
+        Index(
+            "ix_platform_onboarding_expiry",
+            "expires_at",
+            postgresql_where=sql_text(
+                "status NOT IN ('confirmed','cancelled','expired','failed')"
+            ),
+        ),
+    )
+
+    tenant_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    company_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    admin_user_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    admin_membership_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    credential_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    initial_card_id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    created_by: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), nullable=False)
+    tenant_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    tenant_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    admin_account: Mapped[str] = mapped_column(String(200), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="draft", server_default=text("'draft'")
+    )
+    import_batch_ids: Mapped[list[UUID]] = mapped_column(
+        ARRAY(PG_UUID(as_uuid=True)),
+        nullable=False,
+        default=list,
+        server_default=text("'{}'::uuid[]"),
+    )
+    suggestions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    business_profile: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    confirmed_enterprise: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancel_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 
 class ModelConfig(

@@ -179,6 +179,238 @@ export type PlatformEnterprise = {
   companyName: string;
   status: string;
   createdAt: string;
+  version?: number;
+};
+
+export type PlatformCardProjection = {
+  id: string;
+  cardKind: "enterprise" | "employee";
+  displayName: string;
+  title: string;
+  status: string;
+  updatedAt: string;
+  shareUrl?: string;
+};
+
+export type PlatformEnterpriseDetail = PlatformEnterprise & {
+  version: number;
+  onboardingStatus: string;
+  profileCompletion: number;
+  employeeCount: number;
+  cardCount: number;
+  publishedCardCount: number;
+  visits30d: number;
+  conversations30d: number;
+    leads30d: number;
+    cards: PlatformCardProjection[];
+    businessProfile: PlatformOnboardingSuggestion[];
+    updatedAt: string;
+};
+
+export type PlatformEnterpriseLifecycle = {
+  tenantId: string;
+  companyId: string;
+  previousStatus: "active" | "suspended" | "disabled";
+  status: "active" | "suspended";
+  version: number;
+  changed: boolean;
+  updatedAt: string;
+};
+
+export type PlatformOverview = {
+  generatedAt: string;
+  enterpriseCount: number;
+  activeEnterpriseCount: number;
+  onboardingCount: number;
+  publishedCardCount: number;
+  visits30d: number;
+  conversations30d: number;
+  leads30d: number;
+  failedTaskCount: number;
+  llmReady: boolean;
+  importReady: boolean;
+};
+
+export type PlatformLlmPurpose = "chat_main";
+export type PlatformLlmThinking = "enabled" | "disabled";
+export type PlatformLlmTestStatus = "untested" | "succeeded" | "failed";
+
+export type PlatformLlmProfile = {
+  id: string;
+  name: string;
+  purpose: PlatformLlmPurpose;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  thinking: PlatformLlmThinking;
+  reasoningEffort?: "high" | "max";
+  timeoutSeconds: number;
+  maxRetries: number;
+  maxConcurrency: number;
+  maxOutputTokens: number;
+  temperature: number;
+  dailyBudgetCny: number;
+  inputPriceCnyPerMillion: number;
+  outputPriceCnyPerMillion: number;
+  keyConfigured: boolean;
+  keyHint?: string;
+  enabled: boolean;
+  isActive: boolean;
+  version: number;
+  lastTestStatus: PlatformLlmTestStatus;
+  lastTestLatencyMs?: number;
+  lastTestedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CreatePlatformLlmProfileInput = {
+  name: string;
+  provider: string;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  thinking?: PlatformLlmThinking;
+  reasoningEffort?: "high" | "max";
+  timeoutSeconds?: number;
+  maxRetries?: number;
+  maxConcurrency?: number;
+  maxOutputTokens?: number;
+  temperature?: number;
+  dailyBudgetCny?: number;
+  inputPriceCnyPerMillion?: number;
+  outputPriceCnyPerMillion?: number;
+  enabled?: boolean;
+};
+
+export type UpdatePlatformLlmProfileInput = Partial<
+  Omit<CreatePlatformLlmProfileInput, "apiKey">
+> & {
+  apiKey?: string;
+  expectedVersion: number;
+};
+
+export type ActivatePlatformLlmProfileInput = {
+  expectedVersion: number;
+  expectedActiveProfileId?: string;
+};
+
+export type PlatformLlmConnectionTest = {
+  status: "succeeded" | "failed";
+  provider: string;
+  model: string;
+  latencyMs: number;
+  errorCode?: string;
+};
+
+export type PlatformOnboardingStatus =
+  | "draft"
+  | "processing"
+  | "review"
+  | "manual_required"
+  | "ready_to_confirm"
+  | "confirmed"
+  | "cancelled"
+  | "expired"
+  | "failed";
+
+export type StartPlatformOnboardingInput = {
+  tenantSlug: string;
+  tenantName?: string;
+  adminAccount: string;
+  adminDisplayName: string;
+  adminPassword: string;
+};
+
+/**
+ * The only client-selected import target. The server resolves provisional
+ * tenant/company scope from this owned session and never accepts raw scope IDs.
+ */
+export type PlatformOnboardingImportTarget = {
+  onboardingSessionId: string;
+};
+
+export type PlatformOnboardingSuggestionSource = {
+  importItemId: string;
+  fileName: string;
+  documentId?: string;
+  excerpt?: string;
+};
+
+export type PlatformOnboardingSuggestion = {
+  field: string;
+  value: string;
+  confidence?: number;
+  generationVersion: number;
+  sources: PlatformOnboardingSuggestionSource[];
+};
+
+export type PlatformOnboardingSession = {
+  id: string;
+  status: PlatformOnboardingStatus;
+  tenantSlug: string;
+  tenantName?: string;
+  version: number;
+  importBatchIds: string[];
+  suggestions: PlatformOnboardingSuggestion[];
+  businessProfile?: PlatformOnboardingSuggestion[];
+  expiresAt?: string;
+  confirmedEnterprise?: CreatedPlatformEnterprise;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConfirmPlatformOnboardingInput = {
+  expectedVersion: number;
+  tenantName: string;
+  companyName: string;
+  industry?: string;
+  summary?: string;
+  website?: string;
+  initialCardDisplayName: string;
+  initialCardTitle?: string;
+  assistantName?: string;
+  welcomeMessage?: string;
+};
+
+export type PlatformCompanyAggregate = {
+  companyId: string;
+  companyName: string;
+  employeeCount: number;
+  visits30d: number;
+  uniqueVisitors30d: number;
+  lastVisitAt?: string;
+};
+
+export type PlatformTaskProjection = {
+  id: string;
+  taskType: string;
+  businessLabel: string;
+  status: string;
+  companyId?: string;
+  companyName?: string;
+  errorCode?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformAuditProjection = {
+  id: string;
+  actorDisplayName: string;
+  action: string;
+  businessLabel: string;
+  resourceType: string;
+  resourceId?: string;
+  result: string;
+  createdAt: string;
+};
+
+export type PlatformServiceHealth = {
+  service: "api" | "database" | "redis" | "object_storage" | "worker";
+  status: "healthy" | "degraded" | "unavailable";
+  checkedAt: string;
+  latencyMs?: number;
+  errorCode?: string;
 };
 
 export type CreatePlatformEnterpriseInput = {
@@ -275,7 +507,8 @@ export type ForbiddenTopicInput = Omit<
 >;
 
 export type ManagedCard = VersionedResource & {
-  ownerUserId: string;
+  cardKind: "enterprise" | "employee";
+  ownerUserId?: string;
   slug: string;
   displayName: string;
   title: string;
@@ -293,6 +526,7 @@ export type ManagedCard = VersionedResource & {
 };
 
 export type ManagedCardInput = {
+  cardKind: ManagedCard["cardKind"];
   ownerUserId?: string;
   displayName: string;
   title: string;
@@ -315,6 +549,14 @@ export type DashboardDailyMetric = {
   visits: number;
   conversations: number;
   leads: number;
+};
+
+export type EnterpriseReadiness = {
+  generatedAt: string;
+  llmReady: boolean;
+  unpublishedCardCount: number;
+  processingImportBatchCount: number;
+  failedImportBatchCount: number;
 };
 
 export type DashboardOverview = {

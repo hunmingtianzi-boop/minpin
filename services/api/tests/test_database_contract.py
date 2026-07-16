@@ -95,6 +95,23 @@ def test_model_metadata_covers_database_core() -> None:
     assert REQUIRED_TABLES <= set(Base.metadata.tables)
 
 
+def test_cards_distinguish_enterprise_and_employee_ownership(
+    migration_sql: str,
+) -> None:
+    cards = Base.metadata.tables["cards"]
+    assert cards.c.card_kind.nullable is False
+    assert cards.c.owner_user_id.nullable is True
+    assert cards.c.responsible_user_id.nullable is False
+    assert any(
+        constraint.name == "ck_cards_kind_owner_consistent"
+        for constraint in cards.constraints
+    )
+    assert "add column card_kind" in migration_sql
+    assert "add column responsible_user_id" in migration_sql
+    assert "ck_cards_kind_owner_consistent" in migration_sql
+    assert "platform_onboarding_sessions as onboarding" in migration_sql
+
+
 def test_company_owned_models_always_carry_both_scope_columns() -> None:
     for table_name in COMPANY_SCOPED_TABLES:
         columns = set(Base.metadata.tables[table_name].columns.keys())
@@ -129,6 +146,14 @@ def test_offline_migration_creates_required_extensions_and_tables(migration_sql:
         assert f"create extension if not exists {extension}" in migration_sql
     for table_name in REQUIRED_TABLES:
         assert f"create table {table_name}" in migration_sql
+
+
+def test_platform_function_expression_repair_is_part_of_current_head(
+    migration_sql: str,
+) -> None:
+    assert "repair_platform_functions" in migration_sql
+    assert "pg_catalog.pg_get_functiondef" in migration_sql
+    assert "platform function expression repair was incomplete" in migration_sql
 
 
 def test_offline_migration_freezes_hybrid_retrieval_contract(migration_sql: str) -> None:

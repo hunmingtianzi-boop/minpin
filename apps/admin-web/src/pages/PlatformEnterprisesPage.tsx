@@ -10,6 +10,7 @@ import {
   Input,
   MessageBar,
   MessageBarBody,
+  Select,
   Table,
   TableBody,
   TableCell,
@@ -17,8 +18,12 @@ import {
   TableHeaderCell,
   TableRow,
 } from "@fluentui/react-components";
-import { Add24Regular } from "@fluentui/react-icons";
-import { type FormEvent, useState } from "react";
+import {
+  Add24Regular,
+  Dismiss24Regular,
+  Search24Regular,
+} from "@fluentui/react-icons";
+import { type FormEvent, useRef, useState } from "react";
 
 import { ApiError } from "../api/client";
 import { platformApi } from "../api/platformApi";
@@ -29,6 +34,8 @@ import { ResourceState } from "../components/ResourceState";
 import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
 import { formatTimestamp } from "../utils/format";
+import { PlatformEnterpriseDrawer } from "./PlatformEnterpriseDrawer";
+import styles from "./PlatformEnterpriseDrawer.module.css";
 
 const emptyInput: CreatePlatformEnterpriseInput = {
   tenantSlug: "",
@@ -50,7 +57,22 @@ function toApiError(value: unknown): ApiError {
 }
 
 export function PlatformEnterprisesPage() {
-  const resource = useResource(() => platformApi.listEnterprises());
+  const [searchDraft, setSearchDraft] = useState("");
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<
+    "" | "active" | "suspended" | "disabled"
+  >("");
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string>();
+  const detailTriggerRef = useRef<HTMLButtonElement>(null);
+  const resource = useResource(
+    () =>
+      platformApi.listEnterprises({
+        search: search || undefined,
+        status: statusFilter || undefined,
+        limit: 100,
+      }),
+    `${search}:${statusFilter}`,
+  );
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState(emptyInput);
   const [attempted, setAttempted] = useState(false);
@@ -77,6 +99,17 @@ export function PlatformEnterprisesPage() {
     setOpen(true);
   };
 
+  const applyFilters = () => {
+    const next = searchDraft.trim();
+    if (next === search) resource.reload();
+    setSearch(next);
+  };
+
+  const showDetail = (companyId: string, trigger: HTMLButtonElement) => {
+    detailTriggerRef.current = trigger;
+    setSelectedCompanyId(companyId);
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAttempted(true);
@@ -101,8 +134,8 @@ export function PlatformEnterprisesPage() {
   return (
     <main className="page-stack">
       <PageHeader
-        title="企业开通"
-        description="平台管理员创建隔离租户、首个企业管理员和随机初始名片。账号密钥只提交到服务端。"
+        title="企业中心"
+        description="检索已确认企业，查看入驻进度、运营聚合与每张名片的发布状态。"
         actions={
           resource.status === "permission" ? undefined : (
             <Button appearance="primary" icon={<Add24Regular />} onClick={showCreate}>
@@ -118,14 +151,62 @@ export function PlatformEnterprisesPage() {
         </MessageBar>
       )}
 
+      <section className="content-panel filter-panel" aria-label="企业筛选">
+        <Select
+          aria-label="企业状态"
+          value={statusFilter}
+          onChange={(_, data) =>
+            setStatusFilter(
+              data.value as "" | "active" | "suspended" | "disabled",
+            )
+          }
+        >
+          <option value="">全部状态</option>
+          <option value="active">正常运营</option>
+          <option value="suspended">已暂停</option>
+          <option value="disabled">已停用</option>
+        </Select>
+        <Input
+          aria-label="搜索企业"
+          placeholder="企业名称、租户名称或标识"
+          value={searchDraft}
+          onChange={(_, data) => setSearchDraft(data.value)}
+          onKeyDown={(event) => event.key === "Enter" && applyFilters()}
+        />
+        <Button icon={<Search24Regular />} onClick={applyFilters}>
+          搜索
+        </Button>
+        {(search || statusFilter) && (
+          <Button
+            appearance="subtle"
+            icon={<Dismiss24Regular />}
+            onClick={() => {
+              setSearchDraft("");
+              setSearch("");
+              setStatusFilter("");
+            }}
+          >
+            清除
+          </Button>
+        )}
+      </section>
+
       <section className="content-panel catalog-panel">
         {resource.status !== "ready" && (
           <ResourceState
             status={resource.status}
-            title={resource.status === "empty" ? "尚未开通企业" : undefined}
+            title={
+              resource.status === "empty"
+                ? search || statusFilter
+                  ? "没有符合条件的企业"
+                  : "尚未开通企业"
+                : undefined
+            }
             description={
               resource.status === "empty"
-                ? "开通后，企业管理员可登录并维护自己的资料和名片。"
+                ? search || statusFilter
+                  ? "调整关键词或状态后重新搜索。"
+                  : "开通后，企业管理员可登录并维护自己的资料和名片。"
                 : resource.error?.message
             }
             errorCode={resource.error?.code}
@@ -140,7 +221,7 @@ export function PlatformEnterprisesPage() {
         )}
 
         {resource.status === "ready" && resource.data && (
-          <div className="table-scroll">
+          <div className={`table-scroll ${styles.desktopTable}`}>
             <Table aria-label="平台企业列表" size="small">
               <TableHeader>
                 <TableRow>
@@ -148,6 +229,7 @@ export function PlatformEnterprisesPage() {
                   <TableHeaderCell>企业</TableHeaderCell>
                   <TableHeaderCell>状态</TableHeaderCell>
                   <TableHeaderCell>开通时间</TableHeaderCell>
+                  <TableHeaderCell>操作</TableHeaderCell>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -162,10 +244,51 @@ export function PlatformEnterprisesPage() {
                       <StatusBadge status={item.status} />
                     </TableCell>
                     <TableCell>{formatTimestamp(item.createdAt)}</TableCell>
+                    <TableCell>
+                      <Button
+                        appearance="subtle"
+                        size="small"
+                        onClick={(event) =>
+                          showDetail(item.companyId, event.currentTarget)
+                        }
+                      >
+                        查看详情
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          </div>
+        )}
+
+        {resource.status === "ready" && resource.data && (
+          <div className={styles.mobileRecords} aria-label="平台企业列表">
+            {resource.data.map((item) => (
+              <article className={styles.recordCard} key={item.companyId}>
+                <div className={styles.recordHeader}>
+                  <strong>{item.companyName}</strong>
+                  <StatusBadge status={item.status} />
+                </div>
+                <p>
+                  {item.tenantName} · {item.tenantSlug}
+                </p>
+                <div className={styles.recordActions}>
+                  <span className="cell-secondary">
+                    {formatTimestamp(item.createdAt)}
+                  </span>
+                  <Button
+                    appearance="secondary"
+                    size="small"
+                    onClick={(event) =>
+                      showDetail(item.companyId, event.currentTarget)
+                    }
+                  >
+                    查看详情
+                  </Button>
+                </div>
+              </article>
+            ))}
           </div>
         )}
       </section>
@@ -267,6 +390,15 @@ export function PlatformEnterprisesPage() {
           </form>
         </DialogSurface>
       </Dialog>
+
+      {selectedCompanyId && (
+        <PlatformEnterpriseDrawer
+          companyId={selectedCompanyId}
+          returnFocusRef={detailTriggerRef}
+          onChanged={resource.reload}
+          onClose={() => setSelectedCompanyId(undefined)}
+        />
+      )}
     </main>
   );
 }

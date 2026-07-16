@@ -34,6 +34,7 @@ from app.core.pii import PiiCipher
 from app.db.models import (
     AIRun,
     Card,
+    CardKind,
     Company,
     ConsentRecord,
     ConsentScope,
@@ -321,6 +322,7 @@ class WorkflowStore:
             card_scope = (
                 Card.tenant_id == scope.tenant_id,
                 Card.company_id == scope.company_id,
+                Card.card_kind == CardKind.EMPLOYEE,
                 Card.deleted_at.is_(None),
             )
             cards = (
@@ -1455,7 +1457,7 @@ class WorkflowStore:
             prepared = PreparedSummary(
                 conversation_id=conversation.id,
                 card_id=card.id,
-                owner_user_id=card.owner_user_id,
+                owner_user_id=card.responsible_user_id,
                 last_message_id=last_message.id,
                 prompt_version_id=prompt.id,
                 model_config_id=model_config.id,

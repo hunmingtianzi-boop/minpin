@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, text
@@ -74,6 +74,11 @@ async def append_audit(
             event_data=safe_event,
             previous_hash=previous_hash,
             entry_hash=entry_hash,
+            # Supplying the timestamp avoids an INSERT ... RETURNING created_at
+            # round-trip. Cross-tenant platform actors may append audit events,
+            # but intentionally cannot SELECT the enterprise audit row through
+            # RLS, and PostgreSQL applies SELECT policy checks to RETURNING.
+            created_at=datetime.now(UTC),
         )
     )
 

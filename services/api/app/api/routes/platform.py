@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
 from app.api.dependencies import get_staff_principal
+from app.api.errors import ApiError
 from app.api.platform_schemas import (
     CreateEnterpriseRequest,
     EnterpriseEnvelope,
     EnterpriseListEnvelope,
+    PlatformEnterpriseLifecycleEnvelope,
+    TransitionPlatformEnterpriseRequest,
 )
 from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
@@ -19,7 +23,11 @@ StaffDependency = Annotated[StaffPrincipal, Depends(get_staff_principal)]
 
 
 def _store(request: Request) -> PlatformStore:
-    return PlatformStore(request.app.state.session_factory, request.app.state.settings)
+    return PlatformStore(
+        request.app.state.session_factory,
+        request.app.state.settings,
+        public_card_base_url=getattr(request.app.state, "public_card_base_url", None),
+    )
 
 
 def _actor(principal: StaffPrincipal) -> PlatformActor:
@@ -59,15 +67,48 @@ async def create_enterprise(
 async def list_enterprises(
     request: Request,
     principal: StaffDependency,
+    search: Annotated[str | None, Query(max_length=200)] = None,
+    status_filter: Annotated[
+        str | None,
+        Query(alias="status", pattern="^(active|suspended|disabled)$"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> EnterpriseListEnvelope:
+    if str(getattr(principal.role, "value", principal.role)) != "platform_admin":
+        raise ApiError(403, "FORBIDDEN", "仅平台管理员可查看企业清单")
     records, total = await _store(request).list_enterprises(
         actor=_actor(principal),
+        search=search.strip() if search and search.strip() else None,
+        status=status_filter,
         limit=limit,
         offset=offset,
     )
     return EnterpriseListEnvelope(data=records, total=total, limit=limit, offset=offset)
+
+
+@router.put(
+    "/{company_id}/status",
+    response_model=PlatformEnterpriseLifecycleEnvelope,
+    operation_id="transitionPlatformEnterprise",
+)
+async def transition_enterprise(
+    company_id: uuid.UUID,
+    body: TransitionPlatformEnterpriseRequest,
+    request: Request,
+    principal: StaffDependency,
+) -> PlatformEnterpriseLifecycleEnvelope:
+    if str(getattr(principal.role, "value", principal.role)) != "platform_admin":
+        raise ApiError(403, "FORBIDDEN", "仅平台管理员可变更企业状态")
+    record = await _store(request).transition_enterprise(
+        actor=_actor(principal),
+        company_id=company_id,
+        expected_version=body.expected_version,
+        target_status=body.target_status,
+        reason=body.reason,
+        trace_id=request_id_ctx.get(),
+    )
+    return PlatformEnterpriseLifecycleEnvelope(data=record)
 
 
 __all__ = ["router"]
