@@ -12,7 +12,10 @@ from fastapi.testclient import TestClient
 from app.api.dependencies import get_staff_principal
 from app.api.errors import ApiError, api_error_handler
 from app.api.knowledge_import_schemas import KnowledgeImportBatchRecord
-from app.api.platform_schemas import PlatformOnboardingSessionRecord
+from app.api.platform_schemas import (
+    PlatformOnboardingImportStatusRecord,
+    PlatformOnboardingSessionRecord,
+)
 from app.api.routes import platform_onboarding as routes
 from app.core.tokens import StaffPrincipal
 from app.services.knowledge_import_store import KnowledgeImportScope
@@ -20,6 +23,7 @@ from app.services.platform_onboarding import (
     _BUSINESS_PROFILE_FIELDS,
     _SUGGESTION_SYSTEM_PROMPT,
     PlatformOnboardingImportScope,
+    PlatformOnboardingService,
     _parse_suggestions,
 )
 
@@ -45,6 +49,10 @@ class RouteService:
             status="draft",
             tenant_slug="acme-demo",
             tenant_name="Acme",
+            admin_account="admin@acme.test",
+            admin_display_name="Acme Admin",
+            initial_card_display_name="Acme",
+            initial_card_title="Acme Official Card",
             version=1,
             expires_at=now + timedelta(hours=24),
             created_at=now,
@@ -65,6 +73,16 @@ class RouteService:
     async def get_session(self, **kwargs: Any) -> PlatformOnboardingSessionRecord:
         self.calls.append(("get", kwargs))
         return self.record
+
+    async def get_import_status(
+        self, **kwargs: Any
+    ) -> PlatformOnboardingImportStatusRecord:
+        self.calls.append(("import_status", kwargs))
+        return PlatformOnboardingImportStatusRecord(
+            session_id=self.record.id,
+            settled=True,
+            batches=[],
+        )
 
     async def import_scope(self, **kwargs: Any) -> PlatformOnboardingImportScope:
         self.calls.append(("scope", kwargs))
@@ -144,12 +162,83 @@ def test_route_surface_is_session_bound(
     root = "/api/v1/platform/onboarding"
     assert set(paths[root]) == {"get", "post"}
     assert set(paths[f"{root}/{{onboarding_id}}"] ) == {"get"}
-    for suffix in ("imports", "suggestions", "confirm", "cancel"):
+    for suffix in ("suggestions", "confirm", "cancel"):
         assert set(paths[f"{root}/{{onboarding_id}}/{suffix}"]) == {"post"}
+    assert set(paths[f"{root}/{{onboarding_id}}/imports"]) == {"get", "post"}
     upload = paths[f"{root}/{{onboarding_id}}/imports"]["post"]
     serialized = str(upload)
     assert "tenant_id" not in serialized
     assert "company_id" not in serialized
+
+
+def test_import_progress_resolves_scope_from_session_only(
+    route_client: tuple[TestClient, RouteService, ImportStore, dict[str, StaffPrincipal]],
+) -> None:
+    client, service, _, _ = route_client
+    response = client.get(
+        f"/api/v1/platform/onboarding/{service.record.id}/imports"
+    )
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "session_id": str(service.record.id),
+        "settled": True,
+        "batches": [],
+    }
+    call = next(payload for name, payload in service.calls if name == "import_status")
+    assert call["onboarding_id"] == service.record.id
+    assert "tenant_id" not in call
+    assert "company_id" not in call
+
+
+def test_open_session_review_projection_never_includes_a_password(
+    route_client: tuple[TestClient, RouteService, ImportStore, dict[str, StaffPrincipal]],
+) -> None:
+    client, service, _, _ = route_client
+    response = client.get(f"/api/v1/platform/onboarding/{service.record.id}")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["admin_account"] == "admin@acme.test"
+    assert payload["admin_display_name"] == "Acme Admin"
+    assert payload["initial_card_display_name"] == "Acme"
+    assert payload["initial_card_title"] == "Acme Official Card"
+    assert "admin_password" not in payload
+
+
+@pytest.mark.asyncio
+async def test_session_lookup_query_is_bound_to_the_creating_platform_admin() -> None:
+    actor_user_id = uuid.uuid4()
+
+    class CaptureSession:
+        statement: Any = None
+
+        async def scalar(self, statement: Any) -> None:
+            self.statement = statement
+            return None
+
+    session = CaptureSession()
+    with pytest.raises(ApiError) as missing:
+        await PlatformOnboardingService._row(  # noqa: SLF001 - security regression test
+            session,  # type: ignore[arg-type]
+            uuid.uuid4(),
+            actor_user_id=actor_user_id,
+        )
+
+    assert missing.value.status_code == 404
+    assert missing.value.code == "RESOURCE_NOT_FOUND"
+    statement = str(session.statement)
+    assert "platform_onboarding_sessions.id" in statement
+    assert "platform_onboarding_sessions.created_by" in statement
+    assert actor_user_id in session.statement.compile().params.values()
+
+
+@pytest.mark.parametrize("status", ["confirmed", "cancelled", "expired", "failed"])
+def test_terminal_session_is_rejected_before_import_details_are_loaded(status: str) -> None:
+    with pytest.raises(ApiError) as closed:
+        PlatformOnboardingService._require_open(  # noqa: SLF001 - security regression test
+            type("OnboardingRow", (), {"status": status})()
+        )
+    assert closed.value.status_code == 409
+    assert closed.value.code == "ONBOARDING_SESSION_CLOSED"
 
 
 def test_upload_reuses_current_import_store_and_forces_draft(
@@ -285,3 +374,19 @@ def test_migration_stores_no_plain_password_and_has_narrow_draft_functions() -> 
     assert "SET search_path = ''" in migration
     assert "REVOKE ALL ON FUNCTION" in migration
     assert "item.batch_id = ANY(onboarding.import_batch_ids)" in migration
+
+
+def test_owner_scope_migration_protects_rows_resources_and_security_definer_reads() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "migrations/versions/20260717_0022_platform_onboarding_owner_scope.py"
+    ).read_text(encoding="utf-8")
+    owner_predicate = (
+        "created_by = NULLIF(current_setting('app.user_id', true), '')::uuid"
+    )
+    assert owner_predicate in migration
+    assert "onboarding.created_by = " in migration
+    assert "platform_onboarding_platform_only" in migration
+    assert "platform_onboarding_imports_settled" in migration
+    assert "platform_onboarding_drafts" in migration
+    assert "SECURITY DEFINER" in migration

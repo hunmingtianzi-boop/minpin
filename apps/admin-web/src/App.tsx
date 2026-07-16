@@ -1,11 +1,20 @@
 import { Button } from "@fluentui/react-components";
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { ApiError } from "./api/client";
 import { platformApi } from "./api/platformApi";
 import type {
   ConfirmPlatformOnboardingInput,
   PlatformLlmProfile as ApiPlatformLlmProfile,
+  PlatformOnboardingImportItem,
   PlatformOnboardingSession,
   StartPlatformOnboardingInput,
 } from "./api/types";
@@ -397,12 +406,47 @@ export function PlatformLlmSettingsRoute() {
   );
 }
 
-const ONBOARDING_SESSION_KEY = "cf-platform-onboarding-session";
+const LEGACY_ONBOARDING_SESSION_KEY = "cf-platform-onboarding-session";
+const ONBOARDING_SESSION_KEY_PREFIX = "cf-platform-onboarding-session";
+
+function onboardingSessionStorageKey(userId?: string): string | undefined {
+  return userId
+    ? `${ONBOARDING_SESSION_KEY_PREFIX}:${encodeURIComponent(userId)}`
+    : undefined;
+}
+
+function projectOnboardingAdmin(session: PlatformOnboardingSession) {
+  if (!session.adminAccount || !session.adminDisplayName) return undefined;
+  return {
+    account: session.adminAccount,
+    displayName: session.adminDisplayName,
+  };
+}
+
+function projectOnboardingReview(session: PlatformOnboardingSession) {
+  const projection = {
+    tenantName: session.tenantName,
+    companyName: session.tenantName,
+    initialCardDisplayName:
+      session.initialCardDisplayName ?? session.adminDisplayName,
+    initialCardTitle: session.initialCardTitle,
+  };
+  return Object.values(projection).some(Boolean) ? projection : undefined;
+}
 
 export function PlatformOnboardingRoute() {
+  const auth = useAuth();
+  const actorId = auth.user?.id;
+  const storageKey = useMemo(
+    () => onboardingSessionStorageKey(actorId),
+    [actorId],
+  );
   const [session, setSession] = useState<PlatformOnboardingSession>();
+  const [sessionOwnerId, setSessionOwnerId] = useState<string>();
+  const [importItems, setImportItems] = useState<PlatformOnboardingImportItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<ApiError>();
+  const [importError, setImportError] = useState<ApiError>();
   const [llmAvailability, setLlmAvailability] = useState<
     "ready" | "unavailable" | "failed"
   >("unavailable");
@@ -414,35 +458,154 @@ export function PlatformOnboardingRoute() {
     tenantName?: string;
     companyName?: string;
     initialCardDisplayName?: string;
+    initialCardTitle?: string;
   }>();
+  const [projectionRevision, setProjectionRevision] = useState(0);
+  const ownerIdRef = useRef(actorId);
+  const activeSessionIdRef = useRef<string | undefined>(undefined);
+  const loadRequestRef = useRef(0);
+  ownerIdRef.current = actorId;
 
-  const loadSession = useCallback(async (sessionId?: string) => {
-    const stored =
-      sessionId ??
-      (typeof window === "undefined"
-        ? undefined
-        : window.sessionStorage.getItem(ONBOARDING_SESSION_KEY) ?? undefined);
-    if (!stored) return;
-    setLoading(true);
+  const clearSessionState = useCallback(() => {
+    activeSessionIdRef.current = undefined;
+    setSession(undefined);
+    setSessionOwnerId(undefined);
+    setAdminSummary(undefined);
+    setInitialReview(undefined);
+    setImportItems([]);
     setLoadError(undefined);
-    try {
-      setSession(await platformApi.getOnboarding(stored));
-    } catch (caught) {
-      setLoadError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError("开通会话加载失败。", { code: "UNKNOWN_ERROR" }),
-      );
-    } finally {
-      setLoading(false);
-    }
+    setImportError(undefined);
   }, []);
 
+  const loadSession = useCallback(
+    async (sessionId: string) => {
+      if (!actorId || !storageKey) return;
+      const expectedActorId = actorId;
+      const requestId = ++loadRequestRef.current;
+      setLoading(true);
+      setLoadError(undefined);
+      setImportError(undefined);
+      try {
+        const loaded = await platformApi.getOnboarding(sessionId);
+        if (
+          ownerIdRef.current !== expectedActorId ||
+          loadRequestRef.current !== requestId
+        ) {
+          return;
+        }
+        activeSessionIdRef.current = loaded.id;
+        setSession(loaded);
+        setSessionOwnerId(expectedActorId);
+        setAdminSummary(projectOnboardingAdmin(loaded));
+        setInitialReview(projectOnboardingReview(loaded));
+        setImportItems([]);
+        setProjectionRevision((current) => current + 1);
+        window.sessionStorage.setItem(storageKey, loaded.id);
+      } catch (caught) {
+        if (
+          ownerIdRef.current !== expectedActorId ||
+          loadRequestRef.current !== requestId
+        ) {
+          return;
+        }
+        setLoadError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError("开通会话加载失败。", {
+                code: "UNKNOWN_ERROR",
+              }),
+        );
+      } finally {
+        if (
+          ownerIdRef.current === expectedActorId &&
+          loadRequestRef.current === requestId
+        ) {
+          setLoading(false);
+        }
+      }
+    },
+    [actorId, storageKey],
+  );
+
   useEffect(() => {
-    void loadSession();
+    ++loadRequestRef.current;
+    setLoading(false);
+    clearSessionState();
+    if (typeof window === "undefined") return;
+    window.sessionStorage.removeItem(LEGACY_ONBOARDING_SESSION_KEY);
+    if (!actorId || !storageKey) return;
+    const stored = window.sessionStorage.getItem(storageKey);
+    if (stored) void loadSession(stored);
+  }, [actorId, clearSessionState, loadSession, storageKey]);
+
+  const activeSession =
+    actorId && sessionOwnerId === actorId ? session : undefined;
+  const importBatchKey = activeSession?.importBatchIds.join(":") ?? "";
+  useEffect(() => {
+    if (
+      !actorId ||
+      !activeSession ||
+      !importBatchKey ||
+      ["confirmed", "cancelled", "expired", "failed"].includes(
+        activeSession.status,
+      )
+    ) {
+      return;
+    }
+    const expectedActorId = actorId;
+    const expectedSessionId = activeSession.id;
+    let cancelled = false;
+    let timer: number | undefined;
+    const poll = async () => {
+      try {
+        const status = await platformApi.getOnboardingImports(expectedSessionId);
+        if (
+          cancelled ||
+          ownerIdRef.current !== expectedActorId ||
+          activeSessionIdRef.current !== expectedSessionId ||
+          status.sessionId !== expectedSessionId
+        ) {
+          return;
+        }
+        setImportItems(status.items);
+        setImportError(undefined);
+        if (!status.settled) timer = window.setTimeout(poll, 1_500);
+      } catch (caught) {
+        if (
+          cancelled ||
+          ownerIdRef.current !== expectedActorId ||
+          activeSessionIdRef.current !== expectedSessionId
+        ) {
+          return;
+        }
+        setImportError(
+          caught instanceof ApiError
+            ? caught
+            : new ApiError("资料解析进度加载失败。", {
+                code: "UNKNOWN_ERROR",
+              }),
+        );
+        timer = window.setTimeout(poll, 3_000);
+      }
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [activeSession?.id, activeSession?.status, actorId, importBatchKey]);
+
+  useEffect(() => {
+    if (!actorId) {
+      setLlmAvailability("unavailable");
+      return;
+    }
+    const expectedActorId = actorId;
+    let cancelled = false;
     void platformApi
       .listLlmProfiles()
       .then((profiles) => {
+        if (cancelled || ownerIdRef.current !== expectedActorId) return;
         const active = profiles.find((profile) => profile.isActive);
         setLlmAvailability(
           active?.enabled &&
@@ -452,24 +615,48 @@ export function PlatformOnboardingRoute() {
             : "unavailable",
         );
       })
-      .catch(() => setLlmAvailability("failed"));
-  }, [loadSession]);
+      .catch(() => {
+        if (!cancelled && ownerIdRef.current === expectedActorId) {
+          setLlmAvailability("failed");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [actorId]);
 
-  const replaceSession = (value: PlatformOnboardingSession) => {
-    setSession(value);
-    window.sessionStorage.setItem(ONBOARDING_SESSION_KEY, value.id);
-  };
+  const replaceSession = useCallback(
+    (value: PlatformOnboardingSession, expectedSessionId?: string) => {
+      if (!actorId || ownerIdRef.current !== actorId || !storageKey) return false;
+      if (
+        expectedSessionId &&
+        activeSessionIdRef.current !== expectedSessionId
+      ) {
+        return false;
+      }
+      activeSessionIdRef.current = value.id;
+      setSession(value);
+      setSessionOwnerId(actorId);
+      window.sessionStorage.setItem(storageKey, value.id);
+      return true;
+    },
+    [actorId, storageKey],
+  );
 
   return (
     <PlatformOnboardingPage
-      session={session}
-      adminSummary={adminSummary}
-      initialReview={initialReview}
+      key={`${actorId ?? "anonymous"}:${activeSession?.id ?? "new"}:${projectionRevision}`}
+      session={activeSession}
+      importItems={activeSession ? importItems : []}
+      adminSummary={activeSession ? adminSummary : undefined}
+      initialReview={activeSession ? initialReview : undefined}
       llmAvailability={llmAvailability}
       resourceStatus={loading ? "loading" : loadError ? "error" : "ready"}
-      resourceError={loadError}
+      resourceError={loadError ?? importError}
       onStart={async (input: StartPlatformOnboardingInput) => {
+        const expectedActorId = actorId;
         const created = await platformApi.startOnboarding(input);
+        if (!expectedActorId || ownerIdRef.current !== expectedActorId) return;
         setAdminSummary({
           account: input.adminAccount,
           displayName: input.adminDisplayName,
@@ -479,38 +666,49 @@ export function PlatformOnboardingRoute() {
           companyName: input.tenantName,
           initialCardDisplayName: input.adminDisplayName,
         });
+        setImportItems([]);
+        setImportError(undefined);
         replaceSession(created);
       }}
       onUpload={async (sessionId: string, files: File[]) => {
-        replaceSession(await platformApi.uploadOnboardingDocuments(sessionId, files));
+        const updated = await platformApi.uploadOnboardingDocuments(sessionId, files);
+        if (!replaceSession(updated, sessionId)) return;
+        setImportItems([]);
+        setImportError(undefined);
       }}
       onGenerate={async (sessionId: string, expectedVersion: number) => {
-        replaceSession(
-          await platformApi.generateOnboardingSuggestions(sessionId, expectedVersion),
+        const updated = await platformApi.generateOnboardingSuggestions(
+          sessionId,
+          expectedVersion,
         );
+        replaceSession(updated, sessionId);
       }}
       onConfirm={async (
         sessionId: string,
         input: ConfirmPlatformOnboardingInput,
       ) => {
-        replaceSession(await platformApi.confirmOnboarding(sessionId, input));
+        const updated = await platformApi.confirmOnboarding(sessionId, input);
+        replaceSession(updated, sessionId);
       }}
       onCancel={async (
         sessionId: string,
         reason: string,
         expectedVersion: number,
       ) => {
-        replaceSession(
-          await platformApi.cancelOnboarding(sessionId, reason, expectedVersion),
+        const updated = await platformApi.cancelOnboarding(
+          sessionId,
+          reason,
+          expectedVersion,
         );
+        replaceSession(updated, sessionId);
       }}
-      onRefresh={() => void loadSession(session?.id)}
+      onRefresh={() => {
+        if (activeSession?.id) void loadSession(activeSession.id);
+      }}
       onStartAnother={() => {
-        window.sessionStorage.removeItem(ONBOARDING_SESSION_KEY);
-        setSession(undefined);
-        setAdminSummary(undefined);
-        setInitialReview(undefined);
-        setLoadError(undefined);
+        ++loadRequestRef.current;
+        if (storageKey) window.sessionStorage.removeItem(storageKey);
+        clearSessionState();
       }}
       onOpenEnterprises={() => navigate(APP_PATHS.platformEnterprises)}
     />
@@ -573,7 +771,7 @@ export function CurrentPage() {
     return <PlatformLlmSettingsRoute />;
   }
   if (pathname === APP_PATHS.platformOnboarding) {
-    return <RouteRedirect path={APP_PATHS.platformEnterprises} />;
+    return <PlatformOnboardingRoute />;
   }
   if (pathname === APP_PATHS.platformEmployees) return <PlatformEmployeesPage />;
   if (pathname === APP_PATHS.platformVisitors) return <PlatformVisitorsPage />;

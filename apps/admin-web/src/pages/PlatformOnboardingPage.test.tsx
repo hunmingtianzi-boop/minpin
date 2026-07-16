@@ -124,6 +124,64 @@ describe("PlatformOnboardingPage", () => {
     expect(companyInput).toHaveValue("阿特拉斯材料实验室");
   });
 
+  it("blocks analysis and confirmation while a real import item is pending, then unlocks", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <PlatformOnboardingPage
+        {...props({
+          session: {
+            ...reviewSession,
+            status: "processing",
+            suggestions: [],
+            businessProfile: [],
+          },
+          importItems: [
+            { id: "item-1", fileName: "企业介绍.pdf", status: "processing" },
+          ],
+          initialReview: {
+            tenantName: "阿特拉斯租户",
+            companyName: "阿特拉斯材料实验室",
+            initialCardDisplayName: "陈工程师",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "开始智能分析" })).toBeDisabled();
+    await fillConfirmationGate(user);
+    expect(screen.getByRole("button", { name: "确认并激活企业" })).toBeDisabled();
+    expect(screen.getByText("资料仍在解析，暂不能确认")).toBeInTheDocument();
+    expect(screen.getByText("请等待所有资料解析完成后再复核激活")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "资料分析进度" })).toHaveTextContent(
+      "正在处理",
+    );
+
+    rerender(
+      <PlatformOnboardingPage
+        {...props({
+          session: {
+            ...reviewSession,
+            status: "processing",
+            suggestions: [],
+            businessProfile: [],
+          },
+          importItems: [
+            { id: "item-1", fileName: "企业介绍.pdf", status: "completed" },
+          ],
+          initialReview: {
+            tenantName: "阿特拉斯租户",
+            companyName: "阿特拉斯材料实验室",
+            initialCardDisplayName: "陈工程师",
+          },
+        })}
+      />,
+    );
+
+    expect(screen.getByText("1/1 个文件已处理")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "开始智能分析" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "确认并激活企业" })).toBeEnabled();
+  });
+
   it("shows a sourced business profile without applying it to public fields", () => {
     render(<PlatformOnboardingPage {...props()} />);
     expect(screen.getByRole("heading", { name: "企业业务画像（待审核）" })).toBeInTheDocument();
@@ -262,11 +320,15 @@ describe("PlatformOnboardingPage", () => {
     expect(screen.getByRole("heading", { name: "人工复核与确认" })).toBeInTheDocument();
 
     const cancelOpener = screen.getByRole("button", { name: "取消会话" });
-    await user.click(cancelOpener);
-    const dialog = screen.getByRole("dialog", { name: "取消资料辅助建企会话" });
-    const cancelConfirm = within(dialog).getByRole("button", { name: "确认取消会话" });
+    fireEvent.click(cancelOpener);
+    const cancelTitle = await screen.findByText("取消资料辅助建企会话");
+    const dialog = cancelTitle.closest('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    const cancelConfirm = within(dialog as HTMLElement)
+      .getByText("确认取消会话")
+      .closest("button") as HTMLButtonElement;
     expect(cancelConfirm).toBeDisabled();
-    fireEvent.change(within(dialog).getByLabelText("取消原因"), {
+    fireEvent.change(within(dialog as HTMLElement).getByLabelText("取消原因"), {
       target: { value: "wrong-customer-document" },
     });
     expect(cancelConfirm).toBeEnabled();

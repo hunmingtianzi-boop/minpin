@@ -135,6 +135,10 @@ def test_onboarding_session_read_model_hides_provisional_scope_ids() -> None:
             "id": uuid4(),
             "status": "draft",
             "tenant_slug": "acme",
+            "admin_account": "admin@acme.test",
+            "admin_display_name": "Acme Admin",
+            "initial_card_display_name": "Acme",
+            "initial_card_title": "Acme Official Card",
             "version": 1,
             "created_at": datetime.now(UTC),
             "updated_at": datetime.now(UTC),
@@ -145,3 +149,36 @@ def test_onboarding_session_read_model_hides_provisional_scope_ids() -> None:
     assert "tenant_id" not in payload
     assert "company_id" not in payload
     assert "admin_password" not in payload
+    assert payload["admin_account"] == "admin@acme.test"
+    assert payload["admin_display_name"] == "Acme Admin"
+    assert payload["initial_card_display_name"] == "Acme"
+    assert payload["initial_card_title"] == "Acme Official Card"
+    assert set(payload).isdisjoint(PLATFORM_FORBIDDEN_RESPONSE_FIELDS)
+
+    with pytest.raises(ValidationError):
+        PlatformOnboardingSessionRecord.model_validate(
+            {**payload, "admin_password": "must-never-be-returned"}
+        )
+
+
+def test_terminal_onboarding_session_allows_review_projection_to_be_redacted() -> None:
+    session = PlatformOnboardingSessionRecord.model_validate(
+        {
+            "id": uuid4(),
+            "status": "cancelled",
+            "tenant_slug": "acme",
+            "version": 2,
+            "admin_account": None,
+            "admin_display_name": None,
+            "initial_card_display_name": None,
+            "initial_card_title": None,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+
+    payload = session.model_dump(mode="json")
+    assert payload["admin_account"] is None
+    assert payload["admin_display_name"] is None
+    assert payload["initial_card_display_name"] is None
+    assert payload["initial_card_title"] is None

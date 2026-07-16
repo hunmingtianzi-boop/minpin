@@ -111,6 +111,42 @@ class KnowledgeImportStore:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "知识导入批次不存在")
             return await self._record(session, scope, batch, with_items=True)
 
+    async def get_batches_by_ids(
+        self,
+        *,
+        scope: KnowledgeImportScope,
+        batch_ids: list[uuid.UUID],
+    ) -> list[KnowledgeImportBatchRecord]:
+        """Return only explicitly scoped batches, preserving the caller's order.
+
+        Platform onboarding resolves ``scope`` and ``batch_ids`` from a
+        protected onboarding session before calling this method.  Keeping both
+        the company filters and the explicit id allow-list here prevents a
+        platform progress poll from turning into a general cross-tenant import
+        listing endpoint.
+        """
+
+        ordered_ids = list(dict.fromkeys(batch_ids))
+        if not ordered_ids:
+            return []
+        async with self._sessions() as session, session.begin():
+            await self._set_scope(session, scope)
+            rows = (
+                await session.scalars(
+                    select(KnowledgeImportBatch).where(
+                        KnowledgeImportBatch.tenant_id == scope.tenant_id,
+                        KnowledgeImportBatch.company_id == scope.company_id,
+                        KnowledgeImportBatch.id.in_(ordered_ids),
+                    )
+                )
+            ).all()
+            by_id = {row.id: row for row in rows}
+            return [
+                await self._record(session, scope, by_id[batch_id], with_items=True)
+                for batch_id in ordered_ids
+                if batch_id in by_id
+            ]
+
     async def list_batches(
         self, *, scope: KnowledgeImportScope, limit: int, offset: int
     ) -> tuple[list[KnowledgeImportBatchRecord], int]:

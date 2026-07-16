@@ -22,6 +22,7 @@ from app.api.errors import ApiError
 from app.api.platform_schemas import (
     ConfirmPlatformOnboardingRequest,
     EnterpriseRecord,
+    PlatformOnboardingImportStatusRecord,
     PlatformOnboardingSessionRecord,
     PlatformOnboardingSuggestion,
     StartPlatformOnboardingRequest,
@@ -47,7 +48,7 @@ from app.db.models import (
 )
 from app.db.session import set_rls_context
 from app.services.audit import append_audit
-from app.services.knowledge_import_store import KnowledgeImportScope
+from app.services.knowledge_import_store import KnowledgeImportScope, KnowledgeImportStore
 from app.services.platform_llm_profiles import (
     LLMRuntimeUnavailable,
     resolve_effective_chat_config,
@@ -148,6 +149,14 @@ class PlatformOnboardingImportScope:
     scope: KnowledgeImportScope
 
 
+@dataclass(frozen=True, slots=True)
+class _OnboardingReviewProjection:
+    admin_account: str
+    admin_display_name: str
+    initial_card_display_name: str
+    initial_card_title: str | None
+
+
 class PlatformOnboardingService:
     def __init__(
         self,
@@ -176,6 +185,7 @@ class PlatformOnboardingService:
         card_id = uuid.uuid4()
         onboarding_id = uuid.uuid4()
         tenant_name = body.tenant_name.strip() if body.tenant_name else None
+        provisional_name = tenant_name or body.tenant_slug
 
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
@@ -195,7 +205,7 @@ class PlatformOnboardingService:
             tenant = Tenant(
                 id=tenant_id,
                 slug=body.tenant_slug,
-                name=tenant_name or body.tenant_slug,
+                name=provisional_name,
                 tenant_type=TenantType.ENTERPRISE,
                 status=LifecycleStatus.SUSPENDED,
                 settings={"slug": body.tenant_slug, "onboarding_status": "provisional"},
@@ -203,8 +213,8 @@ class PlatformOnboardingService:
             company = Company(
                 id=company_id,
                 tenant_id=tenant_id,
-                name=tenant_name or body.tenant_slug,
-                normalized_name=" ".join((tenant_name or body.tenant_slug).casefold().split()),
+                name=provisional_name,
+                normalized_name=" ".join(provisional_name.casefold().split()),
                 industry=None,
                 status=LifecycleStatus.SUSPENDED,
                 settings={
@@ -247,10 +257,10 @@ class PlatformOnboardingService:
                     owner_user_id=None,
                     responsible_user_id=user_id,
                     slug=f"c-{secrets.token_hex(16)}",
-                    display_name=tenant_name,
+                    display_name=provisional_name,
                     status=ContentStatus.DRAFT,
                     settings={
-                        "title": tenant_name,
+                        "title": provisional_name,
                         "assistant_name": "企业 AI 接待",
                         "welcome_message": "您好，我可以根据企业已审核资料为您介绍业务。",
                         "suggested_questions": [],
@@ -320,7 +330,57 @@ class PlatformOnboardingService:
             # onboarding mutations and surfacing any RLS failure at this
             # operation boundary instead of during context-manager commit.
             await session.flush()
-            return self._record(onboarding)
+            return await self._record_with_review(session, onboarding)
+
+    async def get_import_status(
+        self,
+        *,
+        actor: PlatformActor,
+        onboarding_id: uuid.UUID,
+    ) -> PlatformOnboardingImportStatusRecord:
+        """Read safe import progress only through an owned onboarding scope.
+
+        The public route accepts only the onboarding session id.  Tenant,
+        company, actor and batch ids are all resolved from the protected
+        session row before the regular tenant-scoped import store is entered.
+        """
+
+        self._require_platform(actor)
+        async with self._sessions() as session, session.begin():
+            await self._set_platform_scope(session, actor)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+            )
+            await self._expire_if_needed(row)
+            self._require_open(row)
+            session_id = row.id
+            batch_ids = list(row.import_batch_ids)
+            import_scope = KnowledgeImportScope(
+                tenant_id=row.tenant_id,
+                company_id=row.company_id,
+                actor_user_id=row.admin_user_id,
+            )
+
+        batches = await KnowledgeImportStore(
+            self._sessions,
+            self._settings,
+        ).get_batches_by_ids(scope=import_scope, batch_ids=batch_ids)
+        terminal_statuses = {
+            "completed",
+            "completed_with_errors",
+            "failed",
+            "dead_letter",
+        }
+        settled = len(batches) == len(batch_ids) and all(
+            batch.status in terminal_statuses for batch in batches
+        )
+        return PlatformOnboardingImportStatusRecord(
+            session_id=session_id,
+            settled=settled,
+            batches=batches,
+        )
 
     async def list_sessions(
         self,
@@ -333,11 +393,17 @@ class PlatformOnboardingService:
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
             total = int(
-                await session.scalar(select(func.count(PlatformOnboardingSession.id))) or 0
+                await session.scalar(
+                    select(func.count(PlatformOnboardingSession.id)).where(
+                        PlatformOnboardingSession.created_by == actor.user_id
+                    )
+                )
+                or 0
             )
             rows = (
                 await session.scalars(
                     select(PlatformOnboardingSession)
+                    .where(PlatformOnboardingSession.created_by == actor.user_id)
                     .order_by(
                         PlatformOnboardingSession.created_at.desc(),
                         PlatformOnboardingSession.id.desc(),
@@ -346,7 +412,9 @@ class PlatformOnboardingService:
                     .offset(offset)
                 )
             ).all()
-            return [self._record(row) for row in rows], total
+            for row in rows:
+                await self._expire_if_needed(row)
+            return await self._records(session, list(rows)), total
 
     async def get_session(
         self,
@@ -357,9 +425,13 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+            )
             await self._expire_if_needed(row)
-            return self._record(row)
+            return await self._record_with_review(session, row)
 
     async def import_scope(
         self,
@@ -370,7 +442,11 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+            )
             await self._expire_if_needed(row)
             self._require_open(row)
             return PlatformOnboardingImportScope(
@@ -395,7 +471,12 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id, lock=True)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+                lock=True,
+            )
             await self._expire_if_needed(row)
             self._require_open(row)
             self._require_version(row, expected_version)
@@ -416,7 +497,7 @@ class PlatformOnboardingService:
             )
             await session.flush()
             await session.refresh(row)
-            return self._record(row)
+            return await self._record_with_review(session, row)
 
     async def cancel(
         self,
@@ -430,7 +511,12 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id, lock=True)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+                lock=True,
+            )
             if row.status == "cancelled":
                 return self._record(row)
             self._require_open(row)
@@ -467,7 +553,12 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id, lock=True)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+                lock=True,
+            )
             await self._expire_if_needed(row)
             self._require_open(row)
             self._require_version(row, expected_version)
@@ -515,7 +606,7 @@ class PlatformOnboardingService:
             )
             await session.flush()
             await session.refresh(row)
-            return self._record(row)
+            return await self._record_with_review(session, row)
 
     async def _generate_from_drafts(
         self,
@@ -592,7 +683,12 @@ class PlatformOnboardingService:
         self._require_platform(actor)
         async with self._sessions() as session, session.begin():
             await self._set_platform_scope(session, actor)
-            row = await self._row(session, onboarding_id, lock=True)
+            row = await self._row(
+                session,
+                onboarding_id,
+                actor_user_id=actor.user_id,
+                lock=True,
+            )
             if row.status == "confirmed":
                 return self._record(row)
             await self._expire_if_needed(row)
@@ -734,10 +830,12 @@ class PlatformOnboardingService:
         session: AsyncSession,
         onboarding_id: uuid.UUID,
         *,
+        actor_user_id: uuid.UUID,
         lock: bool = False,
     ) -> PlatformOnboardingSession:
         statement = select(PlatformOnboardingSession).where(
-            PlatformOnboardingSession.id == onboarding_id
+            PlatformOnboardingSession.id == onboarding_id,
+            PlatformOnboardingSession.created_by == actor_user_id,
         )
         if lock:
             statement = statement.with_for_update()
@@ -778,7 +876,80 @@ class PlatformOnboardingService:
         )
 
     @staticmethod
-    def _record(row: PlatformOnboardingSession) -> PlatformOnboardingSessionRecord:
+    async def _review_projections(
+        session: AsyncSession,
+        rows: list[PlatformOnboardingSession],
+    ) -> dict[uuid.UUID, _OnboardingReviewProjection]:
+        open_rows = [row for row in rows if row.status in _OPEN_STATUSES]
+        if not open_rows:
+            return {}
+        users = {
+            user.id: user
+            for user in (
+                await session.scalars(
+                    select(User).where(
+                        User.id.in_({row.admin_user_id for row in open_rows})
+                    )
+                )
+            ).all()
+        }
+        cards = {
+            card.id: card
+            for card in (
+                await session.scalars(
+                    select(Card).where(
+                        Card.id.in_({row.initial_card_id for row in open_rows})
+                    )
+                )
+            ).all()
+        }
+        credentials = {
+            credential.id: credential
+            for credential in (
+                await session.scalars(
+                    select(StaffCredential).where(
+                        StaffCredential.id.in_({row.credential_id for row in open_rows})
+                    )
+                )
+            ).all()
+        }
+        projections: dict[uuid.UUID, _OnboardingReviewProjection] = {}
+        for row in open_rows:
+            user = users.get(row.admin_user_id)
+            card = cards.get(row.initial_card_id)
+            credential = credentials.get(row.credential_id)
+            if user is None or card is None or credential is None:
+                continue
+            raw_title = card.settings.get("title")
+            projections[row.id] = _OnboardingReviewProjection(
+                admin_account=credential.account_normalized,
+                admin_display_name=user.display_name,
+                initial_card_display_name=card.display_name,
+                initial_card_title=str(raw_title) if raw_title is not None else None,
+            )
+        return projections
+
+    async def _records(
+        self,
+        session: AsyncSession,
+        rows: list[PlatformOnboardingSession],
+    ) -> list[PlatformOnboardingSessionRecord]:
+        projections = await self._review_projections(session, rows)
+        return [self._record(row, review=projections.get(row.id)) for row in rows]
+
+    async def _record_with_review(
+        self,
+        session: AsyncSession,
+        row: PlatformOnboardingSession,
+    ) -> PlatformOnboardingSessionRecord:
+        return (await self._records(session, [row]))[0]
+
+    @staticmethod
+    def _record(
+        row: PlatformOnboardingSession,
+        *,
+        review: _OnboardingReviewProjection | None = None,
+    ) -> PlatformOnboardingSessionRecord:
         confirmed = None
         if row.confirmed_enterprise:
             payload = row.confirmed_enterprise
@@ -800,6 +971,12 @@ class PlatformOnboardingService:
             status=cast(OnboardingStatus, row.status),
             tenant_slug=row.tenant_slug,
             tenant_name=row.tenant_name,
+            admin_account=review.admin_account if review else None,
+            admin_display_name=review.admin_display_name if review else None,
+            initial_card_display_name=(
+                review.initial_card_display_name if review else None
+            ),
+            initial_card_title=review.initial_card_title if review else None,
             version=row.version,
             import_batch_ids=list(row.import_batch_ids),
               suggestions=[

@@ -14,6 +14,8 @@ from pydantic import (
     model_validator,
 )
 
+from app.api.knowledge_import_schemas import KnowledgeImportBatchRecord
+
 PLATFORM_FORBIDDEN_RESPONSE_FIELDS = frozenset(
     {
         "admin_password",
@@ -435,6 +437,10 @@ class PlatformOnboardingSessionRecord(PlatformModel):
     ]
     tenant_slug: str
     tenant_name: str | None = None
+    admin_account: str | None = Field(default=None, max_length=200)
+    admin_display_name: str | None = Field(default=None, max_length=120)
+    initial_card_display_name: str | None = Field(default=None, max_length=160)
+    initial_card_title: str | None = Field(default=None, max_length=200)
     version: int = Field(ge=1)
     import_batch_ids: list[uuid.UUID] = Field(default_factory=list)
     suggestions: list[PlatformOnboardingSuggestion] = Field(default_factory=list)
@@ -454,6 +460,16 @@ class PlatformOnboardingSessionListEnvelope(PlatformModel):
     total: int = Field(ge=0)
     limit: int = Field(ge=1)
     offset: int = Field(ge=0)
+
+
+class PlatformOnboardingImportStatusRecord(PlatformModel):
+    session_id: uuid.UUID
+    settled: bool
+    batches: list[KnowledgeImportBatchRecord] = Field(default_factory=list)
+
+
+class PlatformOnboardingImportStatusEnvelope(PlatformModel):
+    data: PlatformOnboardingImportStatusRecord
 
 
 class ConfirmPlatformOnboardingRequest(PlatformModel):
@@ -506,6 +522,8 @@ __all__ = [
     "PlatformLlmProfileListEnvelope",
     "PlatformLlmProfileRecord",
     "PlatformOnboardingSessionEnvelope",
+    "PlatformOnboardingImportStatusEnvelope",
+    "PlatformOnboardingImportStatusRecord",
     "PlatformOnboardingSessionListEnvelope",
     "PlatformOnboardingSessionRecord",
     "PlatformOnboardingSuggestion",

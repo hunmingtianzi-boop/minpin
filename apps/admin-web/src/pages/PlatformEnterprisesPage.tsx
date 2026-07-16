@@ -20,6 +20,7 @@ import {
 } from "@fluentui/react-components";
 import {
   Add24Regular,
+  Book24Regular,
   Dismiss24Regular,
   Search24Regular,
 } from "@fluentui/react-icons";
@@ -33,6 +34,7 @@ import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
 import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
+import { APP_PATHS, navigate } from "../routing";
 import { formatTimestamp } from "../utils/format";
 import { PlatformEnterpriseDrawer } from "./PlatformEnterpriseDrawer";
 import styles from "./PlatformEnterpriseDrawer.module.css";
@@ -135,12 +137,21 @@ export function PlatformEnterprisesPage() {
     <main className="page-stack">
       <PageHeader
         title="企业中心"
-        description="检索已确认企业，查看入驻进度、运营聚合与每张名片的发布状态。"
+        description="直接开通一个空白企业，或上传甲方资料生成待复核草稿；确认前不会公开。"
         actions={
           resource.status === "permission" ? undefined : (
-            <Button appearance="primary" icon={<Add24Regular />} onClick={showCreate}>
-              开通企业
-            </Button>
+            <>
+              <Button
+                appearance="secondary"
+                icon={<Book24Regular />}
+                onClick={() => navigate(APP_PATHS.platformOnboarding)}
+              >
+                从甲方资料创建
+              </Button>
+              <Button appearance="primary" icon={<Add24Regular />} onClick={showCreate}>
+                直接开通空白企业
+              </Button>
+            </>
           )
         }
       />

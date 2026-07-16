@@ -493,14 +493,19 @@ export function PlatformOnboardingPage({
       ),
     [review],
   );
-  const confirmationReady =
-    reviewValid && reviewed.enterprise && reviewed.admin && reviewed.card;
   const terminal = session && ["cancelled", "expired"].includes(session.status);
   const hasImports = importItems.length > 0 || Boolean(session?.importBatchIds.length);
   const importsProcessing =
     busy === "upload" ||
-    session?.status === "processing" ||
-    importItems.some((item) => ["pending", "processing"].includes(item.status));
+    (importItems.length > 0
+      ? importItems.some((item) => ["pending", "processing"].includes(item.status))
+      : session?.status === "processing");
+  const confirmationReady =
+    reviewValid &&
+    reviewed.enterprise &&
+    reviewed.admin &&
+    reviewed.card &&
+    !importsProcessing;
   const insightCount = (session?.businessProfile?.length ?? 0) + (session?.suggestions.length ?? 0);
   const hasInsights = insightCount > 0;
 
@@ -726,6 +731,7 @@ export function PlatformOnboardingPage({
                   icon={<Sparkle24Regular />}
                   disabled={
                     (completedItems === 0 && session.importBatchIds.length === 0) ||
+                    importsProcessing ||
                     llmAvailability !== "ready" ||
                     busy === "generate"
                   }
@@ -889,8 +895,18 @@ export function PlatformOnboardingPage({
 
                 <div className={styles.stickyActions} aria-label="开通会话主操作">
                   <div>
-                    <strong>{confirmationReady ? "可以提交确认" : "尚未满足确认条件"}</strong>
-                    <span>将提交服务端会话版本 {session.version}</span>
+                    <strong>
+                      {importsProcessing
+                        ? "资料仍在解析，暂不能确认"
+                        : confirmationReady
+                          ? "可以提交确认"
+                          : "尚未满足确认条件"}
+                    </strong>
+                    <span>
+                      {importsProcessing
+                        ? "请等待所有资料解析完成后再复核激活"
+                        : `将提交服务端会话版本 ${session.version}`}
+                    </span>
                   </div>
                   <Button
                     ref={cancelOpenerRef}

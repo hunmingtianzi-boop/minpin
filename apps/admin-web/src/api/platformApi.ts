@@ -12,6 +12,7 @@ import type {
   PlatformEnterpriseLifecycle,
   PlatformLlmConnectionTest,
   PlatformLlmProfile,
+  PlatformOnboardingImportStatus,
   PlatformOnboardingSession,
   PlatformOnboardingStatus,
   PlatformOnboardingSuggestion,
@@ -201,6 +202,19 @@ function onboardingSession(value: unknown): PlatformOnboardingSession {
     status: oneOf(value.status, onboardingStatuses, "status"),
     tenantSlug: requiredString(value.tenant_slug, "tenant_slug"),
     tenantName: optionalString(value.tenant_name, "tenant_name"),
+    adminAccount: optionalString(value.admin_account, "admin_account"),
+    adminDisplayName: optionalString(
+      value.admin_display_name,
+      "admin_display_name",
+    ),
+    initialCardDisplayName: optionalString(
+      value.initial_card_display_name,
+      "initial_card_display_name",
+    ),
+    initialCardTitle: optionalString(
+      value.initial_card_title,
+      "initial_card_title",
+    ),
     version: nonNegativeInteger(value.version, "version"),
     importBatchIds: value.import_batch_ids.map((item) =>
       requiredString(item, "import_batch_id"),
@@ -214,6 +228,64 @@ function onboardingSession(value: unknown): PlatformOnboardingSession {
         : createdEnterprise(value.confirmed_enterprise),
     createdAt: requiredString(value.created_at, "created_at"),
     updatedAt: requiredString(value.updated_at, "updated_at"),
+  };
+}
+
+const onboardingImportItemStatuses = [
+  "pending",
+  "processing",
+  "completed",
+  "failed",
+  "dead_letter",
+] as const;
+
+function onboardingImportStatus(value: unknown): PlatformOnboardingImportStatus {
+  if (!isRecord(value) || !Array.isArray(value.batches)) {
+    invalid("资料辅助建企导入进度");
+  }
+  const sessionId = requiredString(
+    value.session_id,
+    "onboarding_imports.session_id",
+  );
+  return {
+    sessionId,
+    settled: requiredBoolean(value.settled, "onboarding_imports.settled"),
+    items: value.batches.flatMap((batch) => {
+      if (!isRecord(batch) || !Array.isArray(batch.items)) {
+        invalid("资料辅助建企导入批次");
+      }
+      return batch.items.map((item) => {
+        if (!isRecord(item)) invalid("资料辅助建企导入文件");
+        return {
+          id: requiredString(item.id, "onboarding_import_item.id"),
+          fileName: requiredString(
+            item.file_name,
+            "onboarding_import_item.file_name",
+          ),
+          sourceType: requiredString(
+            item.source_type,
+            "onboarding_import_item.source_type",
+          ),
+          status: oneOf(
+            item.status,
+            onboardingImportItemStatuses,
+            "onboarding_import_item.status",
+          ),
+          errorCode: optionalString(
+            item.error_code,
+            "onboarding_import_item.error_code",
+          ),
+          createdAt: requiredString(
+            item.created_at,
+            "onboarding_import_item.created_at",
+          ),
+          completedAt: optionalString(
+            item.completed_at,
+            "onboarding_import_item.completed_at",
+          ),
+        };
+      });
+    }),
   };
 }
 
@@ -623,6 +695,17 @@ export function createPlatformApi(client: ApiClient) {
         `/platform/onboarding/${encodeURIComponent(sessionId)}`,
       );
       return onboardingSession(unwrapData(payload, "资料辅助建企会话"));
+    },
+
+    async getOnboardingImports(
+      sessionId: string,
+    ): Promise<PlatformOnboardingImportStatus> {
+      const payload = await client.get(
+        `/platform/onboarding/${encodeURIComponent(sessionId)}/imports`,
+      );
+      return onboardingImportStatus(
+        unwrapData(payload, "资料辅助建企导入进度"),
+      );
     },
 
     async uploadOnboardingDocuments(

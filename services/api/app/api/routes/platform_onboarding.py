@@ -11,6 +11,7 @@ from app.api.platform_schemas import (
     CancelPlatformOnboardingRequest,
     ConfirmPlatformOnboardingRequest,
     GeneratePlatformOnboardingSuggestionsRequest,
+    PlatformOnboardingImportStatusEnvelope,
     PlatformOnboardingSessionEnvelope,
     PlatformOnboardingSessionListEnvelope,
     StartPlatformOnboardingRequest,
@@ -114,6 +115,24 @@ async def get_onboarding(
 ) -> PlatformOnboardingSessionEnvelope:
     return PlatformOnboardingSessionEnvelope(
         data=await _service(request).get_session(
+            actor=_actor(principal),
+            onboarding_id=onboarding_id,
+        )
+    )
+
+
+@router.get(
+    "/{onboarding_id}/imports",
+    response_model=PlatformOnboardingImportStatusEnvelope,
+    operation_id="getPlatformOnboardingImportStatus",
+)
+async def get_onboarding_import_status(
+    onboarding_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+) -> PlatformOnboardingImportStatusEnvelope:
+    return PlatformOnboardingImportStatusEnvelope(
+        data=await _service(request).get_import_status(
             actor=_actor(principal),
             onboarding_id=onboarding_id,
         )
