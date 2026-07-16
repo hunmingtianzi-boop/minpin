@@ -60,6 +60,11 @@ const product: PublicProduct = {
 };
 
 const emptyCatalog: PublicCatalog = { products: [], cases: [] };
+const originalInnerWidthDescriptor = Object.getOwnPropertyDescriptor(window, "innerWidth");
+const originalClientWidthDescriptor = Object.getOwnPropertyDescriptor(
+  document.documentElement,
+  "clientWidth",
+);
 
 const card: PublicCardData = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -143,6 +148,20 @@ describe("PublicExperience", () => {
   });
 
   afterEach(() => {
+    if (originalInnerWidthDescriptor) {
+      Object.defineProperty(window, "innerWidth", originalInnerWidthDescriptor);
+    } else {
+      Reflect.deleteProperty(window, "innerWidth");
+    }
+    if (originalClientWidthDescriptor) {
+      Object.defineProperty(
+        document.documentElement,
+        "clientWidth",
+        originalClientWidthDescriptor,
+      );
+    } else {
+      Reflect.deleteProperty(document.documentElement, "clientWidth");
+    }
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -176,16 +195,32 @@ describe("PublicExperience", () => {
 
   it("closes dialogs with Escape and restores focus to the mobile-sized trigger", async () => {
     Object.defineProperty(window, "innerWidth", { configurable: true, value: 390 });
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      value: 374,
+    });
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn().mockReturnValue({
+        matches: false,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      }),
+    );
     renderExperience();
     const trigger = screen.getByRole("button", { name: "留下需求" });
     trigger.focus();
     fireEvent.click(trigger);
 
     expect(await screen.findByRole("dialog", { name: "留下合作需求" })).toBeInTheDocument();
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.body.style.paddingRight).toBe("16px");
     await waitFor(() => expect(screen.getByLabelText("姓名 *")).toHaveFocus());
     fireEvent.keyDown(window, { key: "Escape" });
 
+    expect(document.body.style.overflow).toBe("hidden");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(document.body.style.overflow).toBe(""));
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 

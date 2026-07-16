@@ -24,6 +24,7 @@ import {
   useEffect,
   useId,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -34,6 +35,7 @@ import {
   getActiveAssistantConversationId,
   type PublicPolicyVersions,
 } from "../lib/assistantApi";
+import { lockBodyScroll } from "../lib/bodyScrollLock";
 import { fetchPublicCard, type PublicCardData } from "../lib/publicCardApi";
 import {
   canonicalShareUrl,
@@ -160,7 +162,6 @@ function ModalShell({
 
   useEffect(() => {
     previousFocus.current = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
     const focusTimer = window.setTimeout(() => {
       const firstField = panelRef.current?.querySelector<HTMLElement>(
         "input:not([disabled]), select:not([disabled]), textarea:not([disabled])",
@@ -190,11 +191,9 @@ function ModalShell({
       }
     };
 
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleKeys);
     return () => {
       window.clearTimeout(focusTimer);
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleKeys);
       window.setTimeout(() => previousFocus.current?.focus(), 0);
     };
@@ -376,9 +375,29 @@ export const PublicExperience = forwardRef<
   const [policies, setPolicies] = useState(() => policyVersions(card));
   const [contactStatus, setContactStatus] = useState("");
   const detailController = useRef<AbortController | null>(null);
+  const scrollUnlockRef = useRef<(() => void) | null>(null);
+  const dialogOpenRef = useRef(Boolean(dialog));
+  dialogOpenRef.current = Boolean(dialog);
+
+  const releaseScrollLock = useCallback(() => {
+    scrollUnlockRef.current?.();
+    scrollUnlockRef.current = null;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (dialog && !scrollUnlockRef.current) {
+      scrollUnlockRef.current = lockBodyScroll();
+    }
+  }, [dialog]);
 
   useEffect(() => setPolicies(policyVersions(card)), [card]);
-  useEffect(() => () => detailController.current?.abort(), []);
+  useEffect(
+    () => () => {
+      detailController.current?.abort();
+      releaseScrollLock();
+    },
+    [releaseScrollLock],
+  );
 
   const closeDialog = useCallback(() => {
     detailController.current?.abort();
@@ -753,7 +772,11 @@ export const PublicExperience = forwardRef<
         </div>
       </section>}
 
-      <AnimatePresence>
+      <AnimatePresence
+        onExitComplete={() => {
+          if (!dialogOpenRef.current) releaseScrollLock();
+        }}
+      >
         {dialog?.type === "lead" && (
           <ModalShell eyebrow="主动联系授权" title="留下合作需求" onClose={closeDialog}>
             <LeadForm

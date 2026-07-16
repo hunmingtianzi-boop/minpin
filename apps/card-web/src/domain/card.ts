@@ -253,6 +253,8 @@ export type EnterpriseCardSection =
 export type EnterpriseCardConfig = {
   id: string;
   version: string;
+  /** Marks a configuration-only shell that must never look like a published enterprise. */
+  isBlankTemplate?: boolean;
   seo: SeoConfig;
   brand: BrandConfig;
   theme: ThemeConfig;

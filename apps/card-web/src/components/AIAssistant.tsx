@@ -13,6 +13,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -25,6 +26,7 @@ import {
   streamAssistantMessage,
   type AssistantCitation,
 } from "../lib/assistantApi";
+import { lockBodyScroll } from "../lib/bodyScrollLock";
 import { findKnowledge } from "../lib/knowledge";
 
 type Message = {
@@ -110,6 +112,27 @@ export const AIAssistant = forwardRef<
   const timerRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  const scrollUnlockRef = useRef<(() => void) | null>(null);
+  const isOpenRef = useRef(isOpen);
+  isOpenRef.current = isOpen;
+
+  const releaseScrollLock = useCallback(() => {
+    scrollUnlockRef.current?.();
+    scrollUnlockRef.current = null;
+  }, []);
+
+  useLayoutEffect(() => {
+    if (isOpen && !scrollUnlockRef.current) {
+      scrollUnlockRef.current = lockBodyScroll();
+    }
+  }, [isOpen]);
+
+  useEffect(
+    () => () => {
+      releaseScrollLock();
+    },
+    [releaseScrollLock],
+  );
 
   const cancelActiveRequest = useCallback(() => {
     if (timerRef.current) {
@@ -131,7 +154,6 @@ export const AIAssistant = forwardRef<
     if (!isOpen) return undefined;
 
     previousFocusRef.current = document.activeElement as HTMLElement | null;
-    const previousOverflow = document.body.style.overflow;
     const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 80);
 
     const handleDialogKeys = (event: KeyboardEvent) => {
@@ -159,12 +181,10 @@ export const AIAssistant = forwardRef<
       }
     };
 
-    document.body.style.overflow = "hidden";
     window.addEventListener("keydown", handleDialogKeys);
     return () => {
       window.clearTimeout(focusTimer);
       cancelActiveRequest();
-      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleDialogKeys);
       const focusTarget = previousFocusRef.current ?? launcherRef.current;
       window.setTimeout(() => focusTarget?.focus(), 0);
@@ -393,7 +413,11 @@ export const AIAssistant = forwardRef<
         </span>
       </button>
 
-      <AnimatePresence>
+      <AnimatePresence
+        onExitComplete={() => {
+          if (!isOpenRef.current) releaseScrollLock();
+        }}
+      >
         {isOpen && (
           <>
             <motion.button
@@ -404,6 +428,7 @@ export const AIAssistant = forwardRef<
               initial={shouldReduceMotion ? false : { opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={shouldReduceMotion ? undefined : { opacity: 0 }}
+              transition={{ duration: 0.14, ease: "easeOut" }}
             />
             <motion.aside
               ref={panelRef}
@@ -411,10 +436,10 @@ export const AIAssistant = forwardRef<
               role="dialog"
               aria-modal="true"
               aria-labelledby="assistant-title"
-              initial={shouldReduceMotion ? false : { opacity: 0, y: 20, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={shouldReduceMotion ? undefined : { opacity: 0, y: 16, scale: 0.98 }}
-              transition={{ duration: 0.22, ease: "easeOut" }}
+              initial={shouldReduceMotion ? false : { opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={shouldReduceMotion ? undefined : { opacity: 0 }}
+              transition={{ duration: 0.16, ease: "easeOut" }}
             >
               <header className="assistant-header">
                 <div className="assistant-identity">

@@ -205,6 +205,54 @@ textarea {
   border-radius: 9px;
 }
 
+.bp-empty-state a,
+.bp-template-link {
+  display: inline-flex;
+  min-height: 40px;
+  padding: 0 14px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: #3567df;
+  background: #fff;
+  border: 1px solid #a9bdff;
+  border-radius: 9px;
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bp-inline-empty {
+  margin: 0;
+}
+
+.bp-template-empty {
+  display: grid;
+  gap: 8px;
+}
+
+.bp-template-empty > strong {
+  color: #263746;
+  font-size: 14px;
+}
+
+.bp-template-empty > p {
+  margin: 0;
+}
+
+.bp-template-badge {
+  color: #64748b !important;
+  background: #eef2f6 !important;
+}
+
+.bp-sticky-actions > a {
+  display: flex;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
 .bp-detail-page {
   display: grid;
   gap: 18px;
@@ -249,15 +297,20 @@ textarea {
 }
 
 .bp-card-actions {
-  bottom: 0;
+  bottom: calc(68px + env(safe-area-inset-bottom, 0px));
 }
 
 .bp-company-actions {
   bottom: calc(68px + env(safe-area-inset-bottom, 0px));
 }
 
+.bp-card-page,
 .bp-company-page {
   padding-bottom: calc(166px + env(safe-area-inset-bottom, 0px));
+}
+
+.bp-detail-actions {
+  bottom: 0;
 }
 
 .bp-live-app .bp-sticky-actions + .bp-bottom-nav {
@@ -279,6 +332,15 @@ textarea {
   box-shadow: 0 12px 30px rgb(47 87 177 / 25%);
 }
 
+.bp-view-card ~ .assistant-launcher,
+.bp-view-company ~ .assistant-launcher {
+  bottom: calc(154px + env(safe-area-inset-bottom, 0px));
+}
+
+.bp-view-detail ~ .assistant-launcher {
+  display: none;
+}
+
 .assistant-launcher-icon {
   width: 54px;
   height: 54px;
@@ -296,6 +358,7 @@ textarea {
 }
 
 .assistant-panel {
+  right: max(12px, calc((100vw - 430px) / 2));
   max-height: min(780px, calc(100dvh - 24px));
   border-radius: 26px;
 }
@@ -320,16 +383,26 @@ textarea {
 
   .assistant-panel,
   .public-dialog {
-    width: 100%;
     max-width: none;
-    height: 100dvh;
     max-height: none;
     border-radius: 0;
+  }
+
+  .assistant-panel {
+    inset: 0;
+    width: 100vw;
   }
 
   .public-dialog-backdrop,
   .assistant-backdrop {
     padding: 0;
+  }
+
+  .public-dialog {
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    transform: none;
   }
 }
 

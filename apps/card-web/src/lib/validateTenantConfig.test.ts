@@ -6,6 +6,7 @@ import type {
   FaqSection,
   ProcessSection,
 } from "../domain/card";
+import { blankEnterpriseTenant } from "../tenants/blank/tenant";
 import { templateTenant } from "../tenants/template/tenant";
 import { tuotuTenant } from "../tenants/tuotu/tenant";
 import { validateTenantConfig } from "./validateTenantConfig";
@@ -33,6 +34,25 @@ describe("validateTenantConfig", () => {
 
   it("accepts the runnable generic template tenant", () => {
     expect(validateTenantConfig(templateTenant)).toEqual({ valid: true, errors: [] });
+  });
+
+  it("accepts the non-published blank enterprise template", () => {
+    expect(validateTenantConfig(blankEnterpriseTenant)).toEqual({
+      valid: true,
+      errors: [],
+    });
+  });
+
+  it("rejects a non-boolean blank-template marker", () => {
+    const config = cloneTenant() as unknown as Record<string, unknown>;
+    config.isBlankTemplate = "yes";
+
+    expect(validateTenantConfig(config).errors).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-config",
+        path: "isBlankTemplate",
+      }),
+    );
   });
 
   it("rejects a config that omits required runtime objects", () => {

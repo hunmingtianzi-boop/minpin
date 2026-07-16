@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import App from "./App";
+import { AssistantApiError } from "./lib/assistantApi";
 import type { PublicCardData } from "./lib/publicCardApi";
+import * as publicExperienceApi from "./lib/publicExperienceApi";
 import { BusinessCardPrototypeApp } from "./prototype/BusinessCardPrototypeApp";
+import { blankEnterpriseTenant } from "./tenants/blank/tenant";
 import { templateTenant } from "./tenants/template/tenant";
 
 const publishedCard: PublicCardData = {
@@ -44,6 +48,7 @@ describe("BusinessCardPrototypeApp", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -65,6 +70,7 @@ describe("BusinessCardPrototypeApp", () => {
 
     expect(screen.getByRole("heading", { name: templateTenant.brand.shortName })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "业务介绍" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "名片导航" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "发起合作" }));
     fireEvent.click(screen.getByRole("button", { name: "分享名片" }));
@@ -79,6 +85,74 @@ describe("BusinessCardPrototypeApp", () => {
     expect(screen.getByRole("navigation", { name: "名片导航" })).toBeInTheDocument();
   });
 
+  it("keeps the primary navigation available and follows browser history", () => {
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "业务" }));
+    expect(screen.getByRole("heading", { name: "从产品、案例和业务方向开始" })).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("square");
+
+    window.history.replaceState({}, "", "/c/template?view=me");
+    fireEvent.popState(window);
+    expect(screen.getByText("我的名片关系")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "名片" }));
+    expect(screen.getByRole("heading", { name: templateTenant.brand.shortName })).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.has("view")).toBe(false);
+  });
+
+  it("uses browser history for an internal company-page return without creating a loop", () => {
+    const back = vi.spyOn(window.history, "back").mockImplementation(() => undefined);
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.brand.name }),
+    );
+    expect(new URL(window.location.href).searchParams.get("view")).toBe("company");
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(back).toHaveBeenCalledOnce();
+  });
+
+  it("replaces a directly opened company view with the card instead of adding history", () => {
+    window.history.replaceState({}, "", "/c/template?view=company");
+    const historyLength = window.history.length;
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "返回" }));
+
+    expect(screen.getByRole("heading", { name: templateTenant.brand.shortName })).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.has("view")).toBe(false);
+    expect(window.history.length).toBe(historyLength);
+  });
+
   it("exposes privacy and profile controls without fake visitor login", () => {
     window.history.replaceState({}, "", "/c/template?view=me");
     const onPrivacy = vi.fn();
@@ -87,6 +161,7 @@ describe("BusinessCardPrototypeApp", () => {
     render(
       <BusinessCardPrototypeApp
         tenant={templateTenant}
+        card={publishedCard}
         onAssistant={vi.fn()}
         onLead={vi.fn()}
         onPrivacy={onPrivacy}
@@ -129,6 +204,206 @@ describe("BusinessCardPrototypeApp", () => {
     expect(onAssistant).not.toHaveBeenCalled();
   });
 
+  it("opens an explainable product recommendation even when AI is disabled and restores it from the URL", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1");
+    const product: publicExperienceApi.PublicProduct = {
+      slug: "verified-service",
+      name: "可信企业服务",
+      category: "企业服务",
+      summary: "来自已发布目录的服务。",
+      detail: "这是可直接打开的已发布产品详情。",
+      sortOrder: 1,
+      publishedAt: "2026-07-16T09:00:00Z",
+    };
+    vi.spyOn(publicExperienceApi, "fetchPublicCatalog").mockResolvedValue({
+      products: [product],
+      cases: [],
+    });
+    vi.spyOn(publicExperienceApi, "fetchPublicRecommendations").mockResolvedValue([
+      {
+        resourceType: "product",
+        resourceId: "product-1",
+        title: product.name,
+        summary: product.summary,
+        url: `/products/${product.slug}`,
+        reason: "与当前企业需求相关",
+        evidence: {
+          sourceType: "product",
+          sourceId: "product-1",
+          title: product.name,
+          excerpt: "来源于已发布产品说明",
+        },
+      },
+    ]);
+    window.history.replaceState({}, "", "/c/example?view=square");
+
+    const firstRender = render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={publishedCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /与当前企业需求相关/ }),
+    );
+    expect(await screen.findByText(product.detail)).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.get("detail")).toBe(
+      `product:${product.slug}`,
+    );
+
+    firstRender.unmount();
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={publishedCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText(product.detail)).toBeInTheDocument();
+
+    window.history.replaceState({}, "", "/c/example?view=square");
+    fireEvent.popState(window);
+    expect(
+      await screen.findByRole("heading", {
+        name: "从产品、案例和业务方向开始",
+      }),
+    ).toBeInTheDocument();
+
+    window.history.replaceState(
+      {},
+      "",
+      `/c/example?view=square&detail=product:${product.slug}`,
+    );
+    fireEvent.popState(window);
+    expect(await screen.findByText(product.detail)).toBeInTheDocument();
+  });
+
+  it("shows a clear state when a detail link no longer exists", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1");
+    vi.spyOn(publicExperienceApi, "fetchPublicCatalog").mockResolvedValue({
+      products: [],
+      cases: [],
+    });
+    vi.spyOn(publicExperienceApi, "fetchPublicRecommendations").mockResolvedValue([]);
+    vi.spyOn(publicExperienceApi, "fetchPublicProduct").mockRejectedValue(
+      new AssistantApiError("内容不存在", { code: "NOT_FOUND", status: 404 }),
+    );
+    window.history.replaceState(
+      {},
+      "",
+      "/c/example?view=square&detail=product:removed-service",
+    );
+
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={publishedCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("该内容不存在或已下线")).toBeInTheDocument();
+    expect(new URL(window.location.href).searchParams.get("detail")).toBe(
+      "product:removed-service",
+    );
+  });
+
+  it("loads a valid deep-linked product even when it is outside the first catalog page", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1");
+    const archivedFromCatalog: publicExperienceApi.PublicProduct = {
+      slug: "page-two-service",
+      name: "第二页企业服务",
+      category: "企业服务",
+      summary: "不在目录首屏，但仍处于发布状态。",
+      detail: "详情接口返回的当前已发布内容。",
+      sortOrder: 51,
+      publishedAt: "2026-07-17T00:00:00Z",
+    };
+    vi.spyOn(publicExperienceApi, "fetchPublicCatalog").mockResolvedValue({
+      products: [],
+      cases: [],
+    });
+    vi.spyOn(publicExperienceApi, "fetchPublicRecommendations").mockResolvedValue([]);
+    const detailRequest = vi
+      .spyOn(publicExperienceApi, "fetchPublicProduct")
+      .mockResolvedValue(archivedFromCatalog);
+    window.history.replaceState(
+      {},
+      "",
+      "/c/example?view=square&detail=product:page-two-service",
+    );
+
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={publishedCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText(archivedFromCatalog.detail)).toBeInTheDocument();
+    expect(detailRequest).toHaveBeenCalledWith(
+      publishedCard.slug,
+      archivedFromCatalog.slug,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("copies non-link contact details when the secure Clipboard API is unavailable", async () => {
+    window.history.replaceState({}, "", "/c/example?view=me");
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn(() => true),
+    });
+
+    try {
+      render(
+        <BusinessCardPrototypeApp
+          tenant={templateTenant}
+          card={{
+            ...publishedCard,
+            contact_fields: [{ label: "微信", value: "example-wechat" }],
+          }}
+          onAssistant={vi.fn()}
+          onLead={vi.fn()}
+          onPrivacy={vi.fn()}
+          onProfile={vi.fn()}
+          onShare={vi.fn()}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /微信/ }));
+      await waitFor(() => expect(screen.getByText("已复制")).toBeInTheDocument());
+      expect(document.execCommand).toHaveBeenCalledWith("copy");
+    } finally {
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+      if (execCommandDescriptor) Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      else Reflect.deleteProperty(document, "execCommand");
+    }
+  });
+
   it("keeps a direct AI entry when no suggested questions are configured", () => {
     const onAssistant = vi.fn();
     const tenantWithoutQuestions = {
@@ -153,5 +428,76 @@ describe("BusinessCardPrototypeApp", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /开始咨询/ }));
     expect(onAssistant).toHaveBeenCalledWith();
+  });
+
+  it("shows a result when static sharing falls back to legacy copy", async () => {
+    window.history.replaceState({}, "", "/c/blank-enterprise");
+    const shareDescriptor = Object.getOwnPropertyDescriptor(navigator, "share");
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    const execCommandDescriptor = Object.getOwnPropertyDescriptor(document, "execCommand");
+    Object.defineProperty(navigator, "share", { configurable: true, value: undefined });
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn(() => true),
+    });
+
+    try {
+      render(<App tenant={blankEnterpriseTenant} />);
+      fireEvent.click(screen.getByRole("button", { name: "分享模板" }));
+      await waitFor(() => {
+        expect(screen.getByRole("status")).toHaveTextContent("名片链接已复制");
+      });
+    } finally {
+      if (shareDescriptor) Object.defineProperty(navigator, "share", shareDescriptor);
+      else Reflect.deleteProperty(navigator, "share");
+      if (clipboardDescriptor) Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+      else Reflect.deleteProperty(navigator, "clipboard");
+      if (execCommandDescriptor) Object.defineProperty(document, "execCommand", execCommandDescriptor);
+      else Reflect.deleteProperty(document, "execCommand");
+    }
+  });
+
+  it("renders a usable blank enterprise without pretending content is published", () => {
+    window.history.replaceState({}, "", "/c/blank-enterprise");
+    const onAssistant = vi.fn();
+    const onLead = vi.fn();
+
+    render(
+      <BusinessCardPrototypeApp
+        tenant={blankEnterpriseTenant}
+        onAssistant={onAssistant}
+        onLead={onLead}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("空白模板")).toBeInTheDocument();
+    expect(screen.getByText("尚未录入企业资料")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "开始配置企业" })).toHaveAttribute(
+      "href",
+      "/admin/platform/onboarding",
+    );
+    expect(screen.queryByText("已发布")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "开始咨询" })).not.toBeInTheDocument();
+    expect(onAssistant).not.toHaveBeenCalled();
+    expect(onLead).not.toHaveBeenCalled();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /企业名称待录入/ }),
+    );
+    expect(screen.getByText("企业介绍待录入")).toBeInTheDocument();
+    expect(screen.getByText("产品与服务待录入")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "业务" }));
+    expect(screen.getByText("产品与案例尚未录入")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "我的" }));
+    expect(screen.getByRole("heading", { name: "空白企业模板" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /开始配置企业/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /长期访客画像授权/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /个人信息权利/ })).not.toBeInTheDocument();
   });
 });

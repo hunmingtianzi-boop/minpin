@@ -94,4 +94,41 @@ describe("AIAssistant lead handoff", () => {
       ),
     );
   });
+
+  it("keeps the page width stable while the assistant locks scrolling", async () => {
+    const originalInnerWidth = window.innerWidth;
+    const originalClientWidth = document.documentElement.clientWidth;
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1200 });
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      value: 1184,
+    });
+
+    render(
+      <AIAssistant config={templateTenant.assistant} cardSlug="tenant-a" />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.assistant.launcherAriaLabel }),
+    );
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.body.style.paddingRight).toBe("16px");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.assistant.labels.closeButton }),
+    );
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(document.body.style.paddingRight).toBe("16px");
+    await waitFor(() => expect(document.body.style.overflow).toBe(""));
+    expect(document.body.style.paddingRight).toBe("");
+
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: originalInnerWidth,
+    });
+    Object.defineProperty(document.documentElement, "clientWidth", {
+      configurable: true,
+      value: originalClientWidth,
+    });
+  });
 });

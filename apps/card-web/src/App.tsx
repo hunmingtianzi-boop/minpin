@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import "./styles.css";
 
@@ -11,6 +11,7 @@ import {
   type PublicExperienceHandle,
 } from "./components/DeferredPublicExperience";
 import type { EnterpriseCardConfig } from "./domain/card";
+import { copyText } from "./lib/clipboard";
 import type { PublicCardData } from "./lib/publicCardApi";
 import { canonicalShareUrl } from "./lib/publicExperienceApi";
 import { BusinessCardPrototypeApp } from "./prototype/BusinessCardPrototypeApp";
@@ -24,7 +25,10 @@ export default function App({
 }) {
   const assistantRef = useRef<AIAssistantHandle>(null);
   const publicExperienceRef = useRef<PublicExperienceHandle>(null);
-  const assistantEnabled = publishedCard?.ai_assistant.available ?? true;
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
+  const isUnconfiguredTemplate = tenant.isBlankTemplate && !publishedCard;
+  const assistantEnabled =
+    !isUnconfiguredTemplate && (publishedCard?.ai_assistant.available ?? true);
 
   const openAssistant = (question?: string) => {
     if (question?.trim()) assistantRef.current?.openWithQuestion(question.trim());
@@ -39,15 +43,24 @@ export default function App({
   const shareFallback = async () => {
     const url = canonicalShareUrl(window.location);
     if (navigator.share) {
-      await navigator.share({ title: tenant.seo.title, text: tenant.seo.description, url });
-      return;
+      try {
+        await navigator.share({ title: tenant.seo.title, text: tenant.seo.description, url });
+        return;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
+      }
     }
-    await navigator.clipboard.writeText(url);
+    try {
+      await copyText(url);
+      setShareNotice("名片链接已复制");
+    } catch {
+      setShareNotice(`无法自动复制，请手动复制：${url}`);
+    }
   };
 
   const openShare = () => {
     if (publishedCard) publicExperienceRef.current?.openShare();
-    else void shareFallback().catch(() => undefined);
+    else void shareFallback();
   };
 
   return (
@@ -61,6 +74,13 @@ export default function App({
         onProfile={() => publicExperienceRef.current?.openProfile()}
         onShare={openShare}
       />
+
+      {shareNotice && (
+        <div className="public-controller-error" role="status">
+          <span>{shareNotice}</span>
+          <button type="button" onClick={() => setShareNotice(null)}>关闭</button>
+        </div>
+      )}
 
       {publishedCard && (
         <DeferredPublicExperience
