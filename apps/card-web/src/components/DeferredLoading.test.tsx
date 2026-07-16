@@ -1,12 +1,17 @@
 import "@testing-library/jest-dom/vitest";
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PublicCardData } from "../lib/publicCardApi";
 import { templateTenant } from "../tenants/template/tenant";
 import { DeferredAIAssistant } from "./DeferredAIAssistant";
 import { DeferredPublicExperience } from "./DeferredPublicExperience";
+
+vi.mock("motion/react", async () => {
+  const actual = await vi.importActual<typeof import("motion/react")>("motion/react");
+  return { ...actual, useReducedMotion: () => true };
+});
 
 vi.mock("../lib/publicExperienceApi", async () => {
   const actual = await vi.importActual<typeof import("../lib/publicExperienceApi")>(
@@ -72,6 +77,10 @@ class TestIntersectionObserver {
 }
 
 describe("deferred first-screen boundaries", () => {
+  beforeAll(async () => {
+    await Promise.all([import("./PublicExperience"), import("./AIAssistant")]);
+  });
+
   beforeEach(() => {
     observerCallbacks = [];
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
@@ -120,7 +129,11 @@ describe("deferred first-screen boundaries", () => {
       await screen.findByRole("dialog", { name: "扫码或复制链接" }),
     ).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("dialog", { name: "扫码或复制链接" }),
+      ).not.toBeInTheDocument(),
+    );
 
     fireEvent.click(
       screen.getByRole("button", { name: templateTenant.assistant.launcherAriaLabel }),

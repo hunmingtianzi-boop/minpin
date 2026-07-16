@@ -64,6 +64,7 @@ function publicCard() {
       privacy: "privacy-2026.07-v1",
       chat_notice: "chat-notice-2026.07-v1",
       lead_consent: "lead-consent-2026.07-v1",
+      profile_personalization: "profile-personalization-2026.07-v1",
     },
   };
 }
@@ -100,6 +101,9 @@ async function mockVisitorApi(page: Page) {
     }
     if (method === "GET" && path === "/public/cards/tuotu/case-studies") {
       return json(route, { data: [], total: 0, limit: 50, offset: 0 });
+    }
+    if (method === "GET" && path === "/public/cards/tuotu/recommendations") {
+      return json(route, { data: [] });
     }
     if (method === "GET" && path === "/public/cards/tuotu/products/digital-card") {
       return json(route, {
@@ -170,7 +174,10 @@ test("visitor browses published content, receives a cited AI answer and submits 
   await page.goto("http://127.0.0.1:4173/c/tuotu");
 
   await expect(page.getByText("拓浙 AI 集团", { exact: true }).first()).toBeVisible();
-  await page.getByRole("link", { name: "产品案例" }).click();
+  await expect(page.locator("#catalog")).toBeAttached();
+  await page.getByRole("link", { name: "业务", exact: true }).click();
+  await expect(page).toHaveURL(/#ecosystem$/);
+  await page.locator("#catalog").scrollIntoViewIfNeeded();
   const product = page.getByRole("button", { name: /数智名片平台/ });
   await expect(product).toBeVisible();
   await product.click();
@@ -188,16 +195,16 @@ test("visitor browses published content, receives a cited AI answer and submits 
   await page.getByRole("button", { name: "关闭助手" }).click();
 
   await page.getByRole("button", { name: "留下需求" }).click();
-  await page.getByLabel("姓名 *").fill("张三");
-  await page.getByLabel("手机").fill("13800138000");
-  await page.getByLabel("合作需求 *").fill("希望预约数智名片产品演示。");
-  await page
-    .getByRole("dialog", { name: "留下合作需求" })
+  const leadDialog = page.getByRole("dialog", { name: "留下合作需求" });
+  await leadDialog.getByLabel("姓名 *").fill("张三");
+  await leadDialog.getByRole("textbox", { name: "手机", exact: true }).fill("13800138000");
+  await leadDialog.getByLabel("合作需求 *").fill("希望预约数智名片产品演示。");
+  await leadDialog
     .locator("label")
     .filter({ hasText: "我同意企业为联系和跟进本次需求" })
     .click();
-  await expect(page.getByRole("checkbox")).toBeChecked();
-  await page.getByRole("button", { name: "确认授权并提交" }).click();
+  await expect(leadDialog.getByRole("checkbox")).toBeChecked();
+  await leadDialog.getByRole("button", { name: "确认授权并提交" }).click();
   await expect(page.getByText("需求已安全提交")).toBeVisible();
   await expect(page.getByText(new RegExp(IDS.lead))).toBeVisible();
   expect(unhandled).toEqual([]);
@@ -244,21 +251,20 @@ async function mockAdminApi(page: Page) {
         },
       });
     }
-    if (method === "GET" && path === "/admin/dashboard") {
+    if (method === "GET" && path === "/platform/overview") {
       return json(route, {
         data: {
           generated_at: "2026-07-11T00:00:00Z",
-          period_days: 30,
-          visits: 0,
-          unique_visitors: 0,
-          conversations: 0,
-          ai_answers: 0,
-          new_leads: 0,
-          pending_gaps: 0,
-          unread_notifications: 0,
-          conversation_rate: 0,
-          lead_rate: 0,
-          daily: [],
+          enterprise_count: 1,
+          active_enterprise_count: 1,
+          onboarding_count: 0,
+          published_card_count: 1,
+          visits_30d: 0,
+          conversations_30d: 0,
+          leads_30d: 0,
+          failed_task_count: 0,
+          llm_ready: true,
+          import_ready: true,
         },
       });
     }
@@ -296,9 +302,14 @@ test("platform administrator signs in and creates an isolated enterprise", async
   await page.getByLabel("账号").fill("platform@example.test");
   await page.getByLabel("密码").fill("Local-Platform-Password-2026!");
   await page.getByRole("button", { name: "登录" }).click();
-  await page.getByRole("link", { name: "企业开通" }).click();
-  await expect(page.getByRole("heading", { name: "企业开通" })).toBeVisible();
-  await expect(page.getByText("现有企业")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "平台运营中心" })).toBeVisible();
+  await page.getByRole("link", { name: "企业管理" }).click();
+  await expect(page.getByRole("heading", { name: "企业中心" })).toBeVisible();
+  await expect(
+    page
+      .getByRole("table", { name: "平台企业列表" })
+      .getByRole("cell", { name: "现有企业", exact: true }),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "开通企业" }).click();
   await page.getByLabel("租户标识").fill("new-enterprise");

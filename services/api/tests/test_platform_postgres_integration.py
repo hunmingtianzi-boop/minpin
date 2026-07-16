@@ -111,7 +111,13 @@ async def test_platform_admin_can_onboard_a_login_ready_enterprise_through_rls()
             body=body,
             trace_id="platform-postgres-integration",
         )
-        rows, _ = await store.list_enterprises(actor=actor, limit=100, offset=0)
+        rows, _ = await store.list_enterprises(
+            actor=actor,
+            search=None,
+            status=None,
+            limit=100,
+            offset=0,
+        )
         assert enterprise_slug in {row.tenant_slug for row in rows}
         with pytest.raises(ApiError) as duplicate:
             await store.create_enterprise(

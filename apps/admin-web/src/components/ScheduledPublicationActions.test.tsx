@@ -1,5 +1,5 @@
 import { FluentProvider } from "@fluentui/react-components";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -39,10 +39,11 @@ describe("ScheduledPublicationActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "定时发布" }));
-    fireEvent.change(screen.getByLabelText(/发布时间/), {
+    const scheduleDialog = await screen.findByRole("dialog", { name: "设置定时发布" });
+    fireEvent.change(within(scheduleDialog).getByLabelText(/发布时间/), {
       target: { value: "2099-01-01T09:00" },
     });
-    await user.click(screen.getByRole("button", { name: "确认定时发布" }));
+    await user.click(within(scheduleDialog).getByRole("button", { name: "确认定时发布" }));
 
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       targetId: "product-1",
@@ -81,7 +82,8 @@ describe("ScheduledPublicationActions", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "取消定时" }));
-    await user.click(screen.getByRole("button", { name: "确认取消定时" }));
+    const cancelDialog = await screen.findByRole("dialog", { name: "取消定时发布" });
+    await user.click(within(cancelDialog).getByRole("button", { name: "确认取消定时" }));
     await waitFor(() => expect(cancel).toHaveBeenCalledWith("schedule-2", 7));
   });
 });

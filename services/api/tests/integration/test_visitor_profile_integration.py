@@ -116,9 +116,9 @@ async def _seed_graph(
         )
         await connection.execute(
             text(
-                "INSERT INTO cards(id,tenant_id,company_id,owner_user_id,slug,"
+                "INSERT INTO cards(id,tenant_id,company_id,owner_user_id,responsible_user_id,slug,"
                 "display_name,status,published_at,settings) VALUES "
-                "(:id,:tenant_id,:company_id,:owner_user_id,:slug,:name,'published',"
+                "(:id,:tenant_id,:company_id,:owner_user_id,:owner_user_id,:slug,:name,'published',"
                 ":now,'{}')"
             ),
             {
