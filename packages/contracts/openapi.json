@@ -13227,6 +13227,16 @@
             "title": "Output Price Cny Per Million",
             "default": 0
           },
+          "allow_general_answers": {
+            "type": "boolean",
+            "title": "Allow General Answers",
+            "default": false
+          },
+          "faq_fast_path_enabled": {
+            "type": "boolean",
+            "title": "Faq Fast Path Enabled",
+            "default": false
+          },
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
@@ -17996,6 +18006,16 @@
             "title": "Output Price Cny Per Million",
             "default": 0
           },
+          "allow_general_answers": {
+            "type": "boolean",
+            "title": "Allow General Answers",
+            "default": false
+          },
+          "faq_fast_path_enabled": {
+            "type": "boolean",
+            "title": "Faq Fast Path Enabled",
+            "default": false
+          },
           "key_configured": {
             "type": "boolean",
             "title": "Key Configured"
@@ -19112,6 +19132,14 @@
             "type": "string",
             "title": "Slug"
           },
+          "card_kind": {
+            "type": "string",
+            "enum": [
+              "enterprise",
+              "employee"
+            ],
+            "title": "Card Kind"
+          },
           "display_name": {
             "type": "string",
             "title": "Display Name"
@@ -19179,6 +19207,7 @@
         "required": [
           "id",
           "slug",
+          "card_kind",
           "display_name",
           "title",
           "company",
@@ -19386,6 +19415,17 @@
               }
             ],
             "title": "Logo Url"
+          },
+          "official_card_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Official Card Slug"
           }
         },
         "additionalProperties": false,
@@ -21088,6 +21128,28 @@
               }
             ],
             "title": "Output Price Cny Per Million"
+          },
+          "allow_general_answers": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Allow General Answers"
+          },
+          "faq_fast_path_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faq Fast Path Enabled"
           },
           "enabled": {
             "anyOf": [

@@ -194,6 +194,8 @@ function toPageProfile(profile: ApiPlatformLlmProfile): PlatformLlmProfile {
     timeoutSeconds: profile.timeoutSeconds,
     maxRetries: profile.maxRetries,
     dailyBudgetCny: profile.dailyBudgetCny,
+    allowGeneralAnswers: profile.allowGeneralAnswers,
+    faqFastPathEnabled: profile.faqFastPathEnabled,
     updatedAt: profile.updatedAt,
     version: profile.version,
   };
@@ -262,6 +264,8 @@ function llmCurrent(
     model: active.model,
     baseUrl: active.baseUrl,
     keyConfigured: active.keyConfigured,
+    allowGeneralAnswers: active.allowGeneralAnswers,
+    faqFastPathEnabled: active.faqFastPathEnabled,
     updatedAt: active.updatedAt,
   };
 }
@@ -319,6 +323,8 @@ export function PlatformLlmSettingsRoute() {
         timeoutSeconds: input.timeoutSeconds,
         maxRetries: input.maxRetries,
         dailyBudgetCny: input.dailyBudgetCny,
+        allowGeneralAnswers: input.allowGeneralAnswers,
+        faqFastPathEnabled: input.faqFastPathEnabled,
         enabled: input.enabled,
       });
     } else {
@@ -333,6 +339,8 @@ export function PlatformLlmSettingsRoute() {
         timeoutSeconds: input.timeoutSeconds,
         maxRetries: input.maxRetries,
         dailyBudgetCny: input.dailyBudgetCny,
+        allowGeneralAnswers: input.allowGeneralAnswers,
+        faqFastPathEnabled: input.faqFastPathEnabled,
         enabled: input.enabled,
       });
     }

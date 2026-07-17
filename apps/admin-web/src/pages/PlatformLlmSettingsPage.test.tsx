@@ -17,6 +17,8 @@ const readyProfile: PlatformLlmProfile = {
   keyConfigured: true,
   keyHint: "sk-***9a",
   enabled: true,
+  allowGeneralAnswers: false,
+  faqFastPathEnabled: true,
   timeoutSeconds: 30,
   maxRetries: 2,
   dailyBudgetCny: 100,
@@ -103,6 +105,33 @@ describe("PlatformLlmSettingsPage", () => {
 
     await user.click(screen.getByRole("button", { name: "编辑" }));
     expect(screen.getByLabelText("API Key（留空保留）")).toHaveValue("");
+  });
+
+  it("edits both platform-owned behavior controls and includes them in save", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(<PlatformLlmSettingsPage {...props({ onSave })} />);
+
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = screen.getByRole("dialog", { name: "编辑配置" });
+    await user.click(within(dialog).getByText("高级运行参数"));
+
+    const generalAnswers = within(dialog).getByLabelText("允许低风险通用问答");
+    const faqFastPath = within(dialog).getByLabelText("FAQ 快速直答（不调用模型）");
+    expect(generalAnswers).not.toBeChecked();
+    expect(faqFastPath).toBeChecked();
+
+    await user.click(generalAnswers);
+    await user.click(faqFastPath);
+    await user.click(within(dialog).getByRole("button", { name: "保存配置" }));
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+    expect(onSave.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        allowGeneralAnswers: true,
+        faqFastPathEnabled: false,
+      }),
+    );
   });
 
   it("explains a 409 conflict without closing the editor", async () => {

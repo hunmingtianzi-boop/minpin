@@ -76,10 +76,6 @@ function initialBaseView(): BaseView {
   return isBaseView(candidate) ? candidate : "card";
 }
 
-function initialView(): View {
-  return detailRouteFromLocation() ? "detail" : initialBaseView();
-}
-
 function scrollPageToTop() {
   const frame = document.querySelector<HTMLElement>(".bp-phone-frame");
   if (typeof frame?.scrollTo === "function") {
@@ -114,6 +110,31 @@ function detailRouteFromLocation() {
     return { kind, slug } as const;
   }
   return undefined;
+}
+
+function publicCardHref(slug: string, fromEmployeeSlug?: string) {
+  const url = new URL(window.location.href);
+  const encodedSlug = encodeURIComponent(slug);
+  url.pathname = /(?:^|\/)c\/[^/]+/i.test(url.pathname)
+    ? url.pathname.replace(/((?:^|\/)c\/)[^/]+/i, `$1${encodedSlug}`)
+    : `/c/${encodedSlug}`;
+  const isMock = url.searchParams.has("mock-card");
+  url.search = "";
+  if (isMock) url.searchParams.set("mock-card", "enterprise");
+  if (fromEmployeeSlug) url.searchParams.set("from_employee", fromEmployeeSlug);
+  return `${url.pathname}${url.search}`;
+}
+
+function employeeCardHref(slug: string) {
+  const url = new URL(window.location.href);
+  const encodedSlug = encodeURIComponent(slug);
+  url.pathname = /(?:^|\/)c\/[^/]+/i.test(url.pathname)
+    ? url.pathname.replace(/((?:^|\/)c\/)[^/]+/i, `$1${encodedSlug}`)
+    : `/c/${encodedSlug}`;
+  const isMock = url.searchParams.has("mock-card");
+  url.search = "";
+  if (isMock) url.searchParams.set("mock-card", "employee");
+  return `${url.pathname}${url.search}`;
 }
 
 function recommendationSlug(item: PublicRecommendation) {
@@ -255,7 +276,18 @@ export function BusinessCardPrototypeApp({
   onProfile: () => void;
   onShare: () => void;
 }) {
-  const [view, setView] = useState<View>(initialView);
+  const standaloneKind = card?.card_kind;
+  const isStandaloneCard = standaloneKind === "employee" || standaloneKind === "enterprise";
+  const standaloneRoot: BaseView = standaloneKind === "enterprise" ? "company" : "card";
+  const defaultBaseView: BaseView = isStandaloneCard ? standaloneRoot : "card";
+  const initialCardView = () => {
+    if (detailRouteFromLocation()) return "detail" as const;
+    if (!isStandaloneCard) return initialBaseView();
+    return new URLSearchParams(window.location.search).get("view") === "square"
+      ? "square"
+      : standaloneRoot;
+  };
+  const [view, setView] = useState<View>(initialCardView);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   const [detailLookup, setDetailLookup] = useState<DetailLookupState>({ status: "idle" });
   const [locationRevision, setLocationRevision] = useState(0);
@@ -292,7 +324,7 @@ export function BusinessCardPrototypeApp({
         setView(
           isBaseView(state?.bpView)
             ? state.bpView
-            : initialView(),
+            : initialCardView(),
         );
       }
       setLocationRevision((current) => current + 1);
@@ -300,7 +332,7 @@ export function BusinessCardPrototypeApp({
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [isStandaloneCard, standaloneRoot]);
 
   useEffect(() => {
     if (!card || !isPublicExperienceConfigured()) {
@@ -337,7 +369,7 @@ export function BusinessCardPrototypeApp({
       setDetailLookup({ status: "idle" });
       if (view === "detail") {
         setDetail(null);
-        setView(initialBaseView());
+        setView(defaultBaseView);
       }
       return;
     }
@@ -355,7 +387,7 @@ export function BusinessCardPrototypeApp({
       historyState.detail.kind === route.kind &&
       historyState.detail.slug === route.slug
       ? historyState.detail.from
-      : initialBaseView();
+      : defaultBaseView;
     if (item) {
       setDetailLookup({ status: "idle" });
       setDetail(
@@ -402,7 +434,7 @@ export function BusinessCardPrototypeApp({
         });
       });
     return () => controller.abort();
-  }, [card?.slug, catalog, locationRevision, view]);
+  }, [card?.slug, catalog, defaultBaseView, locationRevision, view]);
   const isBlankTemplate = Boolean(tenant.isBlankTemplate && !card);
   const isPublished = Boolean(card);
   const companyName = card?.company.name ?? tenant.brand.name;
@@ -446,15 +478,30 @@ export function BusinessCardPrototypeApp({
   const adminHref =
     import.meta.env.VITE_ADMIN_BASE_URL?.trim() || `${import.meta.env.BASE_URL}admin/`;
   const onboardingHref = `${adminHref.replace(/\/*$/, "/")}platform/onboarding`;
+  const officialCompanyHref = card?.company.official_card_slug
+    ? publicCardHref(
+      card.company.official_card_slug,
+      standaloneKind === "employee" ? card.slug : undefined,
+    )
+    : undefined;
+  const employeeReturnSlug = standaloneKind === "enterprise"
+    ? new URLSearchParams(window.location.search).get("from_employee")
+    : undefined;
+  const employeeReturnHref = employeeReturnSlug
+    ? employeeCardHref(employeeReturnSlug)
+    : undefined;
+  const returnToEmployeeCard = () => {
+    if (employeeReturnHref) window.location.assign(employeeReturnHref);
+  };
 
   const go = (next: BaseView) => {
     if (next === view && detail === null) return;
-    const from = view === "detail" ? detail?.from ?? initialBaseView() : view;
+    const from = view === "detail" ? detail?.from ?? defaultBaseView : view;
     setDetail(null);
     setView(next);
     const url = new URL(window.location.href);
     url.searchParams.delete("detail");
-    if (next === "card") url.searchParams.delete("view");
+    if (next === defaultBaseView) url.searchParams.delete("view");
     else url.searchParams.set("view", next);
     window.history.pushState({ bpView: next, from }, "", url);
     scrollPageToTop();
@@ -465,7 +512,7 @@ export function BusinessCardPrototypeApp({
     setView(next);
     const url = new URL(window.location.href);
     url.searchParams.delete("detail");
-    if (next === "card") url.searchParams.delete("view");
+    if (next === defaultBaseView) url.searchParams.delete("view");
     else url.searchParams.set("view", next);
     window.history.replaceState({ bpView: next }, "", url);
     scrollPageToTop();
@@ -484,7 +531,7 @@ export function BusinessCardPrototypeApp({
 
   const openDetail = (target: DetailInput) => {
     const from: BaseView = view === "detail"
-      ? detail?.from ?? initialBaseView()
+      ? detail?.from ?? defaultBaseView
       : view;
     const nextDetail: DetailTarget = target.kind === "product"
       ? { kind: "product", item: target.item, from }
@@ -507,7 +554,7 @@ export function BusinessCardPrototypeApp({
 
   const openDetailRoute = (route: DetailRoute) => {
     const from: BaseView = view === "detail"
-      ? detail?.from ?? initialBaseView()
+      ? detail?.from ?? defaultBaseView
       : view;
     setDetail(null);
     setDetailLookup({ status: "idle" });
@@ -529,7 +576,7 @@ export function BusinessCardPrototypeApp({
       window.history.back();
       return;
     }
-    replaceWithView(detail?.from ?? initialBaseView());
+    replaceWithView(detail?.from ?? defaultBaseView);
   };
 
   const copyContact = async (key: string, value: string) => {
@@ -626,9 +673,21 @@ export function BusinessCardPrototypeApp({
               </b>
             </div>
             <p>{title}</p>
-            <button className="bp-affiliation" type="button" onClick={() => go("company")}>
-              <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
-            </button>
+            {isStandaloneCard ? (
+              officialCompanyHref ? (
+                <a className="bp-affiliation" href={officialCompanyHref}>
+                  <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
+                </a>
+              ) : (
+                <span className="bp-affiliation bp-affiliation-disabled">
+                  <BuildingsIcon size={18} weight="fill" /> {companyName}<small>企业名片暂未发布</small>
+                </span>
+              )
+            ) : (
+              <button className="bp-affiliation" type="button" onClick={() => go("company")}>
+                <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
+              </button>
+            )}
             <div className="bp-tags">
               {tags.map((tag) => <span key={tag}>{tag}</span>)}
             </div>
@@ -647,8 +706,8 @@ export function BusinessCardPrototypeApp({
             ) : (
               <>
                 {introParagraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-                <button type="button" className="bp-text-button" onClick={() => go("company")}>
-                  查看企业详情 <Arrow />
+                <button type="button" className="bp-text-button" onClick={() => go(isStandaloneCard ? "square" : "company")}>
+                  {isStandaloneCard ? "查看全部业务" : "查看企业详情"} <Arrow />
                 </button>
               </>
             )}
@@ -699,8 +758,17 @@ export function BusinessCardPrototypeApp({
           )}
           {isBlankTemplate && <a className="bp-template-link" href={onboardingHref}>配置企业知识库 <Arrow /></a>}
         </section>
+        {isStandaloneCard && (
+          <div className="bp-standalone-utilities">
+            <button type="button" onClick={toggleSaved}>{saved ? "取消保存" : "保存名片"}</button>
+            <button type="button" onClick={onPrivacy}>隐私与个人信息</button>
+          </div>
+        )}
       </main>
-      <div className="bp-sticky-actions bp-card-actions">
+      {isStandaloneCard ? <div className="bp-sticky-actions bp-standalone-action-bar" aria-label="名片主要操作">
+        <button className="primary" type="button" disabled={!assistantAvailable} onClick={() => onAssistant()}>问 AI</button>
+        <button type="button" onClick={onLead}>发起合作</button>
+      </div> : <div className="bp-sticky-actions bp-card-actions">
         {isBlankTemplate ? <>
           <button type="button" onClick={onShare}><ShareNetworkIcon size={22} /> 分享模板</button>
           <a className="primary" href={onboardingHref}>开始配置企业</a>
@@ -713,14 +781,18 @@ export function BusinessCardPrototypeApp({
             <HandshakeIcon size={22} /> 发起合作
           </button>
         </>}
-      </div>
-      {bottom}
+      </div>}
+      {!isStandaloneCard && bottom}
     </>
   );
 
   const companyPage = (
     <>
-      <AppHeader back={returnFromCompany} title={`来自${displayName}的名片`} onShare={onShare} />
+      <AppHeader
+        back={isStandaloneCard ? (employeeReturnHref ? returnToEmployeeCard : undefined) : returnFromCompany}
+        title={isStandaloneCard ? "企业官方名片" : `来自${displayName}的名片`}
+        onShare={onShare}
+      />
       <main className="bp-page bp-company-page">
         <div className="bp-company-head">
           {companyLogo ? <img src={companyLogo} alt={`${companyName}标识`} /> : <i>◈</i>}
@@ -785,14 +857,14 @@ export function BusinessCardPrototypeApp({
           </div>}
         </Section>
 
-        <Section title="可以为你对接的人">
+        {!isStandaloneCard && <Section title="可以为你对接的人">
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>名片持有人待录入</strong><p>添加姓名、职务、头像和经授权的联系渠道。</p><a href={onboardingHref}>配置名片成员</a></div> : <div className="bp-people">
             <button type="button" onClick={() => go("card")}>
               <Avatar small label={displayName} src={avatar} />
               <span><strong>{displayName}　{title}</strong><small>{companyName}</small></span><Arrow />
             </button>
           </div>}
-        </Section>
+        </Section>}
 
         {card?.faq_items.length ? (
           <Section title="常见问题">
@@ -815,8 +887,17 @@ export function BusinessCardPrototypeApp({
           {assistantAvailable && <button type="button" onClick={() => onAssistant()}>咨询适合我们的解决方案 <Arrow /></button>}
           {isBlankTemplate && <a className="bp-template-link" href={onboardingHref}>配置企业知识库 <Arrow /></a>}
         </section>
+        {isStandaloneCard && (
+          <div className="bp-standalone-utilities">
+            <button type="button" onClick={toggleSaved}>{saved ? "取消保存" : "保存企业名片"}</button>
+            <button type="button" onClick={onPrivacy}>隐私与个人信息</button>
+          </div>
+        )}
       </main>
-      <div className="bp-sticky-actions bp-company-actions">
+      {isStandaloneCard ? <div className="bp-sticky-actions bp-standalone-action-bar" aria-label="企业名片主要操作">
+        <button className="primary" type="button" disabled={!assistantAvailable} onClick={() => onAssistant()}>咨询 AI</button>
+        <button type="button" onClick={onLead}>提交合作需求</button>
+      </div> : <div className="bp-sticky-actions bp-company-actions">
         {isBlankTemplate ? <>
           <button type="button" onClick={onShare}>分享空白模板</button>
           <a className="primary" href={onboardingHref}>开始配置企业</a>
@@ -824,14 +905,14 @@ export function BusinessCardPrototypeApp({
           <button type="button" onClick={toggleSaved}>{saved ? "✓ 本机已保存企业名片" : "⌑ 保存到本机"}</button>
           <button className="primary" type="button" onClick={onLead}>⌁ 发起合作</button>
         </>}
-      </div>
-      {bottom}
+      </div>}
+      {!isStandaloneCard && bottom}
     </>
   );
 
   const squarePage = (
     <>
-      <AppHeader title="业务广场" onShare={onShare} />
+      <AppHeader back={isStandaloneCard ? () => replaceWithView(standaloneRoot) : undefined} title="业务广场" onShare={onShare} />
       <main className="bp-page">
         <div className="bp-square-hero">
           <p>真实公开资料</p><h1>从产品、案例和业务方向开始</h1>
@@ -863,7 +944,7 @@ export function BusinessCardPrototypeApp({
           return <button type="button" key={`${item.resourceType}-${item.resourceId}`} disabled={!canOpen && !assistantAvailable} onClick={() => target ? openDetail(target) : route ? openDetailRoute(route) : onAssistant(`请介绍${item.title}`)}><span><strong>{item.title}</strong><small>{item.reason} · 依据：{item.evidence.excerpt} · {canOpen ? "打开已发布详情" : "向 AI 了解"}</small></span><Arrow /></button>;
         })}</div></Section>}
       </main>
-      {bottom}
+      {!isStandaloneCard && bottom}
     </>
   );
 
@@ -965,5 +1046,5 @@ export function BusinessCardPrototypeApp({
 
   const page = view === "card" ? cardPage : view === "company" ? companyPage : view === "square" ? squarePage : view === "me" ? mePage : detailPage ?? squarePage;
 
-  return <div className={`bp-app bp-live-app bp-view-${view}`}><div className="bp-phone-frame">{page}</div></div>;
+  return <div className={`bp-app bp-live-app bp-view-${view}${isStandaloneCard ? " bp-standalone-card" : ""}`}><div className="bp-phone-frame">{page}</div></div>;
 }

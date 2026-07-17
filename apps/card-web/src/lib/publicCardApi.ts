@@ -3,6 +3,7 @@ type PublicLinkItem = Record<string, string>;
 export type PublicCardData = {
   id: string;
   slug: string;
+  card_kind?: "enterprise" | "employee";
   display_name: string;
   title: string;
   avatar_url?: string | null;
@@ -15,6 +16,7 @@ export type PublicCardData = {
     region?: string | null;
     website?: string | null;
     logo_url?: string | null;
+    official_card_slug?: string | null;
   };
   featured_products: PublicLinkItem[];
   featured_cases: PublicLinkItem[];
@@ -88,6 +90,10 @@ function parsePublicCard(value: unknown): PublicCardData {
   return {
     id: requiredString(data, "id"),
     slug: requiredString(data, "slug"),
+    card_kind:
+      data.card_kind === "enterprise" || data.card_kind === "employee"
+        ? data.card_kind
+        : undefined,
     display_name: requiredString(data, "display_name"),
     title: requiredString(data, "title"),
     avatar_url: optionalString(data, "avatar_url"),
@@ -100,6 +106,7 @@ function parsePublicCard(value: unknown): PublicCardData {
       region: optionalString(company, "region"),
       website: optionalString(company, "website"),
       logo_url: optionalString(company, "logo_url"),
+      official_card_slug: optionalString(company, "official_card_slug"),
     },
     featured_products: stringRecordList(data.featured_products),
     featured_cases: stringRecordList(data.featured_cases),

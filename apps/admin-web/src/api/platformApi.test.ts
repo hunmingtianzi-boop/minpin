@@ -21,6 +21,8 @@ function llmProfileResponse(overrides: Record<string, unknown> = {}) {
     daily_budget_cny: 100,
     input_price_cny_per_million: 1,
     output_price_cny_per_million: 2,
+    allow_general_answers: false,
+    faq_fast_path_enabled: true,
     key_configured: true,
     key_hint: "sk-***1234",
     enabled: true,
@@ -416,6 +418,8 @@ describe("platformApi", () => {
         id: "profile/primary",
         purpose: "chat_main",
         thinking: "disabled",
+        allowGeneralAnswers: false,
+        faqFastPathEnabled: true,
         isActive: true,
         lastTestStatus: "succeeded",
       }),
@@ -465,22 +469,35 @@ describe("platformApi", () => {
       baseUrl: "https://api.deepseek.com",
       model: "deepseek-chat",
       apiKey: secret,
+      allowGeneralAnswers: true,
+      faqFastPathEnabled: false,
     });
     const updated = await api.updateLlmProfile("profile/primary", {
       expectedVersion: 4,
       name: "DeepSeek 稳定模型",
       apiKey: "   ",
+      allowGeneralAnswers: false,
+      faqFastPathEnabled: true,
     });
     const tested = await api.testLlmProfile("profile/primary", secret);
 
     expect(client.post).toHaveBeenNthCalledWith(
       1,
       "/platform/settings/llm/profiles",
-      expect.objectContaining({ api_key: secret }),
+      expect.objectContaining({
+        api_key: secret,
+        allow_general_answers: true,
+        faq_fast_path_enabled: false,
+      }),
     );
     expect(client.put).toHaveBeenCalledWith(
       "/platform/settings/llm/profiles/profile%2Fprimary",
-      { expected_version: 4, name: "DeepSeek 稳定模型" },
+      {
+        expected_version: 4,
+        name: "DeepSeek 稳定模型",
+        allow_general_answers: false,
+        faq_fast_path_enabled: true,
+      },
     );
     expect(client.post).toHaveBeenNthCalledWith(
       2,

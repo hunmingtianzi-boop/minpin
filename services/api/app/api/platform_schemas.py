@@ -273,6 +273,8 @@ class PlatformLlmProfileFields(PlatformModel):
     daily_budget_cny: float = Field(default=100, ge=0)
     input_price_cny_per_million: float = Field(default=0, ge=0)
     output_price_cny_per_million: float = Field(default=0, ge=0)
+    allow_general_answers: bool = False
+    faq_fast_path_enabled: bool = False
     enabled: bool = True
 
     @field_validator("base_url")
@@ -310,6 +312,8 @@ class UpdatePlatformLlmProfileRequest(PlatformModel):
     daily_budget_cny: float | None = Field(default=None, ge=0)
     input_price_cny_per_million: float | None = Field(default=None, ge=0)
     output_price_cny_per_million: float | None = Field(default=None, ge=0)
+    allow_general_answers: bool | None = None
+    faq_fast_path_enabled: bool | None = None
     enabled: bool | None = None
 
     @field_validator("base_url")
@@ -349,6 +353,8 @@ class PlatformLlmProfileRecord(PlatformModel):
     daily_budget_cny: float = 100
     input_price_cny_per_million: float = 0
     output_price_cny_per_million: float = 0
+    allow_general_answers: bool = False
+    faq_fast_path_enabled: bool = False
     key_configured: bool
     key_hint: str | None = Field(default=None, max_length=32)
     enabled: bool

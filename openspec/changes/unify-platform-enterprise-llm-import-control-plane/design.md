@@ -42,6 +42,8 @@
 
 平台提供列表、创建、更新、测试和激活接口；无 DELETE。编辑必须携带 `expected_version`，切换主配置还携带 UI 所见 active ID，过期返回 409。空 key 保留原密文，API 永不返回密文/明文，审计只记录元数据。
 
+低风险通用问答和 FAQ 快速直答都由平台管理员在每个 LLM profile 上控制，不下放企业端。`allow_general_answers` 只放宽缺少企业证据的低风险自由问答，高风险、价格和明确禁止内容仍走严格证据门；`faq_fast_path_enabled` 只在命中已发布且高置信 FAQ 时直接返回标准答案并跳过模型。两项默认关闭，保存后由每次请求的有效配置解析器即时读取，不触发容器重构或重启。
+
 连接测试使用 OpenAI-compatible `/models`、短超时、禁重定向、禁自动重试和脱敏响应。Base URL 拒绝 credentials/query/fragment；生产强制 HTTPS，并沿用项目出站/DNS 安全策略。
 
 运行时把启动时固定 orchestrator 改为可按请求读取有效 `chat_main` 配置并安全构造 provider；后续性能需要时才增加短 TTL。数据库零 profile 时允许现有环境变量兜底；一旦存在 profile，显式停用 active profile 就让 AI 不可用，禁止静默换供应商。公开 `ai_assistant.available` 与真实 Chat 使用同一解析器。当前导入解析不读取该配置。
@@ -122,6 +124,7 @@
 ## Risks / Trade-offs
 
 - [动态 LLM 配置与启动时 orchestrator 冲突] → 把 provider 解析收口到单一 runtime resolver，并用切换后真实 Chat 证明无需重启。
+- [行为开关误放宽回答边界] → 开关归平台 profile、默认关闭、逐请求读取；通用问答仅覆盖低风险，FAQ 快速路径只接受已发布高置信命中，高风险门禁不受影响。
 - [密钥泄漏或 SSRF] → 字段加密、只写不回显、URL/DNS/HTTPS 校验、禁重定向、脱敏审计和平台角色 403。
 - [跨租户读取扩大] → 新建窄 response schemas/store queries 与禁止字段测试，不复用企业私域 CRUD。
 - [多 profile 并发切换不一致] → partial unique constraint、事务/advisory lock、expected version 与 active ID 冲突检测。

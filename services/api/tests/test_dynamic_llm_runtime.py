@@ -42,6 +42,8 @@ async def test_request_runtime_uses_fresh_effective_profile(monkeypatch) -> None
         daily_budget_cny=80,
         input_price_cny_per_million=1.5,
         output_price_cny_per_million=3.0,
+        allow_general_answers=True,
+        faq_fast_path_enabled=True,
         enabled=True,
         source="database",
         version=7,
@@ -62,6 +64,8 @@ async def test_request_runtime_uses_fresh_effective_profile(monkeypatch) -> None
     assert runtime.orchestrator._chat_provider.provider_name == "database-provider"
     assert runtime.orchestrator._chat_provider.model_name == "database-model"
     assert runtime.settings.llm_api_key == SecretStr("database-key")
+    assert runtime.settings.llm_allow_general_answers is True
+    assert runtime.settings.rag_faq_fast_path_enabled is True
     assert "database-key" not in repr(runtime)
 
 
@@ -69,6 +73,7 @@ async def test_public_card_availability_uses_same_dynamic_resolver(monkeypatch) 
     card = PublicCard(
         id=uuid.uuid4(),
         slug="sample-card",
+        card_kind="enterprise",
         display_name="示例名片",
         title="负责人",
         company=PublicCompany(id=uuid.uuid4(), name="示例企业", summary=""),

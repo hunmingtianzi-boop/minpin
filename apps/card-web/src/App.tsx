@@ -12,6 +12,7 @@ import {
 } from "./components/DeferredPublicExperience";
 import type { EnterpriseCardConfig } from "./domain/card";
 import { copyText } from "./lib/clipboard";
+import { createMockPublicCard, resolveMockCardKind } from "./lib/mockPublicCard";
 import type { PublicCardData } from "./lib/publicCardApi";
 import { canonicalShareUrl } from "./lib/publicExperienceApi";
 import { BusinessCardPrototypeApp } from "./prototype/BusinessCardPrototypeApp";
@@ -26,16 +27,31 @@ export default function App({
   const assistantRef = useRef<AIAssistantHandle>(null);
   const publicExperienceRef = useRef<PublicExperienceHandle>(null);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
-  const isUnconfiguredTemplate = tenant.isBlankTemplate && !publishedCard;
+  const mockEnabled =
+    import.meta.env.DEV || import.meta.env.VITE_ENABLE_CARD_MOCK === "true";
+  const mockCardKind = mockEnabled
+    ? resolveMockCardKind(window.location.search)
+    : undefined;
+  const mockCard = mockCardKind ? createMockPublicCard(tenant, mockCardKind) : undefined;
+  const renderedCard = mockCard ?? publishedCard;
+  const isUnconfiguredTemplate = tenant.isBlankTemplate && !renderedCard;
   const assistantEnabled =
-    !isUnconfiguredTemplate && (publishedCard?.ai_assistant.available ?? true);
+    !mockCard && !isUnconfiguredTemplate && (publishedCard?.ai_assistant.available ?? true);
 
   const openAssistant = (question?: string) => {
+    if (mockCard) {
+      setShareNotice(`模拟 AI 接待${question?.trim() ? `：${question.trim()}` : "已打开"}`);
+      return;
+    }
     if (question?.trim()) assistantRef.current?.openWithQuestion(question.trim());
     else assistantRef.current?.open();
   };
 
   const openLead = () => {
+    if (mockCard) {
+      setShareNotice("模拟合作需求表单已打开");
+      return;
+    }
     if (publishedCard) publicExperienceRef.current?.openLead();
     else openAssistant("我想提交合作需求，请告诉我如何联系");
   };
@@ -59,7 +75,7 @@ export default function App({
   };
 
   const openShare = () => {
-    if (publishedCard) publicExperienceRef.current?.openShare();
+    if (renderedCard) publicExperienceRef.current?.openShare();
     else void shareFallback();
   };
 
@@ -67,11 +83,17 @@ export default function App({
     <>
       <BusinessCardPrototypeApp
         tenant={tenant}
-        card={publishedCard}
+        card={renderedCard}
         onAssistant={openAssistant}
         onLead={openLead}
-        onPrivacy={() => publicExperienceRef.current?.openPrivacy()}
-        onProfile={() => publicExperienceRef.current?.openProfile()}
+        onPrivacy={() => {
+          if (mockCard) setShareNotice("模拟隐私与个人信息入口");
+          else publicExperienceRef.current?.openPrivacy();
+        }}
+        onProfile={() => {
+          if (mockCard) setShareNotice("模拟访客画像授权入口");
+          else publicExperienceRef.current?.openProfile();
+        }}
         onShare={openShare}
       />
 
@@ -82,10 +104,10 @@ export default function App({
         </div>
       )}
 
-      {publishedCard && (
+      {renderedCard && (
         <DeferredPublicExperience
           ref={publicExperienceRef}
-          card={publishedCard}
+          card={renderedCard}
           controllerOnly
           onAssistant={openAssistant}
         />

@@ -85,6 +85,85 @@ describe("BusinessCardPrototypeApp", () => {
     expect(screen.getByRole("navigation", { name: "名片导航" })).toBeInTheDocument();
   });
 
+  it("renders a standalone employee card without the legacy bottom navigation and links to its company card", () => {
+    window.history.replaceState({}, "", "/c/xusongbo?mock-card=employee");
+    const standaloneEmployeeCard: PublicCardData = {
+      ...publishedCard,
+      slug: "xusongbo",
+      card_kind: "employee",
+      company: {
+        ...publishedCard.company,
+        official_card_slug: "tuotu",
+      },
+    };
+
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={standaloneEmployeeCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("navigation", { name: "名片导航" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /示例企业/ })).toHaveAttribute(
+      "href",
+      "/c/tuotu?mock-card=enterprise&from_employee=xusongbo",
+    );
+    expect(screen.getByRole("button", { name: "发起合作" })).toBeInTheDocument();
+  });
+
+  it("renders a standalone enterprise card as its own page without employee routing", () => {
+    window.history.replaceState({}, "", "/c/tuotu?mock-card=enterprise&from_employee=xusongbo");
+    const standaloneEnterpriseCard: PublicCardData = {
+      ...publishedCard,
+      card_kind: "enterprise",
+      display_name: "示例企业",
+      title: "企业官方名片",
+      company: {
+        ...publishedCard.company,
+        official_card_slug: "tuotu",
+      },
+    };
+
+    const enterpriseRender = render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={standaloneEnterpriseCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("企业官方名片")).toBeInTheDocument();
+    expect(screen.queryByText("可以为你对接的人")).not.toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "名片导航" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "提交合作需求" })).toBeInTheDocument();
+
+    enterpriseRender.unmount();
+    window.history.replaceState({}, "", "/c/tuotu?mock-card=enterprise");
+    render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={standaloneEnterpriseCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+  });
+
   it("keeps the primary navigation available and follows browser history", () => {
     render(
       <BusinessCardPrototypeApp
@@ -456,6 +535,21 @@ describe("BusinessCardPrototypeApp", () => {
       if (execCommandDescriptor) Object.defineProperty(document, "execCommand", execCommandDescriptor);
       else Reflect.deleteProperty(document, "execCommand");
     }
+  });
+
+  it("reuses the QR and URL share panel for a standalone mock card", async () => {
+    window.history.replaceState({}, "", "/c/xusongbo?mock-card=employee");
+
+    render(<App tenant={templateTenant} />);
+    fireEvent.click(screen.getByRole("button", { name: "分享名片" }));
+
+    expect(
+      await screen.findByRole("heading", { name: "扫码或复制链接" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("分享员工名片")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: /名片二维码/ })).toBeInTheDocument();
+    expect(screen.getByText("http://localhost:3000/c/xusongbo")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "复制链接" })).toBeInTheDocument();
   });
 
   it("renders a usable blank enterprise without pretending content is published", () => {

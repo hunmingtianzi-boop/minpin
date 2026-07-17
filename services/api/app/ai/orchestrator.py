@@ -342,7 +342,7 @@ class RAGOrchestrator:
             citation.content_hash for citation in citations if citation.content_hash
         )
         return AIAnswer(
-            answer=completion.output.answer,
+            answer=_format_answer_for_display(completion.output.answer),
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),
@@ -407,10 +407,11 @@ class RAGOrchestrator:
                 pre_gate.refusal.code.value if pre_gate.refusal else "policy"
             )
             return None
+        display_answer, answer_presentation = _faq_answer_for_display(evidence)
         post_gate = self._evidence_gate.after_generation(
             policy,
             StructuredModelAnswer(
-                answer=evidence.text,
+                answer=display_answer,
                 cited_evidence_ids=[evidence.evidence_id],
                 needs_human_review=pre_gate.needs_human_review,
             ),
@@ -432,6 +433,7 @@ class RAGOrchestrator:
         trace.extra.update(
             {
                 "interaction_kind": "faq_fast_path",
+                "answer_presentation": answer_presentation,
                 "needs_human_review": post_gate.needs_human_review,
                 "retrieved_evidence_ids": (evidence.evidence_id,),
                 "retrieved_version_ids": (evidence.version_id,),
@@ -441,11 +443,94 @@ class RAGOrchestrator:
             }
         )
         return AIAnswer(
-            answer=evidence.text,
+            answer=display_answer,
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),
         )
+
+
+_MARKDOWN_BLOCK_PATTERN = re.compile(
+    r"(?m)^\s*(?:#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)"
+)
+
+
+def _faq_answer_for_display(
+    evidence: RetrievedEvidence,
+) -> tuple[str, Literal["metadata_markdown", "normalized_list", "source_text"]]:
+    configured = evidence.metadata.get("answer_markdown")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip(), "metadata_markdown"
+    formatted = _format_answer_for_display(evidence.text)
+    presentation = "normalized_list" if formatted != evidence.text.strip() else "source_text"
+    return formatted, presentation
+
+
+def _format_answer_for_display(value: str) -> str:
+    """Add compact Markdown only when a dense answer contains an obvious list.
+
+    This formatter never invents labels or rewrites claims. It only moves
+    already-delimited list items onto separate lines so model variance cannot
+    collapse a multi-point mobile answer back into one paragraph.
+    """
+
+    text = value.strip()
+    if len(text) < 36 or "\n" in text or _MARKDOWN_BLOCK_PATTERN.search(text):
+        return text
+
+    for colon in ("：", ":"):
+        if colon not in text:
+            continue
+        lead, remainder = text.split(colon, 1)
+        if not lead.strip() or len(lead.strip()) > 48:
+            continue
+        remainder = remainder.strip().rstrip("。.!！?？")
+        for separator in ("；", ";", "、"):
+            parts = [part.strip().rstrip("。.;；") for part in remainder.split(separator)]
+            if not 3 <= len(parts) <= 6:
+                continue
+            if any(not part or len(part) > 64 for part in parts):
+                continue
+            bullets = "\n".join(f"- {part}" for part in parts)
+            return f"**结论：** {lead.strip()}{colon}\n\n{bullets}"
+
+    action_match = re.fullmatch(
+        r"(?P<intro>[^。]{1,32}?)(?:可)?通过(?P<ways>[^。]+?)"
+        r"等方式(?P<tail>[^。]*)。(?P<rest>.+)",
+        text,
+    )
+    if action_match is not None:
+        ways = _split_compact_items(action_match.group("ways"))
+        if 3 <= len(ways) <= 6:
+            label = "合作方式" if "合作" in text else "可选方式"
+            sections = [f"**{label}：**\n\n" + "\n".join(f"- {item}" for item in ways)]
+            rest = action_match.group("rest").strip()
+            process_match = re.fullmatch(
+                r"(?P<prefix>[^，；。]{0,24}?流程[^，；。]*包括)"
+                r"(?P<steps>.+?)(?:，|；)(?P<note>具体.+)",
+                rest,
+            )
+            if process_match is not None:
+                steps = _split_compact_items(process_match.group("steps"))
+                if 3 <= len(steps) <= 8:
+                    process_label = (
+                        "合作流程" if "合作流程" in process_match.group("prefix") else "流程"
+                    )
+                    sections.append(f"**{process_label}：** " + " → ".join(steps))
+                    sections.append(f"> {process_match.group('note').strip()}")
+                    return "\n\n".join(sections)
+            sections.append(rest)
+            return "\n\n".join(sections)
+
+    return text
+
+
+def _split_compact_items(value: str) -> list[str]:
+    return [
+        item.strip().rstrip("。.;；")
+        for item in re.split(r"[、，]|\s*(?:或|以及)\s*", value)
+        if item.strip()
+    ]
 
 
 def _add_completion_trace(trace: _TraceState, completion: ChatCompletion) -> None:

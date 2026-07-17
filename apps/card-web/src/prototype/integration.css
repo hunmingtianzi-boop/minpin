@@ -245,6 +245,56 @@ textarea {
   background: #eef2f6 !important;
 }
 
+.bp-affiliation:is(a) {
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
+.bp-affiliation-disabled {
+  cursor: default;
+  color: #66798a;
+}
+
+.bp-affiliation-disabled small {
+  margin-left: auto;
+  color: #8b98a4;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.bp-standalone-action-bar {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.bp-standalone-action-bar button:disabled {
+  cursor: not-allowed;
+  color: #8a96a4;
+  background: #f3f6f8;
+  border-color: #dfe6eb;
+}
+
+.bp-standalone-utilities {
+  display: flex;
+  margin-top: 24px;
+  padding-top: 18px;
+  justify-content: center;
+  gap: 18px;
+  border-top: 1px solid #e4eaed;
+}
+
+.bp-standalone-utilities button {
+  padding: 0;
+  color: #6f7d89;
+  background: transparent;
+  border: 0;
+  font-size: 11px;
+}
+
+.bp-standalone-card .bp-card-page,
+.bp-standalone-card .bp-company-page {
+  padding-bottom: calc(104px + env(safe-area-inset-bottom, 0px));
+}
+
 .bp-sticky-actions > a {
   display: flex;
   box-sizing: border-box;

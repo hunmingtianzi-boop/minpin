@@ -252,6 +252,8 @@ export type PlatformLlmProfile = {
   dailyBudgetCny: number;
   inputPriceCnyPerMillion: number;
   outputPriceCnyPerMillion: number;
+  allowGeneralAnswers: boolean;
+  faqFastPathEnabled: boolean;
   keyConfigured: boolean;
   keyHint?: string;
   enabled: boolean;
@@ -280,6 +282,8 @@ export type CreatePlatformLlmProfileInput = {
   dailyBudgetCny?: number;
   inputPriceCnyPerMillion?: number;
   outputPriceCnyPerMillion?: number;
+  allowGeneralAnswers?: boolean;
+  faqFastPathEnabled?: boolean;
   enabled?: boolean;
 };
 

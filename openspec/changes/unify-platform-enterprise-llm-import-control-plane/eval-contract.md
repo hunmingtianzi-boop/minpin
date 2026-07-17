@@ -16,12 +16,15 @@
 - Stale edits/activation return 409; enterprise role returns 403.
 - A real Chat after activation uses the selected profile without service restart.
 - Public `ai_assistant.available` matches the same effective configuration.
+- Platform admin can independently control low-risk general answers and published high-confidence FAQ fast answers on each profile; enterprise roles cannot change them.
+- Saving either control affects the next Chat request without a container restart. General-answer mode does not weaken high-risk/pricing gates, and FAQ fast answers do not invoke the model.
 
 Evidence:
 
 - focused migration/model/route/security/runtime tests;
 - one bounded real `/models` test;
 - one real public Chat before/after activation state observation;
+- real before/after behavior-control requests with unchanged API container identity, including one no-model FAQ fast-path receipt;
 - response/log/diff secret scan.
 
 ### AC2 — Platform and enterprise workspaces are role isolated

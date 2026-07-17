@@ -809,7 +809,11 @@ export const PublicExperience = forwardRef<
           </ModalShell>
         )}
         {dialog?.type === "share" && (
-          <ModalShell eyebrow="分享企业名片" title="扫码或复制链接" onClose={closeDialog}>
+          <ModalShell
+            eyebrow={card.card_kind === "employee" ? "分享员工名片" : "分享企业名片"}
+            title="扫码或复制链接"
+            onClose={closeDialog}
+          >
             <SharePanel card={card} />
           </ModalShell>
         )}

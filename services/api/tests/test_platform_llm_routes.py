@@ -50,6 +50,8 @@ def _view() -> PlatformLLMProfileView:
         daily_budget_cny=100,
         input_price_cny_per_million=1.5,
         output_price_cny_per_million=6,
+        allow_general_answers=False,
+        faq_fast_path_enabled=True,
         enabled=True,
         is_active=True,
         version=3,
@@ -144,6 +146,8 @@ def test_route_surface_and_response_are_strictly_allowlisted(
         "daily_budget_cny",
         "input_price_cny_per_million",
         "output_price_cny_per_million",
+        "allow_general_answers",
+        "faq_fast_path_enabled",
         "key_configured",
         "key_hint",
         "enabled",
@@ -165,7 +169,13 @@ def test_update_merges_omitted_fields_before_calling_service(
     client, service, _ = route_client
     response = client.put(
         f"/api/v1/platform/settings/llm/profiles/{service.record.id}",
-        json={"expected_version": 3, "name": "新名称", "max_concurrency": 40},
+        json={
+            "expected_version": 3,
+            "name": "新名称",
+            "max_concurrency": 40,
+            "allow_general_answers": True,
+            "faq_fast_path_enabled": False,
+        },
     )
     assert response.status_code == 200
     body = next(payload["body"] for name, payload in service.calls if name == "update")
@@ -174,6 +184,8 @@ def test_update_merges_omitted_fields_before_calling_service(
     assert body.reasoning_effort is None
     assert body.max_concurrency == 40
     assert body.max_output_tokens == service.record.max_output_tokens
+    assert body.allow_general_answers is True
+    assert body.faq_fast_path_enabled is False
     assert body.api_key is None
 
 

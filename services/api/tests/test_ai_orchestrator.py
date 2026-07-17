@@ -430,6 +430,125 @@ async def test_high_confidence_faq_returns_before_embedding_and_model_and_popula
 
 
 @pytest.mark.asyncio
+async def test_high_confidence_faq_prefers_curated_markdown_presentation() -> None:
+    answer_markdown = (
+        "**结论：** 企业合作主要有三种方式：\n\n"
+        "- **提交场景：** 共同评估需求\n"
+        "- **联合赛题：** 连接真实问题与人才\n"
+        "- **共建项目：** 推进原型和验证"
+    )
+    faq = RetrievedEvidence(
+        evidence_id="faq-chunk-markdown",
+        document_id="faq-doc-markdown",
+        version_id="faq-version-markdown",
+        ordinal=0,
+        title="企业可以怎样合作？",
+        text="企业可提交场景、联合发布赛题或共建项目。",
+        score=1.0,
+        lexical_score=1.0,
+        content_hash="sha256:faq-markdown",
+        metadata={
+            "source_type": "faq",
+            "faq_exact": True,
+            "answer_markdown": answer_markdown,
+        },
+    )
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused", cited_evidence_ids=["x"]))
+    repository = FakeFAQRepository([faq], faq)
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        faq_repository=repository,
+        config=RAGOrchestratorConfig(faq_fast_path_enabled=True),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            card_id="card-1",
+            question="企业可以怎样合作？",
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == answer_markdown
+    assert result.trace.extra["answer_presentation"] == "metadata_markdown"
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_dense_model_list_is_normalized_to_compact_markdown() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer(
+            answer=(
+                "拓浙 AI 集团有四个业务板块：拓途浙享、智能体学习与项目社群、"
+                "浙客松、AI 场景服务。"
+            )
+        )
+    )
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="有哪些业务？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == (
+        "**结论：** 拓浙 AI 集团有四个业务板块：\n\n"
+        "- 拓途浙享\n"
+        "- 智能体学习与项目社群\n"
+        "- 浙客松\n"
+        "- AI 场景服务"
+    )
+
+
+@pytest.mark.asyncio
+async def test_dense_action_and_process_answer_is_grouped_without_new_claims() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer(
+            answer=(
+                "企业可通过提交 AI 应用场景、联合发布真实赛题、共建项目实践或开展"
+                "青年人才交流等方式合作。合作流程通常包括需求沟通、场景评估、范围确认、"
+                "团队匹配、阶段验证和成果复盘，具体费用、周期、数据使用、知识产权、保密与"
+                "验收方式需按项目另行确认。"
+            )
+        )
+    )
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="如何合作？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == (
+        "**合作方式：**\n\n"
+        "- 提交 AI 应用场景\n"
+        "- 联合发布真实赛题\n"
+        "- 共建项目实践\n"
+        "- 开展青年人才交流\n\n"
+        "**合作流程：** 需求沟通 → 场景评估 → 范围确认 → 团队匹配 → 阶段验证和成果复盘\n\n"
+        "> 具体费用、周期、数据使用、知识产权、保密与验收方式需按项目另行确认。"
+    )
+
+
+@pytest.mark.asyncio
 async def test_embedding_timeout_falls_back_to_lexical_retrieval() -> None:
     timeout = AIProviderError(
         "safe timeout",
