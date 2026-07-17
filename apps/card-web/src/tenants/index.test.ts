@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  isBlankEnterpriseTemplateEnabled,
   loadTenant,
   registeredTenantSlugs,
   resolveTenantSlug,
@@ -12,6 +13,21 @@ import { tuotuTenant } from "./tuotu/tenant";
 describe("tenant registry", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("keeps the blank enterprise build gate explicit outside development", () => {
+    expect(
+      isBlankEnterpriseTemplateEnabled({ dev: false, configured: undefined }),
+    ).toBe(false);
+    expect(
+      isBlankEnterpriseTemplateEnabled({ dev: false, configured: "false" }),
+    ).toBe(false);
+    expect(
+      isBlankEnterpriseTemplateEnabled({ dev: false, configured: "true" }),
+    ).toBe(true);
+    expect(
+      isBlankEnterpriseTemplateEnabled({ dev: true, configured: undefined }),
+    ).toBe(true);
   });
 
   it("resolves a tenant from the card path before the query string", () => {

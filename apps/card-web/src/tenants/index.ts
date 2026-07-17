@@ -9,9 +9,18 @@ const tenantLoaders = {
 
 export type TenantSlug = keyof typeof tenantLoaders;
 
-export const blankEnterpriseTemplateEnabled =
-  import.meta.env.DEV ||
-  import.meta.env.VITE_ENABLE_BLANK_ENTERPRISE_TEMPLATE === "true";
+export const isBlankEnterpriseTemplateEnabled = ({
+  dev,
+  configured,
+}: {
+  dev: boolean;
+  configured?: string;
+}) => dev || configured === "true";
+
+export const blankEnterpriseTemplateEnabled = isBlankEnterpriseTemplateEnabled({
+  dev: import.meta.env.DEV,
+  configured: import.meta.env.VITE_ENABLE_BLANK_ENTERPRISE_TEMPLATE,
+});
 
 export const registeredTenantSlugs = Object.freeze(
   Object.keys(tenantLoaders).filter(
