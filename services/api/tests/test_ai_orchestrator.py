@@ -321,6 +321,9 @@ async def test_general_mode_answers_low_risk_question_without_evidence() -> None
     assert result.citations == ()
     assert len(chat.calls) == 1
     assert '"general_answer_allowed":true' in chat.calls[0][0][1].content
+    assert "Markdown is required whenever the answer contains two" in chat.calls[0][0][0].content
+    assert "**结论：** one direct sentence" in chat.calls[0][0][0].content
+    assert "never bold a whole sentence" in chat.calls[0][0][0].content
 
 
 @pytest.mark.asyncio

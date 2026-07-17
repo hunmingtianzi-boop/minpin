@@ -1734,8 +1734,8 @@ img {
 
 .message-markdown {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.75;
+  font-size: 13px;
+  line-height: 1.72;
   overflow-wrap: anywhere;
 }
 
@@ -1763,6 +1763,16 @@ img {
 
 .message-markdown li + li {
   margin-top: 0.25em;
+}
+
+.message-assistant .message-markdown strong {
+  color: var(--accent-strong);
+  font-weight: 750;
+}
+
+.message-assistant .message-markdown li::marker {
+  color: var(--accent-strong);
+  font-weight: 750;
 }
 
 .message-markdown blockquote {

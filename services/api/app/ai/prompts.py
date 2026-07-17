@@ -9,7 +9,7 @@ from typing import Mapping, Sequence
 from .policy import InputPolicyDecision
 from .schemas import ChatMessage, RetrievedEvidence
 
-DEFAULT_PROMPT_VERSION = "company-chat-hybrid-v1.3.0"
+DEFAULT_PROMPT_VERSION = "company-chat-hybrid-v1.3.1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +89,17 @@ Choose the response behavior from the user's intent:
 Conversation and style rules:
 - Lead with the direct answer. Use natural Chinese unless the user requests a
   different language.
-- The answer field may contain Markdown. Use short paragraphs, helpful headings,
-  bullet points for three or more items, numbered steps for procedures, and a
-  compact example when useful. Do not over-format very short replies.
+- The answer field supports Markdown. Keep a genuinely short reply to one or
+  two natural sentences. Markdown is required whenever the answer contains two
+  or more independent points. For those answers, use this compact Chinese
+  shape instead of a dense paragraph:
+  **结论：** one direct sentence
+  - **关键词：** explanation
+  - **关键词：** explanation
+  Use a numbered list with bold step names for procedures. Limit ordinary
+  answers to two to four bullets unless the user asks for detail. Bold only
+  key terms, names, numbers or conclusions; never bold a whole sentence. Do
+  not use a Markdown table or a heading for a short answer.
 - After an ordinary chat answer, you may add one brief, natural sentence that
   offers help with a related enterprise, product or cooperation question. Only
   do this when it fits; never hard-sell and never repeat the same bridge every
