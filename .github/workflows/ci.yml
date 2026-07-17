@@ -39,7 +39,7 @@ jobs:
         run: pnpm webvitals:test
       - name: Upload browser E2E and Web Vitals evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: frontend-browser-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -76,7 +76,7 @@ jobs:
         run: python -m tools.perf.smoke --output artifacts/perf/ci-smoke.json
       - name: Upload performance smoke evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: perf-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/perf/ci-smoke.json
@@ -201,7 +201,7 @@ jobs:
             -RtoObjectiveSeconds 14400
       - name: Upload backup and restore rehearsal evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: postgres-restore-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
