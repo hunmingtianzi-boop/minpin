@@ -164,6 +164,90 @@ describe("BusinessCardPrototypeApp", () => {
     expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
   });
 
+  it("renders reusable product, case and FAQ showcase layouts from variable content", async () => {
+    vi.stubEnv("VITE_API_BASE_URL", "https://api.example.test/api/v1");
+    window.history.replaceState({}, "", "/c/example");
+    const products: publicExperienceApi.PublicProduct[] = [
+      {
+        slug: "data-service",
+        name: "数据服务",
+        category: "企业服务",
+        summary: "帮助企业整理数据并形成可执行的经营分析。",
+        detail: "从数据盘点、指标设计到分析看板逐步交付。",
+        audience: "成长型企业",
+        priceBoundary: "按项目范围评估",
+        sortOrder: 1,
+        publishedAt: "2026-07-17T00:00:00Z",
+      },
+      {
+        slug: "talent-program",
+        name: "人才共创计划",
+        category: "人才服务",
+        summary: "围绕真实问题组织跨学科团队完成项目验证。",
+        detail: "通过训练、组队和项目复盘沉淀能力。",
+        sortOrder: 2,
+        publishedAt: "2026-07-17T00:00:00Z",
+      },
+    ];
+    const cases: publicExperienceApi.PublicCaseStudy[] = [
+      {
+        slug: "retail-growth",
+        title: "零售经营增长案例",
+        industry: "零售",
+        background: "客户需要统一经营数据。",
+        solution: "建设统一数据看板。",
+        result: "关键决策效率得到提升。",
+        sortOrder: 1,
+        publishedAt: "2026-07-17T00:00:00Z",
+      },
+      {
+        slug: "education-project",
+        title: "青年项目实践案例",
+        industry: "教育",
+        background: "实践机会缺少连续路径。",
+        solution: "组织分层训练和真实项目。",
+        result: "参与者形成可复用的项目作品。",
+        sortOrder: 2,
+        publishedAt: "2026-07-17T00:00:00Z",
+      },
+    ];
+    vi.spyOn(publicExperienceApi, "fetchPublicCatalog").mockResolvedValue({ products, cases });
+    vi.spyOn(publicExperienceApi, "fetchPublicRecommendations").mockResolvedValue([]);
+    const richCard: PublicCardData = {
+      ...publishedCard,
+      card_kind: "enterprise",
+      faq_items: [
+        { id: "faq-1", question: "为什么选择我们？", answer: "因为方案来自已发布资料与真实项目。", source_label: "企业公开资料" },
+        { id: "faq-2", question: "如何开始合作？", answer: "先提交业务需求，再确认范围与交付方式。", source_label: "合作流程说明" },
+      ],
+    };
+
+    const { container } = render(
+      <BusinessCardPrototypeApp
+        tenant={templateTenant}
+        card={richCard}
+        onAssistant={vi.fn()}
+        onLead={vi.fn()}
+        onPrivacy={vi.fn()}
+        onProfile={vi.fn()}
+        onShare={vi.fn()}
+      />,
+    );
+
+    await screen.findByText("数据服务");
+    expect(container.querySelectorAll(".bp-product-showcase-item")).toHaveLength(2);
+    expect(container.querySelectorAll(".bp-case-showcase-item")).toHaveLength(2);
+    expect(container.querySelectorAll(".bp-faq-showcase article")).toHaveLength(2);
+    expect(screen.getByText("客户需要统一经营数据。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /如何开始合作/ }));
+    expect(screen.getByText("先提交业务需求，再确认范围与交付方式。")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /数据服务/ }));
+    expect(screen.getByText("从数据盘点、指标设计到分析看板逐步交付。")).toBeInTheDocument();
+    expect(screen.getByText("成长型企业")).toBeInTheDocument();
+  });
+
   it("keeps the primary navigation available and follows browser history", () => {
     render(
       <BusinessCardPrototypeApp

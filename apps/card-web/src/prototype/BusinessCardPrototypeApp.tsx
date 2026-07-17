@@ -241,6 +241,129 @@ function Section({ title, children, action }: { title: string; children: ReactNo
   );
 }
 
+type ProductShowcaseItem = {
+  key: string;
+  category: string;
+  title: string;
+  description: string;
+  meta?: string;
+  disabled?: boolean;
+  onOpen: () => void;
+};
+
+function ProductShowcase({ items }: { items: ProductShowcaseItem[] }) {
+  return (
+    <div className="bp-product-showcase">
+      {items.map((item, index) => (
+        <button
+          className="bp-product-showcase-item"
+          type="button"
+          key={item.key}
+          disabled={item.disabled}
+          onClick={item.onOpen}
+        >
+          <span className="bp-showcase-number" aria-hidden="true">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <small>{item.category}</small>
+          <strong>{item.title}</strong>
+          <p>{item.description}</p>
+          {item.meta && <em>{item.meta}</em>}
+          <span className="bp-showcase-link">查看详情 <Arrow /></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CaseShowcase({
+  items,
+  onOpen,
+}: {
+  items: PublicCaseStudy[];
+  onOpen: (item: PublicCaseStudy) => void;
+}) {
+  return (
+    <div className="bp-case-showcase">
+      {items.map((item, index) => (
+        <button
+          className={`bp-case-showcase-item${index === 0 ? " featured" : ""}`}
+          type="button"
+          key={item.slug}
+          onClick={() => onOpen(item)}
+        >
+          <span className="bp-case-showcase-meta">
+            <b>CASE {String(index + 1).padStart(2, "0")}</b>
+            <small>{item.industry || "公开案例"}</small>
+          </span>
+          <strong>{item.title}</strong>
+          {index === 0 && (
+            <span className="bp-case-showcase-brief">
+              <span><small>项目背景</small><p>{item.background}</p></span>
+              <span><small>解决方案</small><p>{item.solution}</p></span>
+            </span>
+          )}
+          <span className="bp-case-showcase-result">
+            <small>项目结果</small>
+            <p>{item.result}</p>
+          </span>
+          <span className="bp-showcase-link">查看完整案例 <Arrow /></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FaqShowcase({
+  items,
+  openFaq,
+  onToggle,
+  onAssistant,
+  assistantAvailable,
+}: {
+  items: PublicCardData["faq_items"];
+  openFaq: string | null;
+  onToggle: (id: string) => void;
+  onAssistant: (question: string) => void;
+  assistantAvailable: boolean;
+}) {
+  return (
+    <div className="bp-faq-showcase">
+      {items.map((faq, index) => {
+        const isOpen = openFaq === faq.id;
+        return (
+          <article className={isOpen ? "open" : ""} key={faq.id}>
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => onToggle(faq.id)}
+            >
+              <span className="bp-faq-number" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <strong>{faq.question}</strong>
+              <span className="bp-faq-toggle" aria-hidden="true">{isOpen ? "−" : "+"}</span>
+            </button>
+            {isOpen && (
+              <div className="bp-faq-answer">
+                <p>{faq.answer}</p>
+                <footer>
+                  <small>资料来源：{faq.source_label}</small>
+                  {assistantAvailable && (
+                    <button type="button" onClick={() => onAssistant(faq.question)}>
+                      继续问 AI <Arrow />
+                    </button>
+                  )}
+                </footer>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+
 function NavIcon({ view, active }: { view: View; active: boolean }) {
   const props = { size: 22, weight: active ? "fill" : "regular" } as const;
   if (view === "card") return <IdentificationCardIcon {...props} />;
@@ -632,6 +755,27 @@ export function BusinessCardPrototypeApp({
     return undefined;
   };
 
+  const companyProductItems: ProductShowcaseItem[] = (
+    products.length
+      ? products.slice(0, 4).map((item) => ({
+          key: item.slug,
+          category: item.category || "产品与服务",
+          title: item.name,
+          description: item.summary,
+          meta: item.audience ? `适用对象：${item.audience}` : undefined,
+          onOpen: () => openDetail({ kind: "product", item }),
+        }))
+      : tenantBusinesses.slice(0, 4).map((item) => ({
+          key: item.title,
+          category: item.eyebrow || "业务方向",
+          title: item.title,
+          description: item.description,
+          meta: item.points[0] || item.status || undefined,
+          disabled: !assistantAvailable,
+          onOpen: () => onAssistant(`请介绍${item.title}`),
+        }))
+  );
+
   const bottom = (
     <nav className="bp-bottom-nav" aria-label="名片导航">
       {([
@@ -815,37 +959,24 @@ export function BusinessCardPrototypeApp({
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>企业介绍待录入</strong><p>支持从企业简介、官网文本或审核后的文档生成。</p><a href={onboardingHref}>录入企业资料</a></div> : <div className="bp-intro"><p>{companySummary}</p></div>}
         </Section>
 
-        <Section title="核心业务">
+        <Section
+          title="核心业务"
+          action={products.length > 4 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
+        >
           {catalog.status === "loading" ? <LoadingRows label="业务资料" /> : (
-            products.length || tenantBusinesses.length ? <div className="bp-list">
-              {(products.length ? products.slice(0, 4) : tenantBusinesses.slice(0, 4)).map((item) => {
-                const isProduct = "slug" in item;
-                const titleText = isProduct ? item.name : item.title;
-                const description = isProduct ? item.summary : item.description;
-                return (
-                  <button
-                    type="button"
-                    key={titleText}
-                    disabled={!isProduct && !assistantAvailable}
-                    onClick={() => isProduct ? openDetail({ kind: "product", item }) : onAssistant(`请介绍${titleText}`)}
-                  >
-                    <i>◇</i><span><strong>{titleText}</strong><small>{description}</small></span><Arrow />
-                  </button>
-                );
-              })}
-            </div> : <div className="bp-empty-state bp-inline-empty"><strong>产品与服务待录入</strong><p>添加业务名称、适用客户、价值说明和服务边界后即可展示。</p><a href={onboardingHref}>添加业务资料</a></div>
+            companyProductItems.length ? <ProductShowcase items={companyProductItems} /> : <div className="bp-empty-state bp-inline-empty"><strong>产品与服务待录入</strong><p>添加业务名称、适用客户、价值说明和服务边界后即可展示。</p><a href={onboardingHref}>添加业务资料</a></div>
           )}
         </Section>
 
-        {representativeCase && (
-          <Section title="代表案例">
-            <button
-              type="button"
-              className="bp-case bp-company-case"
-              onClick={() => openDetail({ kind: "case", item: representativeCase })}
-            >
-              <span><small>{representativeCase.industry || "公开案例"}</small><strong>{representativeCase.title}</strong><em>{representativeCase.result}</em></span><i>▦</i><Arrow />
-            </button>
+        {cases.length > 0 && (
+          <Section
+            title="代表案例"
+            action={cases.length > 3 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
+          >
+            <CaseShowcase
+              items={cases.slice(0, 3)}
+              onOpen={(item) => openDetail({ kind: "case", item })}
+            />
           </Section>
         )}
 
@@ -868,16 +999,13 @@ export function BusinessCardPrototypeApp({
 
         {card?.faq_items.length ? (
           <Section title="常见问题">
-            <div className="bp-faq-list">
-              {card.faq_items.map((faq) => (
-                <article className={openFaq === faq.id ? "open" : ""} key={faq.id}>
-                  <button type="button" aria-expanded={openFaq === faq.id} onClick={() => setOpenFaq(openFaq === faq.id ? null : faq.id)}>
-                    <strong>{faq.question}</strong><span>{openFaq === faq.id ? "−" : "+"}</span>
-                  </button>
-                  {openFaq === faq.id && <div><p>{faq.answer}</p><small>资料来源：{faq.source_label}</small>{assistantAvailable && <button type="button" onClick={() => onAssistant(faq.question)}>继续问 AI <Arrow /></button>}</div>}
-                </article>
-              ))}
-            </div>
+            <FaqShowcase
+              items={card.faq_items}
+              openFaq={openFaq}
+              onToggle={(id) => setOpenFaq(openFaq === id ? null : id)}
+              onAssistant={onAssistant}
+              assistantAvailable={assistantAvailable}
+            />
           </Section>
         ) : null}
 
@@ -992,14 +1120,24 @@ export function BusinessCardPrototypeApp({
         <h1>{detail.kind === "product" ? detail.item.name : detail.item.title}</h1>
         {detail.item.imageUrl && <img className="bp-detail-image" src={detail.item.imageUrl} alt="" />}
         {detail.kind === "product" ? <>
-          <Section title="业务简介"><p>{detail.item.summary}</p></Section>
-          <Section title="详细说明"><p>{detail.item.detail}</p></Section>
-          {detail.item.audience && <Section title="适用对象"><p>{detail.item.audience}</p></Section>}
-          {detail.item.priceBoundary && <Section title="服务边界"><p>{detail.item.priceBoundary}</p></Section>}
+          <p className="bp-detail-lede">{detail.item.summary}</p>
+          <div className="bp-product-detail-poster">
+            <article className="wide"><span>01</span><div><small>详细说明</small><p>{detail.item.detail}</p></div></article>
+            {detail.item.audience && <article><span>02</span><div><small>适用对象</small><p>{detail.item.audience}</p></div></article>}
+            {detail.item.priceBoundary && <article><span>03</span><div><small>服务边界</small><p>{detail.item.priceBoundary}</p></div></article>}
+          </div>
         </> : <>
-          <Section title="项目背景"><p>{detail.item.background}</p></Section>
-          <Section title="解决方案"><p>{detail.item.solution}</p></Section>
-          <Section title="项目结果"><p>{detail.item.result}</p></Section>
+          <div className="bp-case-story">
+            {[
+              ["01", "项目背景", detail.item.background],
+              ["02", "解决方案", detail.item.solution],
+              ["03", "项目结果", detail.item.result],
+            ].map(([number, label, content], index) => (
+              <article className={index === 2 ? "result" : ""} key={label}>
+                <span>{number}</span><div><small>{label}</small><p>{content}</p></div>
+              </article>
+            ))}
+          </div>
         </>}
         {assistantAvailable && <section className="bp-ai-card"><div><i>AI</i><span><strong>{assistantName}</strong><small>继续了解</small></span></div><button type="button" onClick={() => onAssistant(`请详细介绍${detail.kind === "product" ? detail.item.name : detail.item.title}`)}>向 AI 继续提问 <Arrow /></button></section>}
       </main>
