@@ -337,18 +337,28 @@ async def resolve_effective_chat_config(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
 ) -> EffectiveChatConfig:
-    """Resolve the selected profile on every request; only zero rows may fall back."""
+    """Resolve the selected profile on every request; only zero rows may fall back.
+
+    The active-profile uniqueness constraint lets one ordered query distinguish
+    between an active profile, an inactive/misconfigured profile, and an empty
+    table.  Chat traffic takes this path for every new answer, so avoiding the
+    former active-query plus count-query sequence removes a database round trip
+    from the latency-critical path.
+    """
 
     async with session_factory() as session, session.begin():
-        active = await session.scalar(
-            select(PlatformLLMProfile).where(PlatformLLMProfile.is_active.is_(True))
+        profile = await session.scalar(
+            select(PlatformLLMProfile)
+            .order_by(
+                PlatformLLMProfile.is_active.desc(),
+                PlatformLLMProfile.updated_at.desc(),
+                PlatformLLMProfile.id,
+            )
+            .limit(1)
         )
-        if active is not None:
-            return database_chat_config(active, settings=settings)
-        profile_count = int(
-            await session.scalar(select(func.count(PlatformLLMProfile.id))) or 0
-        )
-    if profile_count:
+    if profile is not None and profile.is_active:
+        return database_chat_config(profile, settings=settings)
+    if profile is not None:
         raise LLMRuntimeUnavailable("active_configuration_missing")
     return environment_chat_config(settings)
 

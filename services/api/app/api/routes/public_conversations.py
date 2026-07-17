@@ -322,11 +322,16 @@ async def _generate_and_persist(
             embedding_credentials = ProviderCredentials(
                 settings.embedding_api_key.get_secret_value()
             )
-        history = await store.load_conversation_history(
-            prepared=prepared,
-            principal=principal,
+        # These reads use independent short-lived sessions and neither depends
+        # on the other.  Fetch them together so database round trips do not add
+        # up before retrieval and the upstream model request start.
+        history, forbidden_topics = await asyncio.gather(
+            store.load_conversation_history(
+                prepared=prepared,
+                principal=principal,
+            ),
+            store.load_forbidden_topic_rules(principal=principal),
         )
-        forbidden_topics = await store.load_forbidden_topic_rules(principal=principal)
         orchestrator = getattr(request.app.state, "rag_orchestrator", None)
         if orchestrator is None:
             orchestrator = runtime.orchestrator

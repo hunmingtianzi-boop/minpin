@@ -543,14 +543,16 @@ async def test_activation_checks_seen_active_id_and_switches_exactly_one_profile
 async def test_resolver_uses_environment_only_for_zero_database_profiles() -> None:
     settings = _settings()
     environment = await llm_module.resolve_effective_chat_config(
-        _SequenceFactory([None, 0]),  # type: ignore[arg-type]
+        _SequenceFactory([None]),  # type: ignore[arg-type]
         settings,
     )
     assert environment.source == "environment"
 
+    inactive = _profile(settings)
+    inactive.is_active = False
     with pytest.raises(LLMRuntimeUnavailable) as corrupted:
         await llm_module.resolve_effective_chat_config(
-            _SequenceFactory([None, 2]),  # type: ignore[arg-type]
+            _SequenceFactory([inactive]),  # type: ignore[arg-type]
             settings,
         )
     assert corrupted.value.code == "active_configuration_missing"

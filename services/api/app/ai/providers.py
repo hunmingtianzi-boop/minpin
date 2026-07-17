@@ -124,12 +124,22 @@ class HttpxJsonTransport:
         payload: Mapping[str, Any],
         timeout_seconds: float,
     ) -> JsonHttpResponse:
+        # A per-request float timeout overrides the client's timeout settings.
+        # Keep the model's read budget, while failing a broken provider
+        # connection or exhausted connection pool quickly.  Without this, a
+        # failed TCP/TLS connection can consume the full model timeout for each
+        # retry and make a chat request appear to hang.
+        timeout = httpx.Timeout(
+            timeout_seconds,
+            connect=min(5.0, timeout_seconds),
+            pool=min(5.0, timeout_seconds),
+        )
         if self._client is not None:
             response = await self._client.post(
                 url,
                 headers=dict(headers),
                 json=dict(payload),
-                timeout=timeout_seconds,
+                timeout=timeout,
             )
         else:
             async with httpx.AsyncClient() as client:
@@ -137,7 +147,7 @@ class HttpxJsonTransport:
                     url,
                     headers=dict(headers),
                     json=dict(payload),
-                    timeout=timeout_seconds,
+                    timeout=timeout,
                 )
 
         try:

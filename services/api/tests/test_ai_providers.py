@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping
 
+import httpx
 import pytest
 
 from app.ai import (
@@ -11,6 +12,7 @@ from app.ai import (
     ChatMessage,
     ChatProviderConfig,
     EmbeddingProviderConfig,
+    HttpxJsonTransport,
     OpenAICompatibleChatProvider,
     OpenAICompatibleEmbeddingProvider,
     ProviderCredentials,
@@ -77,6 +79,32 @@ class SequentialTransport(FakeTransport):
 
 def _credentials() -> ProviderCredentials:
     return ProviderCredentials(api_key="-".join(["unit", "test", "credential"]))
+
+
+@pytest.mark.asyncio
+async def test_http_transport_keeps_short_connect_and_pool_timeouts() -> None:
+    seen_timeout: dict[str, float] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_timeout.update(request.extensions["timeout"])
+        return httpx.Response(200, json={"ok": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        transport = HttpxJsonTransport(client)
+        response = await transport.post_json(
+            url="https://provider.example.test/v1/chat/completions",
+            headers={},
+            payload={},
+            timeout_seconds=17.0,
+        )
+
+    assert response.status_code == 200
+    assert seen_timeout == {
+        "connect": 5.0,
+        "read": 17.0,
+        "write": 17.0,
+        "pool": 5.0,
+    }
 
 
 @pytest.mark.asyncio

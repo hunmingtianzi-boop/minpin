@@ -25,6 +25,20 @@ MODEL_CACHE = Path(
 )
 MAX_BATCH_SIZE = 64
 MAX_INPUT_CHARS = 20_000
+MAX_EMBEDDING_THREADS = 12
+
+
+def _embedding_thread_count() -> int:
+    """Choose a bounded CPU thread count, allowing deployment overrides."""
+
+    configured = os.getenv("EMBEDDING_THREADS")
+    if configured:
+        try:
+            requested = int(configured)
+        except ValueError as exc:
+            raise RuntimeError("EMBEDDING_THREADS must be an integer") from exc
+        return max(1, min(requested, MAX_EMBEDDING_THREADS))
+    return max(1, min(os.cpu_count() or 4, MAX_EMBEDDING_THREADS))
 
 
 class EmbeddingRequest(BaseModel):
@@ -102,7 +116,7 @@ def _require_api_key(
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     MODEL_CACHE.mkdir(parents=True, exist_ok=True)
-    threads = max(1, min((os.cpu_count() or 4) // 2, 12))
+    threads = _embedding_thread_count()
     model = await asyncio.to_thread(
         TextEmbedding,
         model_name=MODEL_NAME,

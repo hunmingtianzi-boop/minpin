@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app as app_module
-from app import _prepare_text, _serialize_embeddings
+from app import _embedding_thread_count, _prepare_text, _serialize_embeddings
 
 
 ACCESS_TOKEN = "unit-test-access-token"
@@ -74,6 +74,40 @@ def test_prepare_text_defaults_to_query_and_preserves_explicit_retrieval_role() 
     assert _prepare_text("  零基础   可以参加吗？ ") == "query: 零基础 可以参加吗？"
     assert _prepare_text("passage: 企业资料") == "passage: 企业资料"
     assert _prepare_text("QUERY: existing") == "QUERY: existing"
+
+
+@pytest.mark.parametrize(
+    ("configured", "cpu_count", "expected"),
+    [
+        (None, 2, 2),
+        (None, 64, 12),
+        ("2", 64, 2),
+        ("0", 64, 1),
+        ("99", 64, 12),
+    ],
+)
+def test_embedding_thread_count_is_bounded_and_configurable(
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str | None,
+    cpu_count: int,
+    expected: int,
+) -> None:
+    if configured is None:
+        monkeypatch.delenv("EMBEDDING_THREADS", raising=False)
+    else:
+        monkeypatch.setenv("EMBEDDING_THREADS", configured)
+    monkeypatch.setattr(app_module.os, "cpu_count", lambda: cpu_count)
+
+    assert _embedding_thread_count() == expected
+
+
+def test_embedding_thread_count_rejects_invalid_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_THREADS", "two")
+
+    with pytest.raises(RuntimeError, match="must be an integer"):
+        _embedding_thread_count()
 
 
 def test_serialize_embeddings_validates_batch_shape_and_dimension() -> None:
