@@ -54,7 +54,7 @@ def test_public_card_base_is_an_origin_and_remote_http_requires_opt_in() -> None
             public_card_base_url="https://cards.example.test/c",
         )
 
-    with pytest.raises(ValueError, match="ALLOW_INSECURE_HTTP_DEPLOYMENT"):
+    with pytest.raises(ValueError, match="ALLOW_INSECURE_PUBLIC_CARD_HTTP"):
         Settings(
             _env_file=None,
             app_env="test",
@@ -65,7 +65,7 @@ def test_public_card_base_is_an_origin_and_remote_http_requires_opt_in() -> None
         _env_file=None,
         app_env="test",
         public_card_base_url="http://47.83.235.176/",
-        allow_insecure_http_deployment=True,
+        allow_insecure_public_card_http=True,
     )
     assert settings.public_card_base_url == "http://47.83.235.176"
 
@@ -114,13 +114,22 @@ def test_production_requires_secure_auth_cookies_and_explicit_origins() -> None:
             cors_allowed_origins=["*"],
         )
 
-    temporary_ip_deployment = Settings(
+    temporary_ip_public_card = Settings(
         **production,
-        staff_auth_cookie_secure=False,
-        allow_insecure_http_deployment=True,
+        staff_auth_cookie_secure=True,
+        public_card_base_url="http://47.83.235.176",
+        allow_insecure_public_card_http=True,
     )
-    assert temporary_ip_deployment.staff_auth_cookie_secure is False
-    assert temporary_ip_deployment.allow_insecure_http_deployment is True
+    assert temporary_ip_public_card.staff_auth_cookie_secure is True
+    assert temporary_ip_public_card.allow_insecure_public_card_http is True
+
+    with pytest.raises(ValueError, match="STAFF_AUTH_COOKIE_SECURE"):
+        Settings(
+            **production,
+            staff_auth_cookie_secure=False,
+            public_card_base_url="http://47.83.235.176",
+            allow_insecure_public_card_http=True,
+        )
 
     settings = Settings(**production, staff_auth_cookie_secure=True)
     assert settings.staff_auth_cookie_secure is True

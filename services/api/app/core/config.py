@@ -35,7 +35,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://127.0.0.1:4173", "http://localhost:4173"]
     )
     public_card_base_url: str = "http://127.0.0.1:4173"
-    allow_insecure_http_deployment: bool = False
+    allow_insecure_public_card_http: bool = False
 
     database_url: str = (
         "postgresql+asyncpg://cf_ai_card_app:change-me-app-local-only@localhost:5432/cf_ai_card"
@@ -228,11 +228,11 @@ class Settings(BaseSettings):
         if (
             parsed_public_base.scheme.casefold() == "http"
             and parsed_public_base.hostname not in {"localhost", "127.0.0.1"}
-            and not self.allow_insecure_http_deployment
+            and not self.allow_insecure_public_card_http
         ):
             raise ValueError(
                 "remote HTTP PUBLIC_CARD_BASE_URL requires "
-                "ALLOW_INSECURE_HTTP_DEPLOYMENT=true"
+                "ALLOW_INSECURE_PUBLIC_CARD_HTTP=true"
             )
         self.public_card_base_url = public_base
 
@@ -271,11 +271,7 @@ class Settings(BaseSettings):
                     raise ValueError(
                         "FIELD_ENCRYPTION_PREVIOUS_KEYS must contain strong referenced keys"
                     )
-            if (
-                self.app_env == "production"
-                and not self.staff_auth_cookie_secure
-                and not self.allow_insecure_http_deployment
-            ):
+            if self.app_env == "production" and not self.staff_auth_cookie_secure:
                 raise ValueError("STAFF_AUTH_COOKIE_SECURE must be true in production")
             if self.metrics_bearer_token is None:
                 raise ValueError(

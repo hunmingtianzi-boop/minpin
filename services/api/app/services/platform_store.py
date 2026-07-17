@@ -102,7 +102,7 @@ class PlatformStore:
             )
         self._public_card_base_url = _normalize_public_card_base_url(
             public_card_base_url,
-            allow_insecure_http=settings.allow_insecure_http_deployment,
+            allow_insecure_http=settings.allow_insecure_public_card_http,
         )
 
     async def create_enterprise(
