@@ -418,44 +418,70 @@ async def test_document_onboarding_uses_slug_for_provisional_rows_when_name_is_m
         assert hidden_confirmed.value.status_code == 404
         assert hidden_confirmed.value.code == "RESOURCE_NOT_FOUND"
 
+        resource_state = text(
+            "SELECT tenant.name AS tenant_name, company.name AS company_name, "
+            "card.display_name, card.settings ->> 'title' AS card_title, "
+            "tenant.status::text AS tenant_status, "
+            "company.status::text AS company_status, "
+            "member.status::text AS membership_status, "
+            "usr.status::text AS user_status, card.status::text AS card_status, "
+            "credential.is_enabled "
+            "FROM platform_onboarding_sessions AS onboarding "
+            "JOIN tenants AS tenant ON tenant.id=onboarding.tenant_id "
+            "JOIN companies AS company ON company.id=onboarding.company_id "
+            "JOIN cards AS card ON card.id=onboarding.initial_card_id "
+            "JOIN memberships AS member ON member.id=onboarding.admin_membership_id "
+            "JOIN users AS usr ON usr.id=onboarding.admin_user_id "
+            "JOIN staff_credentials AS credential "
+            "ON credential.id=onboarding.credential_id "
+            "WHERE onboarding.id=:onboarding_id"
+        )
         async with owner.connect() as connection:
-            row = (
+            provisional_row = (
                 await connection.execute(
-                    text(
-                        "SELECT tenant.name AS tenant_name, company.name AS company_name, "
-                        "card.display_name, card.settings ->> 'title' AS card_title, "
-                        "tenant.status::text AS tenant_status, "
-                        "company.status::text AS company_status, "
-                        "member.status::text AS membership_status, "
-                        "usr.status::text AS user_status, card.status::text AS card_status, "
-                        "credential.is_enabled "
-                        "FROM platform_onboarding_sessions AS onboarding "
-                        "JOIN tenants AS tenant ON tenant.id=onboarding.tenant_id "
-                        "JOIN companies AS company ON company.id=onboarding.company_id "
-                        "JOIN cards AS card ON card.id=onboarding.initial_card_id "
-                        "JOIN memberships AS member ON member.id=onboarding.admin_membership_id "
-                        "JOIN users AS usr ON usr.id=onboarding.admin_user_id "
-                        "JOIN staff_credentials AS credential "
-                        "ON credential.id=onboarding.credential_id "
-                        "WHERE onboarding.id=:onboarding_id"
-                    ),
+                    resource_state,
                     {"onboarding_id": created.id},
                 )
             ).one()
+            confirmed_row = (
+                await connection.execute(
+                    resource_state,
+                    {"onboarding_id": confirm_started.id},
+                )
+            ).one()
         assert (
-            row.tenant_name,
-            row.company_name,
-            row.display_name,
-            row.card_title,
+            provisional_row.tenant_name,
+            provisional_row.company_name,
+            provisional_row.display_name,
+            provisional_row.card_title,
         ) == (enterprise_slug,) * 4
         assert (
-            row.tenant_status,
-            row.company_status,
-            row.membership_status,
-            row.user_status,
-            row.card_status,
-            row.is_enabled,
+            provisional_row.tenant_status,
+            provisional_row.company_status,
+            provisional_row.membership_status,
+            provisional_row.user_status,
+            provisional_row.card_status,
+            provisional_row.is_enabled,
         ) == ("suspended", "suspended", "suspended", "suspended", "draft", False)
+        assert (
+            confirmed_row.tenant_name,
+            confirmed_row.company_name,
+            confirmed_row.display_name,
+            confirmed_row.card_title,
+        ) == (
+            "Confirmed Enterprise",
+            "Confirmed Enterprise Co",
+            "Confirmed Enterprise",
+            "Confirmed Enterprise Official Card",
+        )
+        assert (
+            confirmed_row.tenant_status,
+            confirmed_row.company_status,
+            confirmed_row.membership_status,
+            confirmed_row.user_status,
+            confirmed_row.card_status,
+            confirmed_row.is_enabled,
+        ) == ("active", "active", "active", "active", "draft", True)
     finally:
         await runtime.dispose()
         await owner.dispose()

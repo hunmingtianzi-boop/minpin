@@ -80,6 +80,10 @@ async function fillConfirmationGate(user: ReturnType<typeof userEvent.setup>) {
 
 afterEach(() => {
   Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: undefined,
+  });
 });
 
 describe("PlatformOnboardingPage", () => {
@@ -225,6 +229,11 @@ describe("PlatformOnboardingPage", () => {
     const user = userEvent.setup();
     const onStartAnother = vi.fn();
     const onOpenEnterprises = vi.fn();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
     render(
       <PlatformOnboardingPage
         {...props({
@@ -253,10 +262,71 @@ describe("PlatformOnboardingPage", () => {
     );
 
     expect(screen.getByRole("button", { name: "刷新结果" })).toBeInTheDocument();
+    const cardUrl = `${window.location.origin}/c/atlas-card`;
+    expect(screen.getByLabelText("企业名片固定网址")).toHaveValue(cardUrl);
+    expect(screen.getByText("草稿暂不可访问，企业管理员发布后生效")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "打开企业名片网址" })).not.toBeInTheDocument();
+    const adminLink = screen.getByRole("link", { name: "打开企业管理后台" });
+    expect(adminLink).toHaveAttribute("target", "_blank");
+    expect(adminLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByLabelText("企业管理后台")).toHaveValue(
+      `${window.location.origin}/`,
+    );
+    await user.click(screen.getByRole("button", { name: "复制企业名片网址" }));
+    expect(writeText).toHaveBeenCalledWith(cardUrl);
+    expect(screen.getByText("企业名片网址已复制。")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "复制企业管理后台网址" }));
+    expect(writeText).toHaveBeenLastCalledWith(`${window.location.origin}/`);
+    expect(screen.getByText("企业管理后台网址已复制。")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "继续开通新企业" }));
     expect(onStartAnother).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "前往企业中心" }));
     expect(onOpenEnterprises).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the confirmed result visible as soon as confirmation resolves, without waiting for a parent rerender", async () => {
+    const user = userEvent.setup();
+    const confirmed: PlatformOnboardingSession = {
+      ...reviewSession,
+      status: "confirmed",
+      version: 8,
+      confirmedEnterprise: {
+        tenantId: "tenant-1",
+        tenantSlug: "atlas-labs",
+        tenantName: "阿特拉斯租户",
+        companyId: "company-1",
+        companyName: "阿特拉斯材料实验室",
+        status: "active",
+        adminUserId: "user-1",
+        adminMembershipId: "membership-1",
+        initialCardId: "card-1",
+        initialCardSlug: "atlas-card",
+        createdAt: "2026-07-15T12:10:00Z",
+      },
+    };
+    const onConfirm = vi.fn().mockResolvedValue(confirmed);
+    const pageProps = props({
+      initialReview: {
+        tenantName: "阿特拉斯租户",
+        companyName: "阿特拉斯材料实验室",
+        initialCardDisplayName: "陈工程师",
+      },
+      onConfirm,
+    });
+    const view = render(<PlatformOnboardingPage {...pageProps} />);
+
+    await waitFor(() => expect(screen.getByLabelText("租户名称")).toHaveValue("阿特拉斯租户"));
+    await fillConfirmationGate(user);
+    await user.click(screen.getByRole("button", { name: "确认并激活企业" }));
+
+    expect(await screen.findByRole("heading", { name: "企业已由服务端确认激活" })).toBeInTheDocument();
+    expect(screen.getByLabelText("企业名片固定网址")).toHaveValue(
+      `${window.location.origin}/c/atlas-card`,
+    );
+    expect(screen.queryByRole("heading", { name: "人工复核与确认" })).not.toBeInTheDocument();
+
+    view.rerender(<PlatformOnboardingPage {...pageProps} />);
+    expect(screen.getByRole("heading", { name: "企业已由服务端确认激活" })).toBeInTheDocument();
   });
 
   it("requires explicit enterprise, admin and draft-card review and submits expectedVersion", async () => {

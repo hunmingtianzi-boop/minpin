@@ -18,6 +18,7 @@ import {
   ArrowClockwise24Regular,
   ArrowUpload24Regular,
   CheckmarkCircle24Regular,
+  Copy24Regular,
   Dismiss24Regular,
   Sparkle24Regular,
 } from "@fluentui/react-icons";
@@ -33,6 +34,10 @@ import { validateKnowledgeImportFiles } from "../components/KnowledgeImportPanel
 import { PageHeader } from "../components/PageHeader";
 import { ResourceState } from "../components/ResourceState";
 import { StatusBadge } from "../components/StatusBadge";
+import {
+  buildOnboardingDeliveryUrls,
+  ONBOARDING_CONFIRM_UNCERTAIN_CODE,
+} from "../utils/platformOnboarding";
 
 import styles from "./PlatformOnboardingPage.module.css";
 
@@ -72,7 +77,7 @@ export type PlatformOnboardingPageProps = {
   onConfirm: (
     onboardingSessionId: string,
     input: ConfirmPlatformOnboardingInput,
-  ) => Promise<void>;
+  ) => Promise<PlatformOnboardingSession | void>;
   onCancel: (
     onboardingSessionId: string,
     reason: string,
@@ -198,7 +203,29 @@ function asOperationError(value: unknown): PlatformOnboardingOperationError {
   };
 }
 
-function OperationError({ error }: { error: PlatformOnboardingOperationError }) {
+async function copyDeliveryUrl(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  if (!copied) throw new Error("copy failed");
+}
+
+function OperationError({
+  error,
+  onRecover,
+}: {
+  error: PlatformOnboardingOperationError;
+  onRecover?: () => void;
+}) {
   return (
     <MessageBar intent={error.status === 409 ? "warning" : "error"}>
       <MessageBarBody>
@@ -209,6 +236,15 @@ function OperationError({ error }: { error: PlatformOnboardingOperationError }) 
             {error.code && <span>错误代码：{error.code}</span>}
             {error.requestId && <span>请求编号：{error.requestId}</span>}
           </div>
+        )}
+        {onRecover && (
+          <Button
+            appearance="secondary"
+            className={styles.recoveryButton}
+            onClick={onRecover}
+          >
+            核对开通结果
+          </Button>
         )}
       </MessageBarBody>
     </MessageBar>
@@ -460,6 +496,9 @@ export function PlatformOnboardingPage({
   const [reviewed, setReviewed] = useState({ enterprise: false, admin: false, card: false });
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
+  const [confirmedSession, setConfirmedSession] = useState<PlatformOnboardingSession>();
+  const [copyNotice, setCopyNotice] = useState<string>();
+  const [copyError, setCopyError] = useState<string>();
   const cancelOpenerRef = useRef<HTMLButtonElement>(null);
   const previousSessionId = useRef<string | undefined>(undefined);
 
@@ -475,10 +514,38 @@ export function PlatformOnboardingPage({
     setSelectedFiles([]);
     setFileError(undefined);
     setOperationError(undefined);
+    setConfirmedSession(
+      session.status === "confirmed" && session.confirmedEnterprise
+        ? session
+        : undefined,
+    );
+    setCopyNotice(undefined);
+    setCopyError(undefined);
   }, [initialReview, session]);
 
+  useEffect(() => {
+    if (session?.status === "confirmed" && session.confirmedEnterprise) {
+      setConfirmedSession(session);
+    }
+  }, [session]);
+
   const activeError = operationError ?? resourceError;
-  const currentStep = sessionStep(session);
+  const completedSession =
+    confirmedSession?.id === session?.id
+      ? confirmedSession
+      : session?.status === "confirmed" && session.confirmedEnterprise
+        ? session
+        : undefined;
+  const completedEnterprise = completedSession?.confirmedEnterprise;
+  const confirmationComplete = Boolean(completedEnterprise);
+  const currentStep = confirmationComplete ? 4 : sessionStep(session);
+  const deliveryUrls = useMemo(
+    () =>
+      completedEnterprise
+        ? buildOnboardingDeliveryUrls(completedEnterprise.initialCardSlug)
+        : undefined,
+    [completedEnterprise],
+  );
   const completedItems = importItems.filter((item) => item.status === "completed").length;
   const processedItems = importItems.filter((item) =>
     ["completed", "failed", "dead_letter"].includes(item.status),
@@ -508,6 +575,8 @@ export function PlatformOnboardingPage({
     !importsProcessing;
   const insightCount = (session?.businessProfile?.length ?? 0) + (session?.suggestions.length ?? 0);
   const hasInsights = insightCount > 0;
+  const confirmationNeedsRecovery =
+    operationError?.code === ONBOARDING_CONFIRM_UNCERTAIN_CODE;
 
   const run = async (operation: BusyOperation, action: () => Promise<void>) => {
     if (busy) return;
@@ -556,6 +625,17 @@ export function PlatformOnboardingPage({
     window.setTimeout(() => cancelOpenerRef.current?.focus(), 0);
   };
 
+  const copyUrl = async (value: string, label: string) => {
+    setCopyNotice(undefined);
+    setCopyError(undefined);
+    try {
+      await copyDeliveryUrl(value);
+      setCopyNotice(`${label}已复制。`);
+    } catch {
+      setCopyError("浏览器未允许自动复制，请手动选择网址。");
+    }
+  };
+
   if (resourceStatus !== "ready") {
     return (
       <main className="page-stack">
@@ -584,14 +664,26 @@ export function PlatformOnboardingPage({
         actions={
           session && onRefresh ? (
             <Button appearance="subtle" icon={<ArrowClockwise24Regular />} onClick={onRefresh}>
-              {session.status === "confirmed" ? "刷新结果" : "刷新进度"}
+              {confirmationComplete ? "刷新结果" : "刷新进度"}
             </Button>
           ) : undefined
         }
       />
 
       <Steps current={currentStep} />
-      {activeError && <OperationError error={activeError} />}
+      {activeError && (
+        <OperationError
+          error={activeError}
+          onRecover={
+            confirmationNeedsRecovery && onRefresh
+              ? () => {
+                  setOperationError(undefined);
+                  onRefresh();
+                }
+              : undefined
+          }
+        />
+      )}
 
       {!session && (
         <StartPanel
@@ -600,20 +692,66 @@ export function PlatformOnboardingPage({
         />
       )}
 
-      {session && session.status === "confirmed" && session.confirmedEnterprise && (
+      {session && completedEnterprise && deliveryUrls && (
         <section className={styles.resultPanel} aria-labelledby="onboarding-result-title">
           <CheckmarkCircle24Regular aria-hidden />
           <div>
             <span>步骤 5 / 5</span>
             <h2 id="onboarding-result-title">企业已由服务端确认激活</h2>
             <p>
-              {session.confirmedEnterprise.companyName}（{session.confirmedEnterprise.tenantSlug}）已生成唯一企业、管理员身份和一张未发布初始名片。
+              {completedEnterprise.companyName}（{completedEnterprise.tenantSlug}）已生成唯一企业、管理员身份和一张未发布初始名片。
             </p>
             <dl>
-              <div><dt>企业 ID</dt><dd>{session.confirmedEnterprise.companyId}</dd></div>
-              <div><dt>初始名片 ID</dt><dd>{session.confirmedEnterprise.initialCardId}</dd></div>
+              <div><dt>企业 ID</dt><dd>{completedEnterprise.companyId}</dd></div>
+              <div><dt>初始名片 ID</dt><dd>{completedEnterprise.initialCardId}</dd></div>
               <div><dt>名片状态</dt><dd><StatusBadge status="draft" /></dd></div>
+              {adminSummary?.account && (
+                <div><dt>企业管理员账号</dt><dd>{adminSummary.account}</dd></div>
+              )}
             </dl>
+            <section className={styles.deliveryPanel} aria-labelledby="onboarding-delivery-title">
+              <div>
+                <h3 id="onboarding-delivery-title">网址与交付入口</h3>
+                <p>请将企业后台交给管理员。初始名片保持草稿，审核发布后，下方固定网址即可对外访问。</p>
+              </div>
+              <Field label="企业名片固定网址" hint="当前为草稿；发布后该网址立即生效。">
+                <div className={styles.deliveryUrlField}>
+                  <Input value={deliveryUrls.cardUrl} readOnly />
+                  <Button
+                    icon={<Copy24Regular />}
+                    aria-label="复制企业名片网址"
+                    onClick={() => void copyUrl(deliveryUrls.cardUrl, "企业名片网址")}
+                  />
+                </div>
+              </Field>
+              <span className={styles.deliveryPendingLink} aria-label="企业名片尚未发布">
+                草稿暂不可访问，企业管理员发布后生效
+              </span>
+              <Field label="企业管理后台">
+                <div className={styles.deliveryUrlField}>
+                  <Input value={deliveryUrls.adminUrl} readOnly />
+                  <Button
+                    icon={<Copy24Regular />}
+                    aria-label="复制企业管理后台网址"
+                    onClick={() => void copyUrl(deliveryUrls.adminUrl, "企业管理后台网址")}
+                  />
+                </div>
+              </Field>
+              <a
+                className={styles.deliveryOpenLink}
+                href={deliveryUrls.adminUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                打开企业管理后台
+              </a>
+              {copyNotice && (
+                <MessageBar intent="success"><MessageBarBody>{copyNotice}</MessageBarBody></MessageBar>
+              )}
+              {copyError && (
+                <MessageBar intent="error"><MessageBarBody>{copyError}</MessageBarBody></MessageBar>
+              )}
+            </section>
             <div className={styles.resultActions} aria-label="建企完成后操作">
               {onStartAnother && (
                 <Button appearance="primary" onClick={onStartAnother}>
@@ -640,7 +778,7 @@ export function PlatformOnboardingPage({
         </section>
       )}
 
-      {session && session.status !== "confirmed" && !terminal && (
+      {session && !confirmationComplete && !terminal && (
         <>
           {llmAvailability !== "ready" && (
             <MessageBar intent="warning">
@@ -804,9 +942,18 @@ export function PlatformOnboardingPage({
                 onSubmit={(event) => {
                   event.preventDefault();
                   if (!confirmationReady) return;
-                  void run("confirm", () =>
-                    onConfirm(session.id, { ...review, expectedVersion: session.version }),
-                  );
+                  void run("confirm", async () => {
+                    const confirmed = await onConfirm(session.id, {
+                      ...review,
+                      expectedVersion: session.version,
+                    });
+                    if (
+                      confirmed?.status === "confirmed" &&
+                      confirmed.confirmedEnterprise
+                    ) {
+                      setConfirmedSession(confirmed);
+                    }
+                  });
                 }}
               >
                 <fieldset>
@@ -913,11 +1060,12 @@ export function PlatformOnboardingPage({
                     appearance="subtle"
                     icon={<Dismiss24Regular />}
                     type="button"
+                    disabled={Boolean(busy)}
                     onClick={() => setCancelOpen(true)}
                   >
                     取消会话
                   </Button>
-                  <Button appearance="primary" type="submit" disabled={!confirmationReady || busy === "confirm"}>
+                  <Button appearance="primary" type="submit" disabled={!confirmationReady || Boolean(busy)}>
                     {busy === "confirm" ? "正在确认" : "确认并激活企业"}
                   </Button>
                 </div>

@@ -41,6 +41,7 @@ import {
   type AppPath,
   usePathname,
 } from "./routing";
+import { confirmOnboardingWithRecovery } from "./utils/platformOnboarding";
 
 const OverviewPage = lazy(() =>
   import("./pages/OverviewPage").then((module) => ({
@@ -687,8 +688,12 @@ export function PlatformOnboardingRoute() {
         sessionId: string,
         input: ConfirmPlatformOnboardingInput,
       ) => {
-        const updated = await platformApi.confirmOnboarding(sessionId, input);
+        const updated = await confirmOnboardingWithRecovery({
+          confirm: () => platformApi.confirmOnboarding(sessionId, input),
+          reload: () => platformApi.getOnboarding(sessionId),
+        });
         replaceSession(updated, sessionId);
+        return updated;
       }}
       onCancel={async (
         sessionId: string,
