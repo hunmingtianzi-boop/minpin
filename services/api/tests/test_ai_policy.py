@@ -55,6 +55,74 @@ def test_evidence_gate_requires_explicit_pricing_source() -> None:
     assert decision.refusal.code is RefusalCode.UNVERIFIED_PRICING
 
 
+def test_general_mode_allows_low_risk_answer_without_evidence() -> None:
+    policy = InputSecurityPolicy().evaluate("什么是智能名片？")
+    gate = EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True))
+
+    before = gate.before_generation(policy, [])
+    after = gate.after_generation(
+        policy,
+        StructuredModelAnswer(answer="智能名片通常用于集中展示身份、联系方式和服务信息。"),
+        before.evidence,
+    )
+
+    assert before.allowed is True
+    assert before.general_answer_allowed is True
+    assert after.allowed is True
+    assert after.evidence == ()
+
+
+def test_general_mode_allows_reasoning_alongside_grounded_low_risk_evidence() -> None:
+    policy = InputSecurityPolicy().evaluate("根据标准版能力给我一些使用建议")
+    gate = EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True))
+
+    before = gate.before_generation(policy, [_evidence("标准版包含智能名片。")])
+
+    assert before.allowed is True
+    assert len(before.evidence) == 1
+    assert before.general_answer_allowed is True
+
+
+def test_general_mode_can_ignore_irrelevant_evidence_and_show_model_answer() -> None:
+    policy = InputSecurityPolicy().evaluate("帮我写一句会议邀请")
+    gate = EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True))
+    evidence = [_evidence("标准版包含智能名片。")]
+
+    decision = gate.after_generation(
+        policy,
+        StructuredModelAnswer(answer="明天下午三点开会，期待你的参与。"),
+        evidence,
+    )
+
+    assert decision.allowed is True
+    assert decision.evidence == ()
+
+
+def test_general_mode_drops_unknown_optional_citation_instead_of_hiding_answer() -> None:
+    policy = InputSecurityPolicy().evaluate("聊聊提高会议效率的方法")
+    gate = EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True))
+
+    decision = gate.after_generation(
+        policy,
+        StructuredModelAnswer(answer="可以先明确议程。", cited_evidence_ids=["invented"]),
+        [_evidence("标准版包含智能名片。")],
+    )
+
+    assert decision.allowed is True
+    assert decision.evidence == ()
+
+
+def test_general_mode_keeps_pricing_without_evidence_blocked() -> None:
+    policy = InputSecurityPolicy().evaluate("报价是多少？")
+    gate = EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True))
+
+    decision = gate.before_generation(policy, [])
+
+    assert decision.allowed is False
+    assert decision.refusal is not None
+    assert decision.refusal.code is RefusalCode.INSUFFICIENT_EVIDENCE
+
+
 def test_output_gate_rejects_unknown_citation() -> None:
     policy = InputSecurityPolicy().evaluate("标准版包含什么？")
     gate = EvidenceGate()

@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field, field_validator
 
 MODEL_NAME = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-large")
 MODEL_DIMENSION = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
+MODEL_NATIVE_DIMENSION = int(
+    os.getenv("EMBEDDING_NATIVE_DIMENSION", str(MODEL_DIMENSION))
+)
 MODEL_CACHE = Path(
     os.getenv(
         "FASTEMBED_CACHE_PATH",
@@ -39,6 +42,10 @@ def _embedding_thread_count() -> int:
             raise RuntimeError("EMBEDDING_THREADS must be an integer") from exc
         return max(1, min(requested, MAX_EMBEDDING_THREADS))
     return max(1, min(os.cpu_count() or 4, MAX_EMBEDDING_THREADS))
+
+
+def _uses_e5_retrieval_prefix() -> bool:
+    return MODEL_NAME.casefold().startswith("intfloat/multilingual-e5")
 
 
 class EmbeddingRequest(BaseModel):
@@ -79,6 +86,12 @@ class EmbeddingResponse(BaseModel):
 def _prepare_text(value: str) -> str:
     normalized = " ".join(value.split())
     lowered = normalized.casefold()
+    if not _uses_e5_retrieval_prefix():
+        if lowered.startswith("query: "):
+            return normalized[len("query: ") :].strip()
+        if lowered.startswith("passage: "):
+            return normalized[len("passage: ") :].strip()
+        return normalized
     if lowered.startswith("query: ") or lowered.startswith("passage: "):
         return normalized
     # Online API calls are queries.  The indexing command sends an explicit
@@ -87,15 +100,24 @@ def _prepare_text(value: str) -> str:
 
 
 def _serialize_embeddings(
-    vectors: Sequence[Sequence[float]], *, expected_count: int, expected_dimension: int
+    vectors: Sequence[Sequence[float]],
+    *,
+    expected_count: int,
+    expected_dimension: int,
+    native_dimension: int | None = None,
 ) -> list[list[float]]:
     if len(vectors) != expected_count:
         raise RuntimeError("embedding model returned the wrong batch size")
+    source_dimension = native_dimension or expected_dimension
+    if source_dimension <= 0 or source_dimension > expected_dimension:
+        raise RuntimeError("embedding dimensions are invalid")
     serialized: list[list[float]] = []
     for vector in vectors:
         values = [float(value) for value in vector]
-        if len(values) != expected_dimension or any(not math.isfinite(value) for value in values):
+        if len(values) != source_dimension or any(not math.isfinite(value) for value in values):
             raise RuntimeError("embedding model returned an invalid vector")
+        if source_dimension < expected_dimension:
+            values.extend([0.0] * (expected_dimension - source_dimension))
         serialized.append(values)
     return serialized
 
@@ -180,6 +202,7 @@ async def create_embeddings(request: EmbeddingRequest) -> EmbeddingResponse:
         vectors,
         expected_count=len(inputs),
         expected_dimension=MODEL_DIMENSION,
+        native_dimension=MODEL_NATIVE_DIMENSION,
     )
     token_estimate = sum(max(1, len(text) // 2) for text in raw_inputs)
     return EmbeddingResponse(

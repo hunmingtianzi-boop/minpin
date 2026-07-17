@@ -33,13 +33,13 @@ from .schemas import (
 _STRUCTURED_OUTPUT_INSTRUCTION = """
 Return only one valid JSON object. It must match this exact shape:
 {
-  "answer": "grounded answer, or an empty string when refusing",
+  "answer": "complete user-facing answer; Markdown is allowed",
   "cited_evidence_ids": ["evidence ids used by the answer"],
   "refusal_reason": null,
   "needs_human_review": false
 }
-If the evidence is insufficient, set answer to an empty string, provide a
-concise refusal_reason, and return no evidence ids. Never add Markdown fences.
+Use refusal_reason only when the request cannot be answered safely. Ordinary
+conversation does not require evidence. Never wrap the JSON in Markdown fences.
 """.strip()
 
 

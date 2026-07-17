@@ -79,6 +79,7 @@ async def test_hybrid_sql_enforces_scope_publication_and_current_version() -> No
     assert "d.status = :active_document_status" in sql
     assert "<=> CAST(:query_embedding AS vector)" in sql
     assert "similarity(e.evidence_text, :query_text)" in sql
+    assert "similarity(e.title, :query_text)" in sql
     assert "FULL OUTER JOIN lexical_ranked" in sql
     assert "CAST(:embedding_model AS text) IS NULL" in sql
     assert "e.embedding_model = CAST(:embedding_model AS text)" in sql
@@ -115,6 +116,7 @@ async def test_lexical_path_has_no_vector_expression_but_keeps_all_scope_filters
     sql = " ".join(str(statement).split())
     assert "query_embedding" not in sql
     assert "similarity(e.evidence_text, :query_text)" in sql
+    assert "similarity(e.title, :query_text)" in sql
     assert "d.current_version_id = c.version_id" in sql
     assert "v.review_status = :published_review_status" in sql
     assert "c.visibility = :public_visibility" in sql
@@ -165,3 +167,37 @@ async def test_embedding_dimension_and_limits_are_validated_before_sql() -> None
         )
 
     assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_faq_fast_match_uses_title_alias_and_all_scope_filters() -> None:
+    row = _row()
+    row["metadata"] = {
+        "source_type": "faq",
+        "faq_exact": True,
+        "faq_match_score": 1.0,
+    }
+    row["vector_score"] = None
+    row["lexical_score"] = 1.0
+    row["fused_score"] = 1.0
+    executor = RecordingExecutor([row])
+    repository = _repository(executor)
+    query = RetrievalQuery(
+        tenant_id="00000000-0000-0000-0000-000000000001",
+        company_id="00000000-0000-0000-0000-000000000002",
+        card_id="00000000-0000-0000-0000-000000000003",
+        text="标准版包含什么？",
+    )
+
+    evidence = await repository.find_faq_match(query, similarity_threshold=0.92)
+
+    assert evidence is not None
+    assert evidence.metadata["faq_exact"] is True
+    statement, parameters = executor.calls[0]
+    sql = " ".join(str(statement).split())
+    assert "e.source_type = 'faq'" in sql
+    assert "jsonb_array_elements_text" in sql
+    assert "d.tenant_id = CAST(:tenant_id AS uuid)" in sql
+    assert "card_content_overrides" in sql
+    assert parameters["faq_similarity_threshold"] == pytest.approx(0.92)
+    assert parameters["card_id"] == query.card_id

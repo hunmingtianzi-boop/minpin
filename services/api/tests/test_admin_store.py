@@ -132,8 +132,18 @@ def _prepared() -> PreparedPublish:
         version_number=2,
         job_id=uuid.uuid4(),
         chunks=(
-            PreparedChunk(id=uuid.uuid4(), text="企业资料第一段", content_hash="a" * 64),
-            PreparedChunk(id=uuid.uuid4(), text="passage: 企业资料第二段", content_hash="b" * 64),
+            PreparedChunk(
+                id=uuid.uuid4(),
+                title="服务介绍",
+                text="企业资料第一段",
+                content_hash="a" * 64,
+            ),
+            PreparedChunk(
+                id=uuid.uuid4(),
+                title="合作方式",
+                text="企业资料第二段",
+                content_hash="b" * 64,
+            ),
         ),
     )
 
@@ -207,8 +217,8 @@ async def test_publish_generates_passage_embeddings_between_two_transactions() -
 
     assert events == ["prepare", "embed", "commit"]
     assert provider.calls[0][0] == [
-        "passage: 企业资料第一段",
-        "passage: 企业资料第二段",
+        "passage: 服务介绍 企业资料第一段",
+        "passage: 合作方式 企业资料第二段",
     ]
     assert provider.calls[0][2] == "request-1"
     assert store.committed_vectors == list(vectors)

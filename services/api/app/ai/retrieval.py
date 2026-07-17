@@ -128,6 +128,7 @@ class PostgresHybridRetrievalRepository:
         self.config = config or HybridRetrievalConfig()
         self._hybrid_statement = text(_build_hybrid_sql(self.config.schema))
         self._lexical_statement = text(_build_lexical_sql(self.config.schema))
+        self._faq_statement = text(_build_faq_match_sql(self.config.schema))
 
     async def search(self, query: RetrievalQuery) -> Sequence[RetrievedEvidence]:
         self._validate_query(query)
@@ -155,6 +156,37 @@ class PostgresHybridRetrievalRepository:
         try:
             rows = await self._executor.fetch_mappings(statement, parameters)
             return tuple(_row_to_evidence(row) for row in rows)
+        except AIRetrievalError:
+            raise
+        except Exception as exc:
+            raise AIRetrievalError() from exc
+
+    async def find_faq_match(
+        self,
+        query: RetrievalQuery,
+        *,
+        similarity_threshold: float,
+    ) -> RetrievedEvidence | None:
+        """Return one high-confidence FAQ title/alias match before model calls."""
+
+        self._validate_query(query)
+        if not 0 <= similarity_threshold <= 1:
+            raise ValueError("similarity_threshold must be between 0 and 1")
+        parameters: dict[str, Any] = {
+            "tenant_id": query.tenant_id,
+            "company_id": query.company_id,
+            "card_id": query.card_id,
+            "query_text": query.text,
+            "faq_similarity_threshold": similarity_threshold,
+            "published_review_status": self.config.published_review_status,
+            "public_visibility": self.config.public_visibility,
+            "active_document_status": self.config.active_document_status,
+        }
+        try:
+            rows = await self._executor.fetch_mappings(self._faq_statement, parameters)
+            if not rows:
+                return None
+            return _row_to_evidence(rows[0])
         except AIRetrievalError:
             raise
         except Exception as exc:
@@ -198,6 +230,7 @@ eligible AS (
         c.{schema.chunk_ordinal} AS ordinal,
         COALESCE(c.{schema.chunk_title}, '') AS title,
         c.{schema.chunk_text} AS evidence_text,
+        d.{schema.document_source_type} AS source_type,
         c.{schema.chunk_embedding} AS embedding,
         c.{schema.chunk_embedding_model} AS embedding_model,
         c.{schema.chunk_metadata} AS metadata,
@@ -325,13 +358,15 @@ lexical_candidates AS (
                 ),
                 0.0
             ),
-            similarity(e.evidence_text, :query_text)
+            similarity(e.evidence_text, :query_text),
+            similarity(e.title, :query_text)
         ) AS lexical_score
     FROM eligible AS e
     WHERE e.search_tsv @@ websearch_to_tsquery(
               '{schema.text_search_config}', :query_text
           )
        OR similarity(e.evidence_text, :query_text) >= :trigram_threshold
+       OR similarity(e.title, :query_text) >= :trigram_threshold
     ORDER BY lexical_score DESC, e.evidence_id
     LIMIT :candidate_limit
 ),
@@ -395,13 +430,15 @@ lexical_candidates AS (
                 ),
                 0.0
             ),
-            similarity(e.evidence_text, :query_text)
+            similarity(e.evidence_text, :query_text),
+            similarity(e.title, :query_text)
         ) AS lexical_score
     FROM eligible AS e
     WHERE e.search_tsv @@ websearch_to_tsquery(
               '{schema.text_search_config}', :query_text
           )
        OR similarity(e.evidence_text, :query_text) >= :trigram_threshold
+       OR similarity(e.title, :query_text) >= :trigram_threshold
     ORDER BY lexical_score DESC, e.evidence_id
     LIMIT :candidate_limit
 ),
@@ -427,6 +464,68 @@ SELECT
 FROM lexical_ranked
 ORDER BY fused_score DESC, evidence_id
 LIMIT :top_k
+""".strip()
+
+
+def _build_faq_match_sql(schema: KnowledgeSqlSchema) -> str:
+    eligible = _eligible_cte(schema)
+    return f"""
+WITH {eligible},
+faq_scored AS (
+    SELECT
+        e.*,
+        btrim(
+            lower(e.title),
+            E' \\t\\r\\n?!.,;:，。！？；：“”‘’（）()[]【】<>《》'
+        ) = btrim(
+            lower(:query_text),
+            E' \\t\\r\\n?!.,;:，。！？；：“”‘’（）()[]【】<>《》'
+        ) AS exact_match,
+        GREATEST(
+            similarity(e.title, :query_text),
+            COALESCE(
+                (
+                    SELECT MAX(similarity(alias.value, :query_text))
+                    FROM jsonb_array_elements_text(
+                        CASE
+                            WHEN jsonb_typeof(e.metadata -> 'aliases') = 'array'
+                                THEN e.metadata -> 'aliases'
+                            ELSE '[]'::jsonb
+                        END
+                    ) AS alias(value)
+                ),
+                0.0
+            )
+        ) AS match_score
+    FROM eligible AS e
+    WHERE e.source_type = 'faq'
+),
+faq_match AS (
+    SELECT *
+    FROM faq_scored
+    WHERE exact_match IS TRUE
+       OR match_score >= :faq_similarity_threshold
+    ORDER BY exact_match DESC, match_score DESC, evidence_id
+    LIMIT 1
+)
+SELECT
+    evidence_id,
+    document_id,
+    version_id,
+    ordinal,
+    title,
+    evidence_text,
+    embedding_model,
+    COALESCE(metadata, '{{}}'::jsonb) || jsonb_build_object(
+        'source_type', source_type,
+        'faq_exact', exact_match,
+        'faq_match_score', match_score
+    ) AS metadata,
+    content_hash,
+    NULL::double precision AS vector_score,
+    match_score AS lexical_score,
+    match_score AS fused_score
+FROM faq_match
 """.strip()
 
 

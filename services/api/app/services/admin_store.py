@@ -67,6 +67,7 @@ class AdminScope:
 @dataclass(frozen=True, slots=True)
 class PreparedChunk:
     id: uuid.UUID
+    title: str
     text: str
     content_hash: str
 
@@ -458,7 +459,7 @@ class AdminStore:
             for start in range(0, len(prepared.chunks), _EMBEDDING_BATCH_SIZE):
                 batch = prepared.chunks[start : start + _EMBEDDING_BATCH_SIZE]
                 result = await provider.embed(
-                    [as_passage(chunk.text) for chunk in batch],
+                    [as_passage(f"{chunk.title}\n{chunk.text}") for chunk in batch],
                     credentials=credentials,
                     trace_id=trace_id,
                 )
@@ -590,7 +591,12 @@ class AdminStore:
                 version_number=version.version_number,
                 job_id=job.id,
                 chunks=tuple(
-                    PreparedChunk(id=chunk.id, text=chunk.text, content_hash=chunk.content_hash)
+                    PreparedChunk(
+                        id=chunk.id,
+                        title=chunk.title,
+                        text=chunk.text,
+                        content_hash=chunk.content_hash,
+                    )
                     for chunk in chunks
                 ),
             )

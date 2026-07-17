@@ -10,9 +10,15 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Sequence
 
 from .errors import AIErrorCategory, AIProviderError, AIServiceError
-from .policy import EvidenceGate, InputSecurityPolicy
+from .policy import EvidenceGate, InputPolicyDecision, InputSecurityPolicy
 from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry
-from .protocols import ChatProvider, EmbeddingProvider, RetrievalRepository
+from .protocols import (
+    ChatProvider,
+    EmbeddingProvider,
+    FAQAnswerCache,
+    FAQMatchRepository,
+    RetrievalRepository,
+)
 from .schemas import (
     AIAnswer,
     ChatCompletion,
@@ -25,6 +31,7 @@ from .schemas import (
     RefusalCode,
     RetrievalQuery,
     RetrievedEvidence,
+    StructuredModelAnswer,
     TraceMetadata,
 )
 
@@ -42,6 +49,9 @@ class RAGOrchestratorConfig:
     max_tokens: int = 1200
     citation_excerpt_chars: int = 320
     fallback_to_lexical_on_embedding_error: bool = True
+    faq_fast_path_enabled: bool = False
+    faq_similarity_threshold: float = 0.92
+    faq_max_question_chars: int = 180
 
     def __post_init__(self) -> None:
         if self.top_k <= 0 or self.candidate_limit < self.top_k:
@@ -58,6 +68,10 @@ class RAGOrchestratorConfig:
             raise ValueError("invalid chat generation settings")
         if self.citation_excerpt_chars <= 0:
             raise ValueError("citation_excerpt_chars must be positive")
+        if not 0 <= self.faq_similarity_threshold <= 1:
+            raise ValueError("faq_similarity_threshold must be between 0 and 1")
+        if self.faq_max_question_chars <= 0:
+            raise ValueError("faq_max_question_chars must be positive")
 
 
 @dataclass(slots=True)
@@ -118,6 +132,8 @@ class RAGOrchestrator:
         retrieval_repository: RetrievalRepository,
         *,
         embedding_provider: EmbeddingProvider | None = None,
+        faq_repository: FAQMatchRepository | None = None,
+        faq_cache: FAQAnswerCache | None = None,
         security_policy: InputSecurityPolicy | None = None,
         evidence_gate: EvidenceGate | None = None,
         prompt_registry: PromptRegistry | None = None,
@@ -126,6 +142,8 @@ class RAGOrchestrator:
         self._chat_provider = chat_provider
         self._retrieval_repository = retrieval_repository
         self._embedding_provider = embedding_provider
+        self._faq_repository = faq_repository
+        self._faq_cache = faq_cache
         self._security_policy = security_policy or InputSecurityPolicy()
         self._evidence_gate = evidence_gate or EvidenceGate()
         self._prompt_registry = prompt_registry or PromptRegistry()
@@ -179,6 +197,15 @@ class RAGOrchestrator:
                 }
             )
             return _refused(_forbidden_refusal(forbidden), trace)
+
+        fast_faq = await self._try_fast_faq(
+            request=request,
+            policy=policy,
+            normalized=normalized,
+            trace=trace,
+        )
+        if fast_faq is not None:
+            return fast_faq
 
         embedding: tuple[float, ...] | None = None
         if self._embedding_provider is not None and embedding_credentials is not None:
@@ -243,16 +270,21 @@ class RAGOrchestrator:
             )
         except AIServiceError as exc:
             trace.retrieval_ms = _elapsed_ms(retrieval_started)
-            trace.error_category = exc.category.value
-            return _refused(
-                Refusal(
-                    code=RefusalCode.RETRIEVAL_ERROR,
-                    reason="知识检索暂时不可用。",
-                    retryable=exc.retryable,
-                    safe_alternative="请稍后重试或联系企业工作人员。",
-                ),
-                trace,
-            )
+            if self._evidence_gate.allows_general_answer(policy):
+                evidence = ()
+                trace.extra["retrieval_fallback_category"] = exc.category.value
+                trace.extra["retrieval_fallback_code"] = exc.code
+            else:
+                trace.error_category = exc.category.value
+                return _refused(
+                    Refusal(
+                        code=RefusalCode.RETRIEVAL_ERROR,
+                        reason="知识检索暂时不可用。",
+                        retryable=exc.retryable,
+                        safe_alternative="请稍后重试或联系企业工作人员。",
+                    ),
+                    trace,
+                )
         trace.retrieval_ms = _elapsed_ms(retrieval_started)
         trace.retrieval_count = len(evidence)
         trace.extra["retrieved_evidence_ids"] = tuple(item.evidence_id for item in evidence)
@@ -272,6 +304,7 @@ class RAGOrchestrator:
             evidence=pre_gate.evidence,
             policy=policy,
             history=request.history,
+            general_answer_allowed=pre_gate.general_answer_allowed,
         )
         model_started = time.perf_counter()
         try:
@@ -310,6 +343,105 @@ class RAGOrchestrator:
         )
         return AIAnswer(
             answer=completion.output.answer,
+            citations=citations,
+            refusal=None,
+            trace=trace.finish(citations),
+        )
+
+    async def _try_fast_faq(
+        self,
+        *,
+        request: RAGRequest,
+        policy: InputPolicyDecision,
+        normalized: str,
+        trace: _TraceState,
+    ) -> AIAnswer | None:
+        if (
+            not self.config.faq_fast_path_enabled
+            or self._faq_repository is None
+            or len(normalized) > self.config.faq_max_question_chars
+        ):
+            return None
+
+        query = RetrievalQuery(
+            tenant_id=request.tenant_id,
+            company_id=request.company_id,
+            card_id=request.card_id,
+            text=normalized,
+            top_k=1,
+            candidate_limit=max(1, self.config.candidate_limit),
+            trigram_threshold=self.config.trigram_threshold,
+            rrf_k=self.config.rrf_k,
+            vector_weight=self.config.vector_weight,
+            lexical_weight=self.config.lexical_weight,
+        )
+        lookup_started = time.perf_counter()
+        evidence: RetrievedEvidence | None = None
+        cache_hit = False
+        if self._faq_cache is not None:
+            evidence = await self._faq_cache.get(query)
+            cache_hit = evidence is not None
+        if evidence is None:
+            try:
+                evidence = await self._faq_repository.find_faq_match(
+                    query,
+                    similarity_threshold=self.config.faq_similarity_threshold,
+                )
+            except AIServiceError as exc:
+                # The fast path is an optimization. Fall through to the normal
+                # hybrid pipeline when it is unavailable.
+                trace.extra["faq_fast_path_error"] = exc.category.value
+                trace.extra["faq_lookup_ms"] = _elapsed_ms(lookup_started)
+                return None
+            if evidence is not None and self._faq_cache is not None:
+                await self._faq_cache.put(query, evidence)
+
+        trace.extra["faq_cache_hit"] = cache_hit
+        trace.extra["faq_lookup_ms"] = _elapsed_ms(lookup_started)
+        if evidence is None:
+            return None
+
+        pre_gate = self._evidence_gate.before_generation(policy, (evidence,))
+        if not pre_gate.allowed:
+            trace.extra["faq_fast_path_rejected"] = (
+                pre_gate.refusal.code.value if pre_gate.refusal else "policy"
+            )
+            return None
+        post_gate = self._evidence_gate.after_generation(
+            policy,
+            StructuredModelAnswer(
+                answer=evidence.text,
+                cited_evidence_ids=[evidence.evidence_id],
+                needs_human_review=pre_gate.needs_human_review,
+            ),
+            pre_gate.evidence,
+        )
+        if not post_gate.allowed:
+            trace.extra["faq_fast_path_rejected"] = (
+                post_gate.refusal.code.value if post_gate.refusal else "output_policy"
+            )
+            return None
+
+        citations = tuple(
+            _citation_from_evidence(item, self.config.citation_excerpt_chars)
+            for item in post_gate.evidence
+        )
+        trace.retrieval_mode = "lexical"
+        trace.retrieval_ms = _elapsed_ms(lookup_started)
+        trace.retrieval_count = 1
+        trace.extra.update(
+            {
+                "interaction_kind": "faq_fast_path",
+                "needs_human_review": post_gate.needs_human_review,
+                "retrieved_evidence_ids": (evidence.evidence_id,),
+                "retrieved_version_ids": (evidence.version_id,),
+                "cited_content_hashes": tuple(
+                    citation.content_hash for citation in citations if citation.content_hash
+                ),
+            }
+        )
+        return AIAnswer(
+            answer=evidence.text,
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),

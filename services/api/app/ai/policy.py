@@ -153,6 +153,7 @@ class EvidenceGateConfig:
     min_lexical_score: float | None = None
     max_evidence: int = 8
     high_risk_min_evidence: int = 2
+    allow_general_answers_without_evidence: bool = False
 
     def __post_init__(self) -> None:
         if self.max_evidence <= 0 or self.high_risk_min_evidence <= 0:
@@ -168,6 +169,7 @@ class EvidenceGateDecision:
     evidence: tuple[RetrievedEvidence, ...]
     refusal: Refusal | None
     needs_human_review: bool = False
+    general_answer_allowed: bool = False
 
     @property
     def allowed(self) -> bool:
@@ -201,7 +203,14 @@ class EvidenceGate:
             for item in sorted(evidence, key=lambda item: item.score, reverse=True)
             if self._score_allowed(item) and item.text.strip()
         )[: self.config.max_evidence]
+        flags = set(decision.flags)
         if not accepted:
+            if self.allows_general_answer(decision):
+                return EvidenceGateDecision(
+                    evidence=(),
+                    refusal=None,
+                    general_answer_allowed=True,
+                )
             return EvidenceGateDecision(
                 evidence=(),
                 refusal=Refusal(
@@ -211,7 +220,6 @@ class EvidenceGate:
                 ),
             )
 
-        flags = set(decision.flags)
         if PolicyFlag.PRICING in flags and not any(
             _has_pricing_evidence(item) for item in accepted
         ):
@@ -244,6 +252,17 @@ class EvidenceGate:
             evidence=accepted,
             refusal=None,
             needs_human_review=PolicyFlag.HIGH_RISK in flags,
+            general_answer_allowed=(
+                self.allows_general_answer(decision)
+            ),
+        )
+
+    def allows_general_answer(self, decision: InputPolicyDecision) -> bool:
+        flags = set(decision.flags)
+        return (
+            self.config.allow_general_answers_without_evidence
+            and PolicyFlag.PRICING not in flags
+            and PolicyFlag.HIGH_RISK not in flags
         )
 
     def _score_allowed(self, item: RetrievedEvidence) -> bool:
@@ -278,9 +297,33 @@ class EvidenceGate:
                 needs_human_review=output.needs_human_review,
             )
 
+        flags = set(decision.flags)
         by_id = {item.evidence_id: item for item in evidence}
         requested = tuple(output.cited_evidence_ids)
-        if not requested or any(evidence_id not in by_id for evidence_id in requested):
+        if not requested:
+            if self.allows_general_answer(decision):
+                return OutputGateDecision(evidence=(), refusal=None)
+            return OutputGateDecision(
+                evidence=(),
+                refusal=Refusal(
+                    code=RefusalCode.UNGROUNDED_OUTPUT,
+                    reason="模型回答未能通过来源一致性校验。",
+                    safe_alternative="请稍后重试或联系企业工作人员。",
+                ),
+                needs_human_review=True,
+            )
+        if any(evidence_id not in by_id for evidence_id in requested):
+            if self.allows_general_answer(decision):
+                # For ordinary chat, an invalid optional citation must not hide
+                # an otherwise useful model answer. Keep only verified ids.
+                return OutputGateDecision(
+                    evidence=tuple(
+                        by_id[evidence_id]
+                        for evidence_id in requested
+                        if evidence_id in by_id
+                    ),
+                    refusal=None,
+                )
             return OutputGateDecision(
                 evidence=(),
                 refusal=Refusal(
@@ -292,7 +335,7 @@ class EvidenceGate:
             )
         cited = tuple(by_id[evidence_id] for evidence_id in requested)
 
-        if PolicyFlag.PRICING in set(decision.flags):
+        if PolicyFlag.PRICING in flags:
             unsupported = _unsupported_money_claims(output.answer, cited)
             if unsupported:
                 return OutputGateDecision(
@@ -309,7 +352,7 @@ class EvidenceGate:
             evidence=cited,
             refusal=None,
             needs_human_review=(
-                output.needs_human_review or PolicyFlag.HIGH_RISK in set(decision.flags)
+                output.needs_human_review or PolicyFlag.HIGH_RISK in flags
             ),
         )
 

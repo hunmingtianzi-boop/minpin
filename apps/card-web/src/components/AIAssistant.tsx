@@ -28,6 +28,7 @@ import {
 } from "../lib/assistantApi";
 import { lockBodyScroll } from "../lib/bodyScrollLock";
 import { findKnowledge } from "../lib/knowledge";
+import { MarkdownMessage } from "./MarkdownMessage";
 
 type Message = {
   id: number;
@@ -469,7 +470,7 @@ export const AIAssistant = forwardRef<
               <div className="assistant-messages" ref={scrollRef} aria-live="polite">
                 {messages.map((message) => (
                   <div className={`message message-${message.role}`} key={message.id}>
-                    {message.text && <p>{message.text}</p>}
+                    {message.text && <MarkdownMessage content={message.text} />}
                     {message.source && (
                       <small>
                         <LinkSimple size={13} aria-hidden="true" />

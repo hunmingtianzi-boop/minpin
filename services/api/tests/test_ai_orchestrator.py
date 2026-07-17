@@ -7,18 +7,21 @@ import pytest
 from app.ai import (
     AIErrorCategory,
     AIProviderError,
+    AIRetrievalError,
     ChatCompletion,
     ChatMessage,
     EmbeddingBatch,
     ForbiddenTopicPolicy,
     ProviderCredentials,
     RAGOrchestrator,
+    RAGOrchestratorConfig,
     RAGRequest,
     RefusalCode,
     RetrievedEvidence,
     StructuredModelAnswer,
     TokenUsage,
 )
+from app.ai.policy import EvidenceGate, EvidenceGateConfig
 from app.ai.schemas import RetrievalQuery
 
 
@@ -92,6 +95,45 @@ class FakeRepository:
         return self.evidence
 
 
+class FailingRepository:
+    async def search(self, query: RetrievalQuery) -> Sequence[RetrievedEvidence]:
+        raise AIRetrievalError()
+
+
+class FakeFAQRepository(FakeRepository):
+    def __init__(
+        self,
+        evidence: Sequence[RetrievedEvidence],
+        faq_match: RetrievedEvidence | None,
+    ) -> None:
+        super().__init__(evidence)
+        self.faq_match = faq_match
+        self.faq_calls: list[tuple[RetrievalQuery, float]] = []
+
+    async def find_faq_match(
+        self,
+        query: RetrievalQuery,
+        *,
+        similarity_threshold: float,
+    ) -> RetrievedEvidence | None:
+        self.faq_calls.append((query, similarity_threshold))
+        return self.faq_match
+
+
+class FakeFAQCache:
+    def __init__(self, evidence: RetrievedEvidence | None = None) -> None:
+        self.evidence = evidence
+        self.get_calls: list[RetrievalQuery] = []
+        self.put_calls: list[tuple[RetrievalQuery, RetrievedEvidence]] = []
+
+    async def get(self, query: RetrievalQuery) -> RetrievedEvidence | None:
+        self.get_calls.append(query)
+        return self.evidence
+
+    async def put(self, query: RetrievalQuery, evidence: RetrievedEvidence) -> None:
+        self.put_calls.append((query, evidence))
+
+
 def _credentials() -> ProviderCredentials:
     return ProviderCredentials(api_key="-".join(["unit", "test", "credential"]))
 
@@ -139,7 +181,7 @@ async def test_orchestrator_returns_grounded_answer_citations_and_trace() -> Non
     assert result.citations[0].source_url == "https://example.test/product"
     assert repository.calls[0].embedding == (0.1, 0.2, 0.3)
     assert result.trace.retrieval_mode == "hybrid"
-    assert result.trace.prompt_version.startswith("company-rag-grounded-v")
+    assert result.trace.prompt_version.startswith("company-chat-hybrid-v")
     assert result.trace.provider_request_id == "provider-request"
     assert result.trace.input_tokens == 22
     assert result.trace.citation_count == 1
@@ -255,6 +297,132 @@ async def test_no_evidence_returns_refusal_without_calling_chat() -> None:
     assert result.refusal.code is RefusalCode.INSUFFICIENT_EVIDENCE
     assert result.trace.retrieval_mode == "lexical"
     assert result.trace.retrieval_count == 0
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_general_mode_answers_low_risk_question_without_evidence() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer(answer="智能名片通常用于集中展示身份、联系方式和服务信息。")
+    )
+    repository = FakeRepository([])
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        evidence_gate=EvidenceGate(EvidenceGateConfig(allow_general_answers_without_evidence=True)),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="什么是智能名片？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.citations == ()
+    assert len(chat.calls) == 1
+    assert '"general_answer_allowed":true' in chat.calls[0][0][1].content
+
+
+@pytest.mark.asyncio
+async def test_general_chat_continues_when_knowledge_retrieval_is_unavailable() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="可以，先从明确目标开始。"))
+    orchestrator = RAGOrchestrator(
+        chat,
+        FailingRepository(),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="给我一个行动建议"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == "可以，先从明确目标开始。"
+    assert result.citations == ()
+    assert result.trace.extra["retrieval_fallback_code"] == "retrieval_failed"
+    assert len(chat.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_greeting_is_answered_by_the_model_in_general_chat_mode() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="你好！今天想聊点什么？"))
+    embedding = FakeEmbeddingProvider()
+    repository = FakeRepository([])
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        embedding_provider=embedding,
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="你好！"),
+        chat_credentials=_credentials(),
+        embedding_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.citations == ()
+    assert result.answer == "你好！今天想聊点什么？"
+    assert result.trace.retrieval_mode == "hybrid"
+    assert embedding.calls == 1
+    assert len(repository.calls) == 1
+    assert len(chat.calls) == 1
+    assert '"general_answer_allowed":true' in chat.calls[0][0][1].content
+
+
+@pytest.mark.asyncio
+async def test_high_confidence_faq_returns_before_embedding_and_model_and_populates_cache() -> None:
+    faq = RetrievedEvidence(
+        evidence_id="faq-chunk-1",
+        document_id="faq-doc-1",
+        version_id="faq-version-1",
+        ordinal=0,
+        title="标准版包含什么？",
+        text="标准版包含智能名片和企业知识问答。",
+        score=1.0,
+        lexical_score=1.0,
+        content_hash="sha256:faq",
+        metadata={"source_type": "faq", "faq_exact": True},
+    )
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused", cited_evidence_ids=["x"]))
+    embedding = FakeEmbeddingProvider()
+    repository = FakeFAQRepository([faq], faq)
+    cache = FakeFAQCache()
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        embedding_provider=embedding,
+        faq_repository=repository,
+        faq_cache=cache,
+        config=RAGOrchestratorConfig(faq_fast_path_enabled=True),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            card_id="card-1",
+            question="标准版包含什么？",
+        ),
+        chat_credentials=_credentials(),
+        embedding_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == faq.text
+    assert result.citations[0].evidence_id == faq.evidence_id
+    assert result.trace.extra["interaction_kind"] == "faq_fast_path"
+    assert result.trace.retrieval_mode == "lexical"
+    assert repository.calls == []
+    assert repository.faq_calls[0][1] == pytest.approx(0.92)
+    assert cache.put_calls[0][1] == faq
+    assert embedding.calls == 0
     assert chat.calls == []
 
 

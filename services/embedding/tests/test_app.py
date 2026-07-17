@@ -110,6 +110,21 @@ def test_embedding_thread_count_rejects_invalid_configuration(
         _embedding_thread_count()
 
 
+def test_prepare_text_uses_symmetric_input_for_non_e5_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app_module,
+        "MODEL_NAME",
+        "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    )
+
+    assert _prepare_text("query: enterprise services") == "enterprise services"
+    assert _prepare_text("passage: enterprise service description") == (
+        "enterprise service description"
+    )
+
+
 def test_serialize_embeddings_validates_batch_shape_and_dimension() -> None:
     assert _serialize_embeddings([[0.1, 0.2]], expected_count=1, expected_dimension=2) == [
         [0.1, 0.2]
@@ -118,6 +133,22 @@ def test_serialize_embeddings_validates_batch_shape_and_dimension() -> None:
         _serialize_embeddings([], expected_count=1, expected_dimension=2)
     with pytest.raises(RuntimeError, match="invalid vector"):
         _serialize_embeddings([[0.1]], expected_count=1, expected_dimension=2)
+
+
+def test_serialize_embeddings_pads_a_smaller_native_vector() -> None:
+    assert _serialize_embeddings(
+        [[0.1, 0.2]],
+        expected_count=1,
+        expected_dimension=4,
+        native_dimension=2,
+    ) == [[0.1, 0.2, 0.0, 0.0]]
+    with pytest.raises(RuntimeError, match="dimensions are invalid"):
+        _serialize_embeddings(
+            [[0.1, 0.2]],
+            expected_count=1,
+            expected_dimension=1,
+            native_dimension=2,
+        )
 
 
 @pytest.mark.parametrize("non_finite", [math.nan, math.inf, -math.inf])

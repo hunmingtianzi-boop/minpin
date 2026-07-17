@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.sql.elements import TextClause
@@ -24,6 +25,7 @@ from app.ai import (
 )
 from app.ai.protocols import AsyncSqlExecutor
 from app.core.config import Settings
+from app.services.faq_answer_cache import RedisFAQAnswerCache
 from app.services.platform_llm_profiles import (
     EffectiveChatConfig,
     resolve_effective_chat_config,
@@ -80,6 +82,7 @@ def build_rag_orchestrator(
     settings: Settings,
     http_client: httpx.AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis | None = None,
 ) -> RAGOrchestrator:
     transport = HttpxJsonTransport(http_client)
     chat_provider = OpenAICompatibleChatProvider(
@@ -126,11 +129,23 @@ def build_rag_orchestrator(
         chat_provider,
         retrieval_repository,
         embedding_provider=embedding_provider,
+        faq_repository=(
+            retrieval_repository if settings.rag_faq_fast_path_enabled else None
+        ),
+        faq_cache=(
+            RedisFAQAnswerCache(
+                redis,
+                ttl_seconds=settings.rag_faq_cache_ttl_seconds,
+            )
+            if redis is not None and settings.rag_faq_fast_path_enabled
+            else None
+        ),
         evidence_gate=EvidenceGate(
             EvidenceGateConfig(
                 min_vector_score=settings.retrieval_min_vector_score,
                 min_lexical_score=settings.retrieval_min_lexical_score,
                 max_evidence=settings.retrieval_context_k,
+                allow_general_answers_without_evidence=settings.llm_allow_general_answers,
             )
         ),
         config=RAGOrchestratorConfig(
@@ -141,6 +156,9 @@ def build_rag_orchestrator(
             lexical_weight=lexical_weight,
             temperature=settings.llm_temperature,
             max_tokens=settings.llm_max_output_tokens,
+            faq_fast_path_enabled=settings.rag_faq_fast_path_enabled,
+            faq_similarity_threshold=settings.rag_faq_similarity_threshold,
+            faq_max_question_chars=settings.rag_faq_max_question_chars,
         ),
     )
 
@@ -150,6 +168,7 @@ async def resolve_rag_runtime(
     settings: Settings,
     http_client: httpx.AsyncClient,
     session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis | None = None,
 ) -> ResolvedRAGRuntime:
     """Resolve and build Chat for one request without mutating process settings.
 
@@ -166,6 +185,7 @@ async def resolve_rag_runtime(
             settings=runtime_settings,
             http_client=http_client,
             session_factory=session_factory,
+            redis=redis,
         ),
     )
 

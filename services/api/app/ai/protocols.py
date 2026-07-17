@@ -71,6 +71,21 @@ class RetrievalRepository(Protocol):
     async def search(self, query: RetrievalQuery) -> Sequence[RetrievedEvidence]: ...
 
 
+class FAQMatchRepository(Protocol):
+    async def find_faq_match(
+        self,
+        query: RetrievalQuery,
+        *,
+        similarity_threshold: float,
+    ) -> RetrievedEvidence | None: ...
+
+
+class FAQAnswerCache(Protocol):
+    async def get(self, query: RetrievalQuery) -> RetrievedEvidence | None: ...
+
+    async def put(self, query: RetrievalQuery, evidence: RetrievedEvidence) -> None: ...
+
+
 class AsyncSqlExecutor(Protocol):
     """Minimal SQL execution boundary, easy to fake in unit tests."""
 
