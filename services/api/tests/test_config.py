@@ -46,6 +46,30 @@ def test_production_subpath_settings_are_normalized() -> None:
     assert settings.api_docs_enabled is True
 
 
+def test_public_card_base_is_an_origin_and_remote_http_requires_opt_in() -> None:
+    with pytest.raises(ValueError, match="without /c"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            public_card_base_url="https://cards.example.test/c",
+        )
+
+    with pytest.raises(ValueError, match="ALLOW_INSECURE_HTTP_DEPLOYMENT"):
+        Settings(
+            _env_file=None,
+            app_env="test",
+            public_card_base_url="http://47.83.235.176",
+        )
+
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        public_card_base_url="http://47.83.235.176/",
+        allow_insecure_http_deployment=True,
+    )
+    assert settings.public_card_base_url == "http://47.83.235.176"
+
+
 def test_staff_bootstrap_settings_are_all_or_none_and_secret_wrapped() -> None:
     with pytest.raises(ValueError, match="must be configured together"):
         Settings(
@@ -89,6 +113,14 @@ def test_production_requires_secure_auth_cookies_and_explicit_origins() -> None:
             staff_auth_cookie_secure=True,
             cors_allowed_origins=["*"],
         )
+
+    temporary_ip_deployment = Settings(
+        **production,
+        staff_auth_cookie_secure=False,
+        allow_insecure_http_deployment=True,
+    )
+    assert temporary_ip_deployment.staff_auth_cookie_secure is False
+    assert temporary_ip_deployment.allow_insecure_http_deployment is True
 
     settings = Settings(**production, staff_auth_cookie_secure=True)
     assert settings.staff_auth_cookie_secure is True

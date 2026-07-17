@@ -24,6 +24,7 @@ from app.api.platform_schemas import (
 from app.api.routes import platform as platform_routes
 from app.api.routes import platform_operations as operation_routes
 from app.core.tokens import StaffPrincipal
+from app.services import platform_store as platform_store_module
 
 
 class RouteStore:
@@ -165,6 +166,21 @@ class RouteStore:
             changed=True,
             updated_at=self.now,
         )
+
+
+def test_platform_share_base_requires_explicit_opt_in_for_remote_http() -> None:
+    public_base = "http://47.83.235.176"
+
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        platform_store_module._normalize_public_card_base_url(public_base)
+
+    assert (
+        platform_store_module._normalize_public_card_base_url(
+            public_base,
+            allow_insecure_http=True,
+        )
+        == public_base
+    )
 
 
 def _principal(role: str) -> StaffPrincipal:

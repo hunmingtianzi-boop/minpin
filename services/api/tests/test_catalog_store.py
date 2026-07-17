@@ -109,6 +109,21 @@ def test_card_slugs_are_unique_in_sample_and_have_144_bits_of_entropy() -> None:
     assert all(re.fullmatch(r"c-[0-9a-f]{36}", slug) for slug in slugs)
 
 
+def test_remote_http_public_card_base_requires_explicit_opt_in() -> None:
+    public_base = "http://47.83.235.176"
+
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        catalog_module._normalize_public_base_url(public_base)
+
+    assert (
+        catalog_module._normalize_public_base_url(
+            public_base,
+            allow_insecure_http=True,
+        )
+        == public_base
+    )
+
+
 class _ConstraintDiag:
     constraint_name = "uq_cards_slug"
 

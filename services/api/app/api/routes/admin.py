@@ -146,6 +146,9 @@ def _catalog_store(request: Request) -> CatalogStore:
     return CatalogStore(
         request.app.state.session_factory,
         public_card_base_url=base_url,
+        allow_insecure_http=bool(
+            getattr(request.app.state.settings, "allow_insecure_http_deployment", False)
+        ),
     )
 
 

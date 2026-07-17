@@ -210,6 +210,17 @@ def test_login_refresh_logout_and_me_contract(monkeypatch: Any) -> None:
     assert sum("Max-Age=0" in item for item in logout_cookie_headers) == 2
 
 
+def test_auth_cookie_path_includes_the_external_application_root() -> None:
+    settings = Settings(
+        _env_file=None,
+        app_env="test",
+        asgi_root_path="/c",
+        api_prefix="/api/v1",
+    )
+
+    assert auth_routes._auth_cookie_path(settings) == "/c/api/v1/auth"
+
+
 def test_staff_dependency_rejects_visitor_token(monkeypatch: Any) -> None:
     client, store = _test_app(monkeypatch)
     settings = client.app.state.settings

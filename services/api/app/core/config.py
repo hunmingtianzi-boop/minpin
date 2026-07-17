@@ -4,6 +4,7 @@ import json
 from functools import lru_cache
 from ipaddress import ip_network
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -34,6 +35,7 @@ class Settings(BaseSettings):
         default_factory=lambda: ["http://127.0.0.1:4173", "http://localhost:4173"]
     )
     public_card_base_url: str = "http://127.0.0.1:4173"
+    allow_insecure_http_deployment: bool = False
 
     database_url: str = (
         "postgresql+asyncpg://cf_ai_card_app:change-me-app-local-only@localhost:5432/cf_ai_card"
@@ -211,6 +213,29 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_secrets(self) -> "Settings":
+        public_base = self.public_card_base_url.strip().rstrip("/")
+        parsed_public_base = urlsplit(public_base)
+        if (
+            parsed_public_base.scheme.casefold() not in {"http", "https"}
+            or not parsed_public_base.netloc
+            or parsed_public_base.username
+            or parsed_public_base.password
+            or parsed_public_base.path
+            or parsed_public_base.query
+            or parsed_public_base.fragment
+        ):
+            raise ValueError("PUBLIC_CARD_BASE_URL must be an absolute origin without /c")
+        if (
+            parsed_public_base.scheme.casefold() == "http"
+            and parsed_public_base.hostname not in {"localhost", "127.0.0.1"}
+            and not self.allow_insecure_http_deployment
+        ):
+            raise ValueError(
+                "remote HTTP PUBLIC_CARD_BASE_URL requires "
+                "ALLOW_INSECURE_HTTP_DEPLOYMENT=true"
+            )
+        self.public_card_base_url = public_base
+
         if self.app_env in {"staging", "production"}:
             signing_key = self.jwt_signing_key.get_secret_value()
             if signing_key.startswith("replace-") or len(signing_key) < 32:
@@ -246,7 +271,11 @@ class Settings(BaseSettings):
                     raise ValueError(
                         "FIELD_ENCRYPTION_PREVIOUS_KEYS must contain strong referenced keys"
                     )
-            if self.app_env == "production" and not self.staff_auth_cookie_secure:
+            if (
+                self.app_env == "production"
+                and not self.staff_auth_cookie_secure
+                and not self.allow_insecure_http_deployment
+            ):
                 raise ValueError("STAFF_AUTH_COOKIE_SECURE must be true in production")
             if self.metrics_bearer_token is None:
                 raise ValueError(

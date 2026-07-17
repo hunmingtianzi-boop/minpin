@@ -150,10 +150,14 @@ class CatalogStore:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         public_card_base_url: str = "http://127.0.0.1:4173",
+        allow_insecure_http: bool = False,
         slug_factory: Callable[[], str] = generate_card_slug,
     ) -> None:
         self._sessions = session_factory
-        self._public_card_base_url = _normalize_public_base_url(public_card_base_url)
+        self._public_card_base_url = _normalize_public_base_url(
+            public_card_base_url,
+            allow_insecure_http=allow_insecure_http,
+        )
         self._slug_factory = slug_factory
 
     async def list_products(
@@ -1517,7 +1521,11 @@ def _has_constraint(exc: IntegrityError, name: str) -> bool:
     return False
 
 
-def _normalize_public_base_url(value: str) -> str:
+def _normalize_public_base_url(
+    value: str,
+    *,
+    allow_insecure_http: bool = False,
+) -> str:
     candidate = value.strip().rstrip("/")
     parsed = urlsplit(candidate)
     if (
@@ -1529,7 +1537,11 @@ def _normalize_public_base_url(value: str) -> str:
         or parsed.fragment
     ):
         raise ValueError("public_card_base_url must be an absolute HTTP(S) origin or base path")
-    if parsed.scheme.casefold() == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
+    if (
+        parsed.scheme.casefold() == "http"
+        and parsed.hostname not in {"localhost", "127.0.0.1"}
+        and not allow_insecure_http
+    ):
         raise ValueError("non-local public_card_base_url must use HTTPS")
     return candidate
 

@@ -239,8 +239,9 @@ def _clear_auth_cookies(response: Response, settings: Settings) -> None:
 
 
 def _auth_cookie_path(settings: Settings) -> str:
+    root_path = settings.asgi_root_path.rstrip("/")
     prefix = settings.api_prefix.rstrip("/")
-    return f"{prefix}/auth" if prefix else "/auth"
+    return f"{root_path}{prefix}/auth" or "/auth"
 
 
 def _set_no_store(response: Response) -> None:

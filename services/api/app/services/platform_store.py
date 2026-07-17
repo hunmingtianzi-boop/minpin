@@ -100,7 +100,10 @@ class PlatformStore:
                 ),
                 "http://127.0.0.1:4173",
             )
-        self._public_card_base_url = _normalize_public_card_base_url(public_card_base_url)
+        self._public_card_base_url = _normalize_public_card_base_url(
+            public_card_base_url,
+            allow_insecure_http=settings.allow_insecure_http_deployment,
+        )
 
     async def create_enterprise(
         self,
@@ -617,7 +620,11 @@ class PlatformStore:
             return _json_object(payload)
 
 
-def _normalize_public_card_base_url(value: str) -> str:
+def _normalize_public_card_base_url(
+    value: str,
+    *,
+    allow_insecure_http: bool = False,
+) -> str:
     candidate = value.strip().rstrip("/")
     parsed = urlsplit(candidate)
     if (
@@ -629,7 +636,11 @@ def _normalize_public_card_base_url(value: str) -> str:
         or parsed.fragment
     ):
         raise ValueError("public_card_base_url must be an absolute HTTP(S) base URL")
-    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1"}:
+    if (
+        parsed.scheme == "http"
+        and parsed.hostname not in {"localhost", "127.0.0.1"}
+        and not allow_insecure_http
+    ):
         raise ValueError("non-local public_card_base_url must use HTTPS")
     return candidate
 
