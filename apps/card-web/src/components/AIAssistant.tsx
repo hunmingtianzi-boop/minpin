@@ -112,6 +112,7 @@ export const AIAssistant = forwardRef<
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const timerRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const activeRequestTokenRef = useRef<symbol | null>(null);
   const mountedRef = useRef(true);
   const scrollUnlockRef = useRef<(() => void) | null>(null);
   const isOpenRef = useRef(isOpen);
@@ -142,6 +143,7 @@ export const AIAssistant = forwardRef<
     }
     abortRef.current?.abort();
     abortRef.current = null;
+    activeRequestTokenRef.current = null;
   }, []);
 
   const closeAssistant = useCallback(() => {
@@ -223,7 +225,15 @@ export const AIAssistant = forwardRef<
       },
     ) => {
       const question = rawQuestion.trim();
-      if (!question || isLoading) return;
+      if (!question || activeRequestTokenRef.current) return;
+
+      const requestToken = Symbol("assistant-request");
+      activeRequestTokenRef.current = requestToken;
+      const finishRequest = () => {
+        if (activeRequestTokenRef.current !== requestToken) return;
+        activeRequestTokenRef.current = null;
+        setIsLoading(false);
+      };
 
       const appendUser = options?.appendUser ?? true;
       const userMessage: Message | undefined = appendUser
@@ -244,7 +254,7 @@ export const AIAssistant = forwardRef<
             source: result.source,
           };
           setMessages((current) => [...current, assistantMessage]);
-          setIsLoading(false);
+          finishRequest();
           timerRef.current = null;
         }, shouldReduceMotion ? 0 : 520);
         return;
@@ -283,7 +293,7 @@ export const AIAssistant = forwardRef<
           retryable: false,
           message: requestErrorMessage(error),
         });
-        setIsLoading(false);
+        finishRequest();
         return;
       }
 
@@ -359,7 +369,7 @@ export const AIAssistant = forwardRef<
         .finally(() => {
           if (!mountedRef.current) return;
           if (abortRef.current === controller) abortRef.current = null;
-          setIsLoading(false);
+          finishRequest();
         });
     },
     [
@@ -367,7 +377,6 @@ export const AIAssistant = forwardRef<
       cardSlug,
       config.fallback,
       config.knowledgeBase,
-      isLoading,
       shouldReduceMotion,
       onLeadPrompt,
     ],

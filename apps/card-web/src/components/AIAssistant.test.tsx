@@ -95,6 +95,33 @@ describe("AIAssistant lead handoff", () => {
     );
   });
 
+  it("blocks two submissions dispatched before React can render the loading state", async () => {
+    let finishStream: (() => void) | undefined;
+    streamMock.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStream = resolve;
+        }),
+    );
+    render(<AIAssistant config={templateTenant.assistant} cardSlug="tenant-a" />);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: templateTenant.assistant.launcherAriaLabel }),
+    );
+    const input = screen.getByLabelText(templateTenant.assistant.labels.input);
+    fireEvent.change(input, { target: { value: "企业有什么商业模式？" } });
+    const form = input.closest("form");
+    expect(form).not.toBeNull();
+
+    act(() => {
+      form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+
+    expect(streamMock).toHaveBeenCalledTimes(1);
+    await act(async () => finishStream?.());
+  });
+
   it("keeps the page width stable while the assistant locks scrolling", async () => {
     const originalInnerWidth = window.innerWidth;
     const originalClientWidth = document.documentElement.clientWidth;

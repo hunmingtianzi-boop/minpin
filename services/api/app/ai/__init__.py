@@ -14,6 +14,8 @@ from .policy import (
     InputSecurityConfig,
     InputSecurityPolicy,
     PolicyFlag,
+    QuestionScope,
+    classify_question_scope,
 )
 from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry, PromptTemplate
 from .providers import (
@@ -73,6 +75,7 @@ __all__ = [
     "OpenAICompatibleChatProvider",
     "OpenAICompatibleEmbeddingProvider",
     "PolicyFlag",
+    "QuestionScope",
     "PostgresHybridRetrievalRepository",
     "PromptRegistry",
     "PromptTemplate",
@@ -89,4 +92,5 @@ __all__ = [
     "StructuredOutputMode",
     "TokenUsage",
     "TraceMetadata",
+    "classify_question_scope",
 ]

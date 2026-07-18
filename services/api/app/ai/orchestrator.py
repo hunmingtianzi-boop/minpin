@@ -10,8 +10,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Sequence
 
 from .errors import AIErrorCategory, AIProviderError, AIServiceError
-from .policy import EvidenceGate, InputPolicyDecision, InputSecurityPolicy
-from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry
+from .policy import (
+    EvidenceGate,
+    InputPolicyDecision,
+    InputSecurityPolicy,
+    QuestionScope,
+    classify_question_scope,
+)
+from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry, conversation_mode
 from .protocols import (
     ChatProvider,
     EmbeddingProvider,
@@ -200,11 +206,21 @@ class RAGOrchestrator:
             )
             return _refused(_forbidden_refusal(forbidden), trace)
 
+        direct_question_scope = classify_question_scope(normalized)
+        question_scope = classify_question_scope(normalized, request.history)
+        trace.extra["question_scope"] = question_scope.value
+        trace.extra["question_scope_source"] = (
+            "conversation" if direct_question_scope is QuestionScope.AMBIGUOUS else "direct"
+        )
+        if question_scope is QuestionScope.AMBIGUOUS:
+            return _scope_clarification(trace)
+
         fast_faq = await self._try_fast_faq(
             request=request,
             policy=policy,
             normalized=normalized,
             trace=trace,
+            question_scope=question_scope,
         )
         if fast_faq is not None:
             return fast_faq
@@ -250,7 +266,11 @@ class RAGOrchestrator:
 
         trace.retrieval_mode = "hybrid" if embedding is not None else "lexical"
         top_k = request.top_k if request.top_k is not None else self.config.top_k
-        retrieval_text = _compose_retrieval_text(normalized, request.history)
+        retrieval_text = _compose_retrieval_text(
+            normalized,
+            request.history,
+            include_history=direct_question_scope is QuestionScope.AMBIGUOUS,
+        )
         retrieval_started = time.perf_counter()
         try:
             evidence = tuple(
@@ -272,7 +292,10 @@ class RAGOrchestrator:
             )
         except AIServiceError as exc:
             trace.retrieval_ms = _elapsed_ms(retrieval_started)
-            if self._evidence_gate.allows_general_answer(policy):
+            if self._evidence_gate.allows_general_answer(
+                policy,
+                question_scope=question_scope,
+            ):
                 evidence = ()
                 trace.extra["retrieval_fallback_category"] = exc.category.value
                 trace.extra["retrieval_fallback_code"] = exc.code
@@ -294,11 +317,18 @@ class RAGOrchestrator:
             dict.fromkeys(item.version_id for item in evidence)
         )
 
-        pre_gate = self._evidence_gate.before_generation(policy, evidence)
+        pre_gate = self._evidence_gate.before_generation(
+            policy,
+            evidence,
+            question_scope=question_scope,
+        )
         if not pre_gate.allowed:
             trace.error_category = AIErrorCategory.SAFETY.value
             trace.extra["needs_human_review"] = pre_gate.needs_human_review
-            return _refused(pre_gate.refusal, trace)
+            return _refused(
+                _deduplicate_refusal(pre_gate.refusal, request.history),
+                trace,
+            )
 
         prompt = self._prompt_registry.get(self.config.prompt_version)
         messages = prompt.render(
@@ -307,6 +337,7 @@ class RAGOrchestrator:
             policy=policy,
             history=request.history,
             general_answer_allowed=pre_gate.general_answer_allowed,
+            question_scope=question_scope,
         )
         model_started = time.perf_counter()
         try:
@@ -326,11 +357,21 @@ class RAGOrchestrator:
         _add_completion_trace(trace, completion)
 
         display_answer, answer_presentation = _model_answer_for_display(completion.output)
+        display_answer, removed_lines = _deduplicate_continuation_answer(
+            display_answer,
+            request.history,
+            mode=conversation_mode(normalized, request.history),
+        )
+        if removed_lines:
+            answer_presentation = "deduplicated_continuation"
+            trace.extra["answer_deduplicated"] = True
+            trace.extra["deduplicated_line_count"] = removed_lines
         policy_output = completion.output.model_copy(update={"answer": display_answer})
         post_gate = self._evidence_gate.after_generation(
             policy,
             policy_output,
             pre_gate.evidence,
+            question_scope=question_scope,
         )
         if not post_gate.allowed:
             trace.error_category = AIErrorCategory.SAFETY.value
@@ -360,6 +401,7 @@ class RAGOrchestrator:
         policy: InputPolicyDecision,
         normalized: str,
         trace: _TraceState,
+        question_scope: QuestionScope,
     ) -> AIAnswer | None:
         if (
             not self.config.faq_fast_path_enabled
@@ -406,7 +448,11 @@ class RAGOrchestrator:
         if evidence is None:
             return None
 
-        pre_gate = self._evidence_gate.before_generation(policy, (evidence,))
+        pre_gate = self._evidence_gate.before_generation(
+            policy,
+            (evidence,),
+            question_scope=question_scope,
+        )
         if not pre_gate.allowed:
             trace.extra["faq_fast_path_rejected"] = (
                 pre_gate.refusal.code.value if pre_gate.refusal else "policy"
@@ -421,6 +467,7 @@ class RAGOrchestrator:
                 needs_human_review=pre_gate.needs_human_review,
             ),
             pre_gate.evidence,
+            question_scope=question_scope,
         )
         if not post_gate.allowed:
             trace.extra["faq_fast_path_rejected"] = (
@@ -465,6 +512,7 @@ AnswerPresentationMode = Literal[
     "metadata_markdown",
     "normalized_list",
     "source_text",
+    "deduplicated_continuation",
 ]
 
 
@@ -482,6 +530,58 @@ def _model_answer_for_display(
         return formatted, "structured_emphasis"
     presentation = "normalized_list" if formatted != output.answer.strip() else "source_text"
     return formatted, presentation
+
+
+def _deduplicate_continuation_answer(
+    answer: str,
+    history: Sequence[ChatMessage],
+    *,
+    mode: str,
+) -> tuple[str, int]:
+    if mode != "continuation" or not answer.strip():
+        return answer, 0
+    previous = next(
+        (item.content for item in reversed(history) if item.role == "assistant"),
+        "",
+    )
+    if not previous.strip():
+        return answer, 0
+
+    def normalized_line(value: str) -> str:
+        return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+
+    previous_lines = {
+        normalized
+        for line in previous.splitlines()
+        if (normalized := normalized_line(line))
+    }
+    answer_lines = answer.splitlines()
+    normalized_answer_lines = [normalized_line(line) for line in answer_lines]
+    repeated_indexes = {
+        index
+        for index, normalized in enumerate(normalized_answer_lines)
+        if len(normalized) >= 4 and normalized in previous_lines
+    }
+    repeated_chars = sum(
+        len(normalized_answer_lines[index]) for index in repeated_indexes
+    )
+    total_chars = sum(len(value) for value in normalized_answer_lines)
+    if repeated_chars < 40 or not total_chars or repeated_chars / total_chars < 0.5:
+        return answer, 0
+
+    kept: list[str] = []
+    for index, line in enumerate(answer_lines):
+        if index in repeated_indexes:
+            continue
+        if not line.strip() and (not kept or not kept[-1].strip()):
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    deduplicated = "\n".join(kept).strip()
+    if not normalized_line(deduplicated):
+        deduplicated = "与上一条结论一致，当前没有新增的可核验信息。"
+    return deduplicated, len(repeated_indexes)
 
 
 def _render_answer_presentation(presentation: AnswerPresentation) -> str:
@@ -670,6 +770,46 @@ def _refused(refusal: Refusal | None, trace: _TraceState) -> AIAnswer:
     )
 
 
+def _deduplicate_refusal(
+    refusal: Refusal | None,
+    history: Sequence[ChatMessage],
+) -> Refusal | None:
+    if refusal is None:
+        return None
+    previous = next(
+        (item.content for item in reversed(history) if item.role == "assistant"),
+        "",
+    )
+    current = " ".join(
+        part for part in (refusal.reason, refusal.safe_alternative) if part
+    )
+    def normalize(value: str) -> str:
+        return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+
+    if not previous or normalize(previous) != normalize(current):
+        return refusal
+    return Refusal(
+        code=refusal.code,
+        reason="与上一条结论一致，当前没有新增的可核验信息。",
+        retryable=refusal.retryable,
+    )
+
+
+def _scope_clarification(trace: _TraceState) -> AIAnswer:
+    trace.extra.update(
+        {
+            "interaction_kind": "scope_clarification",
+            "answer_presentation": "deterministic_clarification",
+        }
+    )
+    return AIAnswer(
+        answer="你是想了解当前企业的相关情况，还是询问通用知识？请补充一下具体对象。",
+        citations=(),
+        refusal=None,
+        trace=trace.finish(()),
+    )
+
+
 def _match_forbidden_topic(
     text: str,
     rules: Sequence[ForbiddenTopicPolicy],
@@ -745,7 +885,14 @@ def _elapsed_ms(started_at: float) -> int:
     return max(0, round((time.perf_counter() - started_at) * 1000))
 
 
-def _compose_retrieval_text(normalized: str, history: Sequence[ChatMessage]) -> str:
+def _compose_retrieval_text(
+    normalized: str,
+    history: Sequence[ChatMessage],
+    *,
+    include_history: bool,
+) -> str:
+    if not include_history:
+        return normalized
     previous_user_turns = [
         str(item.content).strip()[:300]
         for item in history

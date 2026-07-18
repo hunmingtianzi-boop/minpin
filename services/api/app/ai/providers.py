@@ -77,7 +77,8 @@ copy whose hierarchy is already fully expressed by titled list labels. Never
 emphasize an entire sentence, the company name merely because it is repeated,
 or connective wording.
 Use refusal_reason only when the request cannot be answered safely. Ordinary
-conversation does not require evidence. Never wrap the JSON in Markdown fences.
+conversation may omit evidence only when the server payload explicitly sets
+general_answer_allowed to true. Never wrap the JSON in Markdown fences.
 """.strip()
 
 _STRUCTURED_OUTPUT_REPAIR_INSTRUCTION = """

@@ -289,7 +289,7 @@ async def test_no_evidence_returns_refusal_without_calling_chat() -> None:
     orchestrator = RAGOrchestrator(chat, repository)
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="未知问题"),
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="企业未知业务"),
         chat_credentials=_credentials(),
     )
 
@@ -313,7 +313,11 @@ async def test_general_mode_answers_low_risk_question_without_evidence() -> None
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="什么是智能名片？"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="一般来说，什么是智能名片？",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -321,6 +325,7 @@ async def test_general_mode_answers_low_risk_question_without_evidence() -> None
     assert result.citations == ()
     assert len(chat.calls) == 1
     assert '"general_answer_allowed":true' in chat.calls[0][0][1].content
+    assert '"question_scope":"general"' in chat.calls[0][0][1].content
     assert "For every substantive explanation" in chat.calls[0][0][0].content
     assert "use presentation instead" in chat.calls[0][0][0].content
     assert "emphasize a whole" in chat.calls[0][0][0].content
@@ -338,7 +343,11 @@ async def test_general_chat_continues_when_knowledge_retrieval_is_unavailable() 
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="给我一个行动建议"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：给我一个行动建议",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -346,6 +355,151 @@ async def test_general_chat_continues_when_knowledge_retrieval_is_unavailable() 
     assert result.answer == "可以，先从明确目标开始。"
     assert result.citations == ()
     assert result.trace.extra["retrieval_fallback_code"] == "retrieval_failed"
+    assert len(chat.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_enterprise_question_cannot_use_general_mode_without_evidence() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="企业采用微服务架构。"))
+    repository = FakeRepository([])
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="拓浙有什么有意思的架构设计吗？",
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.code is RefusalCode.INSUFFICIENT_EVIDENCE
+    assert result.trace.extra["question_scope"] == "enterprise"
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_question_returns_clarification_without_model_or_retrieval() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused"))
+    repository = FakeRepository([])
+    orchestrator = RAGOrchestrator(
+        chat,
+        repository,
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="这个怎么理解？",
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert "当前企业" in result.answer
+    assert "通用知识" in result.answer
+    assert result.trace.retrieval_mode == "skipped"
+    assert result.trace.extra["question_scope"] == "ambiguous"
+    assert repository.calls == []
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_follow_up_inherits_enterprise_context_and_requires_evidence() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused"))
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="还有哪些？",
+            history=(
+                ChatMessage(role="user", content="这家企业有哪些业务？"),
+                ChatMessage(role="assistant", content="主要有企业服务。"),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.code is RefusalCode.INSUFFICIENT_EVIDENCE
+    assert result.trace.extra["question_scope"] == "enterprise"
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_evidence_refusal_is_reduced_to_a_continuity_message() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="unused"))
+    orchestrator = RAGOrchestrator(chat, FakeRepository([]))
+    previous = (
+        "当前已发布资料未说明这个企业信息，我不能补充或推测。 "
+        "你可以换个更具体的问法，或联系企业工作人员确认。"
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="企业还有哪些未知业务？",
+            history=(
+                ChatMessage(role="user", content="企业有哪些未知业务？"),
+                ChatMessage(role="assistant", content=previous),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is not None
+    assert result.refusal.reason == "与上一条结论一致，当前没有新增的可核验信息。"
+    assert result.refusal.safe_alternative is None
+    assert chat.calls == []
+
+
+@pytest.mark.asyncio
+async def test_new_general_question_breaks_out_of_enterprise_context() -> None:
+    chat = FakeChatProvider(StructuredModelAnswer(answer="我是一个 AI 助手。"))
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="你是人吗？",
+            history=(
+                ChatMessage(role="user", content="这家企业有哪些业务？"),
+                ChatMessage(role="assistant", content="主要有企业服务。"),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == "我是一个 AI 助手。"
+    assert result.trace.extra["question_scope"] == "general"
     assert len(chat.calls) == 1
 
 
@@ -497,7 +651,11 @@ async def test_dense_model_list_is_normalized_to_compact_markdown() -> None:
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="有哪些业务？"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：请把下面内容整理成列表",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -532,7 +690,11 @@ async def test_dense_action_and_process_answer_is_grouped_without_new_claims() -
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="如何合作？"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：请把下面说明整理成合作步骤",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -608,7 +770,11 @@ async def test_structured_presentation_renders_a_clear_mobile_hierarchy() -> Non
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="主要做什么？"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：请把下面内容排版成清晰结构",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -645,7 +811,11 @@ async def test_short_answer_emphasis_is_rendered_without_changing_api_shape() ->
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="简单介绍一下"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：请把下面一句话标出重点",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -712,7 +882,11 @@ async def test_structured_steps_facts_and_note_use_distinct_markdown_blocks() ->
     )
 
     result = await orchestrator.answer(
-        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="怎么推进？"),
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="问个通用问题：请把下面流程排版成步骤",
+        ),
         chat_credentials=_credentials(),
     )
 
@@ -787,6 +961,110 @@ async def test_follow_up_retrieval_uses_recent_user_context() -> None:
     assert "企业如何合作" in repository.calls[0].text
     prompt_text = "\n".join(message.content for message in chat.calls[0][0])
     assert "conversation_history" in prompt_text
+    assert '"conversation_mode":"continuation"' in prompt_text
+    assert "do not repeat the previous lead" in chat.calls[0][0][0].content
+
+
+@pytest.mark.asyncio
+async def test_explicit_restatement_allows_a_fresh_complete_answer() -> None:
+    repository = FakeRepository([_evidence("公开版分为四个协同板块。")])
+    chat = FakeChatProvider(
+        StructuredModelAnswer(
+            answer="公开版分为四个协同板块。",
+            cited_evidence_ids=["chunk-1"],
+        )
+    )
+    orchestrator = RAGOrchestrator(chat, repository)
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="请重新完整介绍一下企业业务",
+            history=(
+                ChatMessage(role="user", content="企业有哪些业务？"),
+                ChatMessage(role="assistant", content="企业有四个协同板块。"),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert '"conversation_mode":"restate"' in chat.calls[0][0][1].content
+
+
+@pytest.mark.asyncio
+async def test_continuation_removes_a_repeated_answer_block_but_keeps_new_context() -> None:
+    evidence = _evidence("公开版有四个协同板块，并围绕人才孵化与场景服务开展业务。")
+    previous = (
+        "拓浙公开版分为四个协同板块。\n\n"
+        "**四个协同板块**\n\n"
+        "- **平台：** 提供活动与项目入口\n"
+        "- **社群：** 承接训练、组队和实践\n"
+        "- **赛事：** 开展创新验证与成果展示\n"
+        "- **场景服务：** 推进产业共创"
+    )
+    repeated_block = (
+        "拓浙围绕人才孵化与场景服务开展业务。\n\n"
+        "**四个协同板块**\n\n"
+        "- **平台：** 提供活动与项目入口\n"
+        "- **社群：** 承接训练、组队和实践\n"
+        "- **赛事：** 开展创新验证与成果展示\n"
+        "- **场景服务：** 推进产业共创"
+    )
+    chat = FakeChatProvider(
+        StructuredModelAnswer(
+            answer=repeated_block,
+            cited_evidence_ids=["chunk-1"],
+        )
+    )
+    orchestrator = RAGOrchestrator(chat, FakeRepository([evidence]))
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="拓浙主要做什么业务？",
+            history=(
+                ChatMessage(role="user", content="拓浙有哪些业务板块？"),
+                ChatMessage(role="assistant", content=previous),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == "拓浙围绕人才孵化与场景服务开展业务。"
+    assert result.trace.extra["answer_deduplicated"] is True
+    assert "平台" not in result.answer
+
+
+@pytest.mark.asyncio
+async def test_direct_enterprise_question_does_not_pollute_retrieval_with_old_chat() -> None:
+    repository = FakeRepository([_evidence("公开版分为四个业务板块。")])
+    chat = FakeChatProvider(
+        StructuredModelAnswer(
+            answer="公开版分为四个业务板块。",
+            cited_evidence_ids=["chunk-1"],
+        )
+    )
+    orchestrator = RAGOrchestrator(chat, repository)
+
+    result = await orchestrator.answer(
+        RAGRequest(
+            tenant_id="tenant-1",
+            company_id="company-1",
+            question="拓浙有哪些业务？",
+            history=(
+                ChatMessage(role="user", content="你有病吧"),
+                ChatMessage(role="assistant", content="我们换个话题。"),
+            ),
+        ),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert repository.calls[0].text == "拓浙有哪些业务?"
 
 
 @pytest.mark.asyncio

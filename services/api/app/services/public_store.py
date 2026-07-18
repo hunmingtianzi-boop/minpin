@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -833,7 +833,19 @@ class PublicStore:
                         Message.status.in_([MessageStatus.COMPLETED, MessageStatus.REFUSED]),
                         Message.content != "",
                     )
-                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    # User and assistant rows are inserted in one transaction and
+                    # therefore usually share the exact same database timestamp.
+                    # UUID ordering is random, so make the reverse-chronological
+                    # query return assistant before user; reversing the result
+                    # below then always restores user -> assistant turn order.
+                    .order_by(
+                        Message.created_at.desc(),
+                        case(
+                            (Message.role == MessageRole.ASSISTANT, 1),
+                            else_=0,
+                        ).desc(),
+                        Message.id.desc(),
+                    )
                     .limit(max(0, min(limit, 12)))
                 )
             ).scalars().all()
