@@ -157,6 +157,94 @@ async def test_deepseek_defaults_and_structured_chat_request_hide_credentials() 
 
 
 @pytest.mark.asyncio
+async def test_chat_provider_accepts_structured_answer_presentation() -> None:
+    content = json.dumps(
+        {
+            "answer": "",
+            "presentation": {
+                "lead": "企业主要提供两类服务。",
+                "lead_emphasis": ["两类服务"],
+                "blocks": [
+                    {
+                        "type": "bullets",
+                        "title": "服务类型",
+                        "text": None,
+                        "items": [
+                            {"label": "人才服务", "text": None},
+                            {"label": "场景服务", "text": None},
+                        ],
+                    }
+                ],
+            },
+            "cited_evidence_ids": ["chunk-1"],
+            "refusal_reason": None,
+            "needs_human_review": False,
+        },
+        ensure_ascii=False,
+    )
+    transport = FakeTransport(
+        JsonHttpResponse(
+            200,
+            {"choices": [{"message": {"role": "assistant", "content": content}}]},
+        )
+    )
+    provider = OpenAICompatibleChatProvider(ChatProviderConfig(), transport=transport)
+
+    result = await provider.complete(
+        [ChatMessage(role="user", content="主要有哪些服务？")],
+        credentials=_credentials(),
+    )
+
+    assert result.output.answer == ""
+    assert result.output.presentation is not None
+    assert result.output.presentation.lead_emphasis == ["两类服务"]
+    assert result.output.presentation.blocks[0].title == "服务类型"
+    system_copy = transport.calls[0]["payload"]["messages"][0]["content"]
+    assert '"presentation": null' in system_copy
+    assert '"answer_emphasis": []' in system_copy
+    assert '"lead_emphasis": ["exact important phrase"]' in system_copy
+    assert "Long prose is never a short answer" in system_copy
+
+
+@pytest.mark.asyncio
+async def test_invalid_presentation_falls_back_to_complete_answer() -> None:
+    content = json.dumps(
+        {
+            "answer": "企业主要提供人才服务和场景服务。",
+            "presentation": {
+                "lead": "企业主要提供两类服务。",
+                "blocks": [
+                    {
+                        "type": "bullets",
+                        "title": None,
+                        "items": [{"text": "只有一个项目"}],
+                    }
+                ],
+            },
+            "cited_evidence_ids": [],
+            "refusal_reason": None,
+            "needs_human_review": False,
+        },
+        ensure_ascii=False,
+    )
+    transport = FakeTransport(
+        JsonHttpResponse(
+            200,
+            {"choices": [{"message": {"role": "assistant", "content": content}}]},
+        )
+    )
+    provider = OpenAICompatibleChatProvider(ChatProviderConfig(), transport=transport)
+
+    result = await provider.complete(
+        [ChatMessage(role="user", content="主要有哪些服务？")],
+        credentials=_credentials(),
+    )
+
+    assert result.output.answer == "企业主要提供人才服务和场景服务。"
+    assert result.output.presentation is None
+
+
+@pytest.mark.asyncio
 async def test_openai_json_schema_mode_can_disable_deepseek_thinking_field() -> None:
     transport = FakeTransport(
         JsonHttpResponse(
@@ -412,3 +500,79 @@ async def test_json_mode_retries_one_empty_response() -> None:
 
     assert result.output.answer == "Grounded"
     assert len(transport.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_json_mode_repairs_one_invalid_presentation_without_losing_usage() -> None:
+    invalid = json.dumps(
+        {
+            "answer": "",
+            "presentation": {
+                "lead": "企业有两类服务。",
+                "blocks": [
+                    {
+                        "type": "bullets",
+                        "title": None,
+                        "items": [{"text": "只有一个无标签项目"}],
+                    }
+                ],
+            },
+        },
+        ensure_ascii=False,
+    )
+    repaired = json.dumps(
+        {
+            "answer": "",
+            "presentation": {
+                "lead": "企业主要提供人才服务和场景服务。",
+                "lead_emphasis": ["人才服务", "场景服务"],
+                "blocks": [],
+            },
+        },
+        ensure_ascii=False,
+    )
+    transport = SequentialTransport(
+        [
+            JsonHttpResponse(
+                200,
+                {
+                    "choices": [{"finish_reason": "stop", "message": {"content": invalid}}],
+                    "usage": {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 8,
+                        "total_tokens": 18,
+                    },
+                },
+            ),
+            JsonHttpResponse(
+                200,
+                {
+                    "choices": [
+                        {"finish_reason": "stop", "message": {"content": repaired}}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 9,
+                        "total_tokens": 29,
+                    },
+                },
+            ),
+        ]
+    )
+    provider = OpenAICompatibleChatProvider(ChatProviderConfig(), transport=transport)
+
+    result = await provider.complete(
+        [ChatMessage(role="user", content="主要有哪些服务？")],
+        credentials=_credentials(),
+    )
+
+    assert result.output.presentation is not None
+    assert result.output.presentation.lead_emphasis == ["人才服务", "场景服务"]
+    assert result.usage.input_tokens == 30
+    assert result.usage.output_tokens == 17
+    assert result.usage.total_tokens == 47
+    assert len(transport.calls) == 2
+    repair_messages = transport.calls[1]["payload"]["messages"]
+    assert repair_messages[-2]["role"] == "assistant"
+    assert repair_messages[-1]["role"] == "user"
+    assert "same factual content" in repair_messages[-1]["content"]

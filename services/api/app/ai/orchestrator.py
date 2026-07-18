@@ -21,6 +21,8 @@ from .protocols import (
 )
 from .schemas import (
     AIAnswer,
+    AnswerPresentation,
+    AnswerPresentationBlock,
     ChatCompletion,
     ChatMessage,
     Citation,
@@ -323,9 +325,11 @@ class RAGOrchestrator:
         trace.model_ms = _elapsed_ms(model_started)
         _add_completion_trace(trace, completion)
 
+        display_answer, answer_presentation = _model_answer_for_display(completion.output)
+        policy_output = completion.output.model_copy(update={"answer": display_answer})
         post_gate = self._evidence_gate.after_generation(
             policy,
-            completion.output,
+            policy_output,
             pre_gate.evidence,
         )
         if not post_gate.allowed:
@@ -338,11 +342,12 @@ class RAGOrchestrator:
             for item in post_gate.evidence
         )
         trace.extra["needs_human_review"] = post_gate.needs_human_review
+        trace.extra["answer_presentation"] = answer_presentation
         trace.extra["cited_content_hashes"] = tuple(
             citation.content_hash for citation in citations if citation.content_hash
         )
         return AIAnswer(
-            answer=_format_answer_for_display(completion.output.answer),
+            answer=display_answer,
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),
@@ -454,10 +459,112 @@ _MARKDOWN_BLOCK_PATTERN = re.compile(
     r"(?m)^\s*(?:#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)"
 )
 
+AnswerPresentationMode = Literal[
+    "structured_blocks",
+    "structured_emphasis",
+    "metadata_markdown",
+    "normalized_list",
+    "source_text",
+]
+
+
+def _model_answer_for_display(
+    output: StructuredModelAnswer,
+) -> tuple[str, AnswerPresentationMode]:
+    if output.presentation is not None:
+        return _render_answer_presentation(output.presentation), "structured_blocks"
+    emphasized = _render_plain_text_with_emphasis(
+        output.answer,
+        output.answer_emphasis,
+    ) if output.answer_emphasis else output.answer
+    formatted = _format_answer_for_display(emphasized)
+    if output.answer_emphasis:
+        return formatted, "structured_emphasis"
+    presentation = "normalized_list" if formatted != output.answer.strip() else "source_text"
+    return formatted, presentation
+
+
+def _render_answer_presentation(presentation: AnswerPresentation) -> str:
+    sections = [
+        _render_plain_text_with_emphasis(
+            presentation.lead,
+            presentation.lead_emphasis,
+        )
+    ]
+    for block in presentation.blocks:
+        sections.append(_render_answer_block(block))
+    return "\n\n".join(section for section in sections if section)
+
+
+def _render_answer_block(block: AnswerPresentationBlock) -> str:
+    title = _markdown_label(block.title) if block.title else None
+    if block.type == "paragraph":
+        text = _render_plain_text_with_emphasis(str(block.text), block.emphasis)
+        return f"**{title}**\n\n{text}" if title else text
+    if block.type == "note":
+        prefix = f"**{title}：** " if title else ""
+        text = _render_plain_text_with_emphasis(str(block.text), block.emphasis)
+        return f"> {prefix}{text}"
+
+    marker = "{index}." if block.type == "steps" else "-"
+    items = []
+    for index, item in enumerate(block.items, start=1):
+        item_text = _markdown_copy(item.text or "")
+        if item.label and item.text:
+            item_text = f"**{_markdown_label(item.label)}：** {item_text}"
+        elif item.label:
+            item_text = f"**{_markdown_label(item.label)}**"
+        elif item.text:
+            item_text = _emphasize_inline_item_label(item.text)
+        items.append(f"{marker.format(index=index)} {item_text}")
+    return f"**{title}**\n\n" + "\n".join(items)
+
+
+def _emphasize_inline_item_label(value: str) -> str:
+    for separator in ("：", ":"):
+        if separator not in value:
+            continue
+        label, detail = (part.strip() for part in value.split(separator, 1))
+        if (
+            label
+            and detail
+            and len(label) <= 40
+            and not re.search(r"[，。；!?！？]", label)
+        ):
+            return f"**{_markdown_label(label)}：** {_markdown_copy(detail)}"
+    return _markdown_copy(value)
+
+
+def _render_plain_text_with_emphasis(value: str, emphasis: Sequence[str]) -> str:
+    terms = sorted(dict.fromkeys(emphasis), key=len, reverse=True)
+    if not terms:
+        return _markdown_copy(value)
+
+    pattern = re.compile("|".join(re.escape(term) for term in terms))
+    rendered: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(value):
+        rendered.append(_markdown_copy(value[cursor : match.start()]))
+        rendered.append(f"**{_markdown_copy(match.group(0))}**")
+        cursor = match.end()
+    rendered.append(_markdown_copy(value[cursor:]))
+    return "".join(rendered)
+
+
+def _markdown_copy(value: str) -> str:
+    escaped = value.replace("\\", "\\\\")
+    for token in ("*", "_", "`", "[", "]", "<", ">"):
+        escaped = escaped.replace(token, f"\\{token}")
+    return escaped
+
+
+def _markdown_label(value: str) -> str:
+    return _markdown_copy(value)
+
 
 def _faq_answer_for_display(
     evidence: RetrievedEvidence,
-) -> tuple[str, Literal["metadata_markdown", "normalized_list", "source_text"]]:
+) -> tuple[str, AnswerPresentationMode]:
     configured = evidence.metadata.get("answer_markdown")
     if isinstance(configured, str) and configured.strip():
         return configured.strip(), "metadata_markdown"

@@ -321,9 +321,9 @@ async def test_general_mode_answers_low_risk_question_without_evidence() -> None
     assert result.citations == ()
     assert len(chat.calls) == 1
     assert '"general_answer_allowed":true' in chat.calls[0][0][1].content
-    assert "Markdown is required whenever the answer contains two" in chat.calls[0][0][0].content
-    assert "**结论：** one direct sentence" in chat.calls[0][0][0].content
-    assert "never bold a whole sentence" in chat.calls[0][0][0].content
+    assert "For every substantive explanation" in chat.calls[0][0][0].content
+    assert "use presentation instead" in chat.calls[0][0][0].content
+    assert "emphasize a whole" in chat.calls[0][0][0].content
 
 
 @pytest.mark.asyncio
@@ -549,6 +549,187 @@ async def test_dense_action_and_process_answer_is_grouped_without_new_claims() -
 
 
 @pytest.mark.asyncio
+async def test_structured_presentation_renders_a_clear_mobile_hierarchy() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer.model_validate(
+            {
+                "answer": "",
+                "presentation": {
+                    "lead": "拓浙 AI 集团主要聚焦 AI 人才与项目孵化、AI 场景服务两大方向。",
+                    "lead_emphasis": ["AI 人才与项目孵化", "AI 场景服务"],
+                    "blocks": [
+                        {
+                            "type": "paragraph",
+                            "title": None,
+                            "text": (
+                                "集团连接青年人才、学习与项目组织、创新赛事和产业伙伴，"
+                                "让真实问题成为人才成长与应用验证的起点。"
+                            ),
+                            "emphasis": ["真实问题"],
+                            "items": [],
+                        },
+                        {
+                            "type": "bullets",
+                            "title": "四个协同板块",
+                            "text": None,
+                            "items": [
+                                {
+                                    "label": None,
+                                    "text": "拓途浙享：提供活动、内容与项目入口",
+                                },
+                                {
+                                    "label": None,
+                                    "text": "智能体学习与项目社群：承接训练、组队和实践",
+                                },
+                                {
+                                    "label": None,
+                                    "text": "浙客松：用于创新验证与成果展示",
+                                },
+                                {
+                                    "label": None,
+                                    "text": "AI 场景服务：推进产业需求诊断与原型验证",
+                                },
+                            ],
+                        },
+                    ],
+                },
+                "cited_evidence_ids": [],
+                "refusal_reason": None,
+                "needs_human_review": False,
+            }
+        )
+    )
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="主要做什么？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == (
+        "拓浙 AI 集团主要聚焦 **AI 人才与项目孵化**、**AI 场景服务**两大方向。\n\n"
+        "集团连接青年人才、学习与项目组织、创新赛事和产业伙伴，"
+        "让**真实问题**成为人才成长与应用验证的起点。\n\n"
+        "**四个协同板块**\n\n"
+        "- **拓途浙享：** 提供活动、内容与项目入口\n"
+        "- **智能体学习与项目社群：** 承接训练、组队和实践\n"
+        "- **浙客松：** 用于创新验证与成果展示\n"
+        "- **AI 场景服务：** 推进产业需求诊断与原型验证"
+    )
+    assert result.trace.extra["answer_presentation"] == "structured_blocks"
+
+
+@pytest.mark.asyncio
+async def test_short_answer_emphasis_is_rendered_without_changing_api_shape() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer.model_validate(
+            {
+                "answer": "企业成立于 2024 年，当前重点是 AI 场景服务。",
+                "answer_emphasis": ["2024 年", "AI 场景服务"],
+            }
+        )
+    )
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="简单介绍一下"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.answer == "企业成立于 **2024 年**，当前重点是 **AI 场景服务**。"
+    assert result.trace.extra["answer_presentation"] == "structured_emphasis"
+
+
+def test_emphasis_only_keeps_exact_bounded_terms_from_source_copy() -> None:
+    output = StructuredModelAnswer.model_validate(
+        {
+            "answer": "核心方向是 AI 场景服务，并涉及人才孵化、场景服务。",
+            "answer_emphasis": [
+                "AI 场景服务",
+                "不存在的概念",
+                "人才孵化、场景服务",
+            ],
+        }
+    )
+
+    assert output.answer_emphasis == ["AI 场景服务"]
+
+
+@pytest.mark.asyncio
+async def test_structured_steps_facts_and_note_use_distinct_markdown_blocks() -> None:
+    chat = FakeChatProvider(
+        StructuredModelAnswer.model_validate(
+            {
+                "presentation": {
+                    "lead": "可以按以下步骤推进。",
+                    "lead_emphasis": ["以下步骤"],
+                    "blocks": [
+                        {
+                            "type": "steps",
+                            "title": "办理步骤",
+                            "items": [
+                                {"label": "提交资料", "text": "填写合作需求"},
+                                {"label": "确认范围", "text": "完成场景评估"},
+                            ],
+                        },
+                        {
+                            "type": "facts",
+                            "title": "关键信息",
+                            "items": [
+                                {"label": "阶段", "text": "两步"},
+                                {"label": "结果", "text": "确认合作范围"},
+                            ],
+                        },
+                        {
+                            "type": "note",
+                            "title": "注意",
+                            "text": "具体周期需按项目另行确认。",
+                        },
+                    ],
+                }
+            }
+        )
+    )
+    orchestrator = RAGOrchestrator(
+        chat,
+        FakeRepository([]),
+        evidence_gate=EvidenceGate(
+            EvidenceGateConfig(allow_general_answers_without_evidence=True)
+        ),
+    )
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="怎么推进？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.refusal is None
+    assert result.answer == (
+        "可以按**以下步骤**推进。\n\n"
+        "**办理步骤**\n\n"
+        "1. **提交资料：** 填写合作需求\n"
+        "2. **确认范围：** 完成场景评估\n\n"
+        "**关键信息**\n\n"
+        "- **阶段：** 两步\n"
+        "- **结果：** 确认合作范围\n\n"
+        "> **注意：** 具体周期需按项目另行确认。"
+    )
+
+
+@pytest.mark.asyncio
 async def test_embedding_timeout_falls_back_to_lexical_retrieval() -> None:
     timeout = AIProviderError(
         "safe timeout",
@@ -628,6 +809,41 @@ async def test_unverified_price_from_model_is_withheld() -> None:
     assert result.refusal is not None
     assert result.refusal.code is RefusalCode.UNVERIFIED_PRICING
     assert result.trace.extra["needs_human_review"] is True
+
+
+@pytest.mark.asyncio
+async def test_unverified_price_inside_structured_blocks_is_withheld() -> None:
+    source = _evidence("标准版价格为 100 元/年。")
+    chat = FakeChatProvider(
+        StructuredModelAnswer.model_validate(
+            {
+                "presentation": {
+                    "lead": "标准版价格如下。",
+                    "blocks": [
+                        {
+                            "type": "facts",
+                            "title": "价格信息",
+                            "items": [
+                                {"label": "年费", "text": "120 元/年"},
+                                {"label": "版本", "text": "标准版"},
+                            ],
+                        }
+                    ],
+                },
+                "cited_evidence_ids": ["chunk-1"],
+            }
+        )
+    )
+    orchestrator = RAGOrchestrator(chat, FakeRepository([source]))
+
+    result = await orchestrator.answer(
+        RAGRequest(tenant_id="tenant-1", company_id="company-1", question="标准版价格？"),
+        chat_credentials=_credentials(),
+    )
+
+    assert result.answer == ""
+    assert result.refusal is not None
+    assert result.refusal.code is RefusalCode.UNVERIFIED_PRICING
 
 
 @pytest.mark.asyncio
