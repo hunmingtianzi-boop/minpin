@@ -568,6 +568,14 @@ export type ManagedCardInput = {
   policyVersions: ManagedCard["policyVersions"];
 };
 
+export type CardAssetUpload = {
+  url: string;
+  contentType: "image/webp";
+  width: number;
+  height: number;
+  sizeBytes: number;
+};
+
 export type PageResult<T> = {
   items: T[];
   total: number;

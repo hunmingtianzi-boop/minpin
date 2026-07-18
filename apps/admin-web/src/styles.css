@@ -1065,6 +1065,93 @@ a:hover {
   padding-bottom: 24px;
 }
 
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.card-image-upload {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  background: linear-gradient(135deg, var(--surface-subtle), var(--surface));
+}
+
+.card-image-preview {
+  width: 88px;
+  height: 88px;
+  flex: 0 0 88px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--colorNeutralStroke2);
+  border-radius: 50%;
+  background: var(--colorBrandBackground2);
+  color: var(--colorBrandForeground1);
+  font-size: 30px;
+  font-weight: 700;
+}
+
+.card-image-upload.enterprise .card-image-preview {
+  border-radius: 20px;
+}
+
+.card-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.card-image-upload-copy {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.card-image-upload-copy > span,
+.card-image-upload-copy > em {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.card-image-upload-copy > em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  color: var(--colorBrandForeground1);
+}
+
+.card-image-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+@media (max-width: 520px) {
+  .card-image-upload {
+    align-items: flex-start;
+  }
+
+  .card-image-preview {
+    width: 72px;
+    height: 72px;
+    flex-basis: 72px;
+  }
+}
+
 .immutable-resource-note {
   display: grid;
   gap: 5px;

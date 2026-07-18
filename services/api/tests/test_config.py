@@ -98,6 +98,8 @@ def test_production_requires_secure_auth_cookies_and_explicit_origins() -> None:
         "jwt_signing_key": "j" * 32,
         "field_encryption_key": "production-field-encryption-secret",
         "field_encryption_key_ref": "kms/pii/v1",
+        "object_storage_access_key": "production-access-key",
+        "object_storage_secret_key": "production-object-storage-secret",
         "llm_api_key": "provider-key",
         "metrics_bearer_token": "metrics-secret",
         "llm_input_price_cny_per_million": 1,

@@ -32,6 +32,38 @@ function tokenResponse() {
 }
 
 describe("adminApi real contract", () => {
+  it("uploads a card image as multipart and normalizes the stored asset", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(
+        jsonResponse({
+          data: {
+            url: "/api/v1/public/card-assets/company-1/asset-1.webp",
+            content_type: "image/webp",
+            width: 640,
+            height: 640,
+            size_bytes: 12_345,
+          },
+        }, 201),
+      );
+    const api = await authenticatedApi(fetcher);
+    const file = new File(["image"], "avatar.png", { type: "image/png" });
+
+    await expect(api.uploadCardAsset(file)).resolves.toEqual({
+      url: "/api/v1/public/card-assets/company-1/asset-1.webp",
+      contentType: "image/webp",
+      width: 640,
+      height: 640,
+      sizeBytes: 12_345,
+    });
+
+    const request = fetcher.mock.calls[1][1];
+    expect(request?.body).toBeInstanceOf(FormData);
+    expect((request?.body as FormData).get("file")).toBe(file);
+    expect((request?.headers as Headers).has("Content-Type")).toBe(false);
+  });
+
   it("reads the nested current-user contract", async () => {
     const fetcher = vi
       .fn<typeof fetch>()

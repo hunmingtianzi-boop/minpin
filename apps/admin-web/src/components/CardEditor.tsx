@@ -8,14 +8,22 @@ import {
   OverlayDrawer,
   Textarea,
 } from "@fluentui/react-components";
-import { Dismiss24Regular, Save24Regular } from "@fluentui/react-icons";
-import { useEffect, useState } from "react";
+import {
+  ArrowUpload24Regular,
+  Delete24Regular,
+  Dismiss24Regular,
+  Save24Regular,
+} from "@fluentui/react-icons";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { adminApi } from "../api/adminApi";
 import { ApiError } from "../api/client";
 import type { ManagedCard, ManagedCardInput } from "../api/types";
 import { FormFeedback } from "./FormFeedback";
+
+const MAX_CARD_IMAGE_BYTES = 5 * 1024 * 1024;
+const CARD_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function emptyCard(cardKind: ManagedCard["cardKind"]): ManagedCardInput {
   return {
@@ -78,15 +86,29 @@ export function CardEditor({
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<ApiError>();
+  const [imageFile, setImageFile] = useState<File>();
+  const [imagePreview, setImagePreview] = useState("");
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const input = item ? cardInput(item) : emptyCard(createKind);
     setForm(input);
     setQuestionsText(input.suggestedQuestions.join("\n"));
+    setImageFile(undefined);
     setAttempted(false);
     setError(undefined);
   }, [createKind, item, open]);
+
+  useEffect(() => {
+    if (!imageFile || typeof URL.createObjectURL !== "function") {
+      setImagePreview("");
+      return;
+    }
+    const preview = URL.createObjectURL(imageFile);
+    setImagePreview(preview);
+    return () => URL.revokeObjectURL(preview);
+  }, [imageFile]);
 
   const update = (field: keyof ManagedCardInput, value: string) => {
     setForm((current) => ({ ...current, [field]: value }));
@@ -115,6 +137,28 @@ export function CardEditor({
     Boolean(form.title.trim()) &&
     questionsValid;
 
+  const chooseImage = (file?: File) => {
+    if (!file) return;
+    setError(undefined);
+    if (!CARD_IMAGE_TYPES.has(file.type)) {
+      setError(
+        new ApiError("仅支持 PNG、JPEG 或 WebP 图片。", {
+          code: "CARD_ASSET_UNSUPPORTED_TYPE",
+        }),
+      );
+      return;
+    }
+    if (file.size > MAX_CARD_IMAGE_BYTES) {
+      setError(
+        new ApiError("图片不能超过 5 MiB。", {
+          code: "CARD_ASSET_TOO_LARGE",
+        }),
+      );
+      return;
+    }
+    setImageFile(file);
+  };
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setAttempted(true);
@@ -122,7 +166,14 @@ export function CardEditor({
     if (!valid || saving) return;
     setSaving(true);
     try {
-      const input = { ...form, suggestedQuestions: questions };
+      const uploaded = imageFile
+        ? await adminApi.uploadCardAsset(imageFile)
+        : undefined;
+      const input = {
+        ...form,
+        avatarUrl: uploaded?.url ?? form.avatarUrl,
+        suggestedQuestions: questions,
+      };
       if (item) {
         await adminApi.updateManagedCard(item.id, item.version, input);
       } else {
@@ -244,14 +295,76 @@ export function CardEditor({
             </div>
           )}
 
+          <section
+            className={`card-image-upload ${form.cardKind}`}
+            aria-label={form.cardKind === "enterprise" ? "企业 Logo" : "员工头像"}
+          >
+            <div className="card-image-preview">
+              {imagePreview || form.avatarUrl ? (
+                <img
+                  src={imagePreview || form.avatarUrl}
+                  alt={form.cardKind === "enterprise" ? "企业 Logo 预览" : "员工头像预览"}
+                />
+              ) : (
+                <span aria-hidden="true">
+                  {(form.displayName.trim() || (form.cardKind === "enterprise" ? "企" : "员"))
+                    .slice(0, 1)
+                    .toUpperCase()}
+                </span>
+              )}
+            </div>
+            <div className="card-image-upload-copy">
+              <strong>{form.cardKind === "enterprise" ? "企业 Logo" : "员工头像"}</strong>
+              <span>支持 PNG、JPEG、WebP，最大 5 MiB；保存时自动上传并压缩。</span>
+              {imageFile && <em>{imageFile.name}</em>}
+              <div className="card-image-upload-actions">
+                <input
+                  ref={imageInputRef}
+                  className="visually-hidden"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  aria-label={form.cardKind === "enterprise" ? "选择企业 Logo" : "选择员工头像"}
+                  disabled={saving}
+                  onChange={(event) => {
+                    chooseImage(event.target.files?.[0]);
+                    event.target.value = "";
+                  }}
+                />
+                <Button
+                  type="button"
+                  appearance="secondary"
+                  icon={<ArrowUpload24Regular />}
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={saving}
+                >
+                  选择图片
+                </Button>
+                {(imageFile || form.avatarUrl) && (
+                  <Button
+                    type="button"
+                    appearance="subtle"
+                    icon={<Delete24Regular />}
+                    onClick={() => {
+                      setImageFile(undefined);
+                      update("avatarUrl", "");
+                    }}
+                    disabled={saving}
+                  >
+                    移除
+                  </Button>
+                )}
+              </div>
+            </div>
+          </section>
+
           <div className="form-grid two-columns">
-            <Field
-              label={form.cardKind === "enterprise" ? "企业 Logo 地址" : "头像地址"}
-              hint="允许站内路径或公开 HTTPS 地址。"
-            >
+            <Field label="图片地址（可选）" hint="也可填写站内路径或公开 HTTPS 地址。">
               <Input
                 value={form.avatarUrl}
-                onChange={(_, data) => update("avatarUrl", data.value)}
+                onChange={(_, data) => {
+                  setImageFile(undefined);
+                  update("avatarUrl", data.value);
+                }}
                 disabled={saving}
               />
             </Field>

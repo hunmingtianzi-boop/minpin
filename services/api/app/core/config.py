@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     database_statement_timeout_ms: int = Field(default=8_000, ge=500, le=60_000)
     redis_url: str = "redis://localhost:6379/0"
 
+    object_storage_endpoint: str = "http://127.0.0.1:9000"
+    object_storage_region: str = "local"
+    object_storage_bucket: str = "cf-ai-card-local"
+    object_storage_access_key: str = "minioadmin"
+    object_storage_secret_key: SecretStr = SecretStr("change-me-local-only")
+    object_storage_secure: bool = False
+
     jwt_signing_key: SecretStr = SecretStr("replace-with-at-least-32-random-bytes")
     field_encryption_key: SecretStr = SecretStr("replace-with-kms-backed-key")
     field_encryption_key_ref: str = Field(default="local-v1", min_length=1, max_length=128)
@@ -170,6 +177,19 @@ class Settings(BaseSettings):
             raise ValueError("FIELD_ENCRYPTION_KEY_REF has an invalid format")
         return normalized
 
+    @field_validator("object_storage_bucket")
+    @classmethod
+    def validate_object_storage_bucket(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not 3 <= len(normalized) <= 63 or not all(
+            character.islower() or character.isdigit() or character in {"-", "."}
+            for character in normalized
+        ):
+            raise ValueError("OBJECT_STORAGE_BUCKET has an invalid format")
+        if normalized[0] in {"-", "."} or normalized[-1] in {"-", "."} or ".." in normalized:
+            raise ValueError("OBJECT_STORAGE_BUCKET has an invalid format")
+        return normalized
+
     @field_validator(
         "llm_api_key",
         "embedding_api_key",
@@ -281,6 +301,13 @@ class Settings(BaseSettings):
             if self.metrics_bearer_token is None:
                 raise ValueError(
                     "METRICS_BEARER_TOKEN is required outside local development"
+                )
+            if (
+                self.object_storage_access_key == "minioadmin"
+                or self.object_storage_secret_key.get_secret_value().startswith("change-me")
+            ):
+                raise ValueError(
+                    "OBJECT_STORAGE credentials must be configured outside local development"
                 )
             if not self.llm_api_key:
                 raise ValueError("LLM_API_KEY is required outside local development")

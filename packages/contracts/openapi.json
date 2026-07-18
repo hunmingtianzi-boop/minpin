@@ -4176,6 +4176,117 @@
         }
       }
     },
+    "/admin/card-assets": {
+      "post": {
+        "tags": [
+          "Card Assets"
+        ],
+        "summary": "Upload Card Asset",
+        "operationId": "uploadAdminCardAsset",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_uploadAdminCardAsset"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CardAssetEnvelope"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/public/card-assets/{company_id}/{asset_id}.webp": {
+      "get": {
+        "tags": [
+          "Card Assets"
+        ],
+        "summary": "Get Card Asset",
+        "operationId": "getPublicCardAsset",
+        "parameters": [
+          {
+            "name": "company_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Company Id"
+            }
+          },
+          {
+            "name": "asset_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Asset Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "image/webp": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/admin/content-distributions/{resource_type}/{resource_id}": {
       "get": {
         "tags": [
@@ -11339,6 +11450,20 @@
         ],
         "title": "Body_createKnowledgeImport"
       },
+      "Body_uploadAdminCardAsset": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_uploadAdminCardAsset"
+      },
       "Body_uploadPlatformOnboardingDocuments": {
         "properties": {
           "files": {
@@ -11574,6 +11699,61 @@
           "reason"
         ],
         "title": "CancelPlatformOnboardingRequest"
+      },
+      "CardAssetEnvelope": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CardAssetRecord"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "CardAssetEnvelope"
+      },
+      "CardAssetRecord": {
+        "properties": {
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type",
+            "default": "image/webp"
+          },
+          "width": {
+            "type": "integer",
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Width"
+          },
+          "height": {
+            "type": "integer",
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Height"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "maximum": 5242880.0,
+            "minimum": 1.0,
+            "title": "Size Bytes"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "url",
+          "width",
+          "height",
+          "size_bytes"
+        ],
+        "title": "CardAssetRecord"
       },
       "CardKind": {
         "type": "string",

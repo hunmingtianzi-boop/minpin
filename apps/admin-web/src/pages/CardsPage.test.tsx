@@ -160,6 +160,39 @@ describe("CardsPage", () => {
     expect(create.mock.calls[0][0]).toMatchObject({ cardKind: "employee" });
   });
 
+  it("uploads the selected employee image before saving the card", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(adminApi, "listManagedCards").mockResolvedValue([]);
+    const upload = vi.spyOn(adminApi, "uploadCardAsset").mockResolvedValue({
+      url: "/api/v1/public/card-assets/company-1/asset-1.webp",
+      contentType: "image/webp",
+      width: 640,
+      height: 640,
+      sizeBytes: 12_345,
+    });
+    const create = vi.spyOn(adminApi, "createManagedCard").mockResolvedValue(draftCard);
+    renderPage();
+
+    await screen.findByText("尚未创建名片");
+    await user.click(screen.getByRole("button", { name: "新建员工名片" }));
+    fireEvent.change(screen.getByRole("textbox", { name: /展示姓名/ }), {
+      target: { value: "林顾问" },
+    });
+    fireEvent.change(screen.getByRole("textbox", { name: /职务或头衔/ }), {
+      target: { value: "解决方案顾问" },
+    });
+    const file = new File(["image"], "avatar.png", { type: "image/png" });
+    await user.upload(screen.getByLabelText("选择员工头像"), file);
+    expect(screen.getByText("avatar.png")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "保存名片" }));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledWith(file));
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0].avatarUrl).toBe(
+      "/api/v1/public/card-assets/company-1/asset-1.webp",
+    );
+  });
+
   it("creates an enterprise official card without an employee owner", async () => {
     const user = userEvent.setup();
     const enterpriseCard: ManagedCard = {
@@ -190,6 +223,7 @@ describe("CardsPage", () => {
     expect(
       screen.queryByRole("textbox", { name: /所有者用户 ID/ }),
     ).not.toBeInTheDocument();
+    expect(screen.getByLabelText("选择企业 Logo")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "保存名片" }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
