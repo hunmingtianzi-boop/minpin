@@ -18,6 +18,7 @@ from app.api.platform_schemas import (
     EnterpriseRecord,
     PlatformAuditRecord,
     PlatformCompanyAggregate,
+    PlatformEnterpriseDeletionRecord,
     PlatformEnterpriseDetail,
     PlatformEnterpriseLifecycleRecord,
     PlatformOverviewRecord,
@@ -535,6 +536,98 @@ class PlatformStore:
                         f"enterprise.lifecycle:{record.company_id}:{record.version}"
                     ),
                     status=OutboxStatus.PENDING,
+                )
+            )
+            return record
+
+    async def delete_enterprise(
+        self,
+        *,
+        actor: PlatformActor,
+        company_id: uuid.UUID,
+        expected_version: int,
+        trace_id: str | None,
+    ) -> PlatformEnterpriseDeletionRecord:
+        """Soft-delete a standalone enterprise and revoke all access immediately."""
+
+        if actor.role != MembershipRole.PLATFORM_ADMIN.value:
+            raise ApiError(403, "FORBIDDEN", "仅平台管理员可删除企业")
+        async with self._sessions() as session, session.begin():
+            await set_rls_context(
+                session,
+                tenant_id=actor.tenant_id,
+                company_id=actor.company_id,
+                actor_user_id=actor.user_id,
+                actor_session_id=actor.session_id,
+            )
+            payload = _json_object(
+                await session.scalar(
+                    text(
+                        "SELECT app.platform_operations_delete_enterprise("
+                        ":company_id, :expected_version)"
+                    ),
+                    {"company_id": company_id, "expected_version": expected_version},
+                )
+            )
+            outcome = payload.get("outcome")
+            if outcome == "not_found":
+                raise ApiError(404, "ENTERPRISE_NOT_FOUND", "企业不存在或已删除")
+            if outcome == "shared_tenant":
+                raise ApiError(
+                    409,
+                    "ENTERPRISE_DELETE_SHARED_TENANT",
+                    "该租户包含多个企业，不能整体删除",
+                )
+            if outcome == "version_conflict":
+                raise ApiError(409, "VERSION_CONFLICT", "企业状态已变化，请刷新后重试")
+            if outcome != "succeeded":
+                raise RuntimeError("enterprise deletion function returned an invalid outcome")
+
+            record = PlatformEnterpriseDeletionRecord.model_validate(
+                {
+                    "tenant_id": payload.get("tenant_id"),
+                    "company_id": payload.get("company_id"),
+                    "version": payload.get("version"),
+                    "deleted_at": payload.get("deleted_at"),
+                }
+            )
+            event_data = {
+                "version": record.version,
+                "access_revoked": True,
+                "public_cards_archived": True,
+            }
+            previous_hash = payload.get("previous_audit_hash")
+            audit_payload = {
+                "tenant_id": str(record.tenant_id),
+                "company_id": str(record.company_id),
+                "actor_user_id": str(actor.user_id),
+                "action": "platform.enterprise.delete",
+                "resource_type": "company",
+                "resource_id": str(record.company_id),
+                "trace_id": trace_id,
+                "event_data": event_data,
+                "previous_hash": previous_hash,
+            }
+            await session.execute(
+                insert(AuditLog).values(
+                    id=uuid.uuid4(),
+                    tenant_id=record.tenant_id,
+                    company_id=record.company_id,
+                    actor_user_id=actor.user_id,
+                    action="platform.enterprise.delete",
+                    resource_type="company",
+                    resource_id=record.company_id,
+                    trace_id=trace_id,
+                    event_data=event_data,
+                    previous_hash=previous_hash,
+                    entry_hash=hashlib.sha256(
+                        json.dumps(
+                            audit_payload,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ).hexdigest(),
                 )
             )
             return record

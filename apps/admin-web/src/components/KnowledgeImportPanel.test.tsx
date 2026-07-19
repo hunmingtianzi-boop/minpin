@@ -83,4 +83,19 @@ describe("KnowledgeImportPanel", () => {
     await user.click(await screen.findByRole("button", { name: "查看结果" }));
     expect(await screen.findByText("错误码：CSV_RAW_TEXT_REQUIRED")).toBeInTheDocument();
   });
+
+  it("deletes a failed import batch without removing successful drafts", async () => {
+    const user = userEvent.setup();
+    vi.mocked(knowledgeImportsApi.list).mockResolvedValue({
+      items: [{ ...batch, items: [] }], total: 1, limit: 20, offset: 0,
+    });
+    const remove = vi.spyOn(knowledgeImportsApi, "deleteBatch").mockResolvedValue();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: "删除失败项" }));
+    expect(screen.getByText(/已成功生成的知识草稿不会被删除/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "删除批次" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("batch-1"));
+  });
 });

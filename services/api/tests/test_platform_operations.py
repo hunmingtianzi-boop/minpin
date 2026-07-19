@@ -16,6 +16,7 @@ from app.api.platform_schemas import (
     PlatformAuditRecord,
     PlatformCardProjection,
     PlatformCompanyAggregate,
+    PlatformEnterpriseDeletionRecord,
     PlatformEnterpriseDetail,
     PlatformEnterpriseLifecycleRecord,
     PlatformOverviewRecord,
@@ -167,6 +168,15 @@ class RouteStore:
             updated_at=self.now,
         )
 
+    async def delete_enterprise(self, **kwargs: Any) -> PlatformEnterpriseDeletionRecord:
+        self.calls.append(("delete", kwargs))
+        return PlatformEnterpriseDeletionRecord(
+            tenant_id=uuid.uuid4(),
+            company_id=self.company_id,
+            version=4,
+            deleted_at=self.now,
+        )
+
 
 def test_platform_share_base_requires_explicit_opt_in_for_remote_http() -> None:
     public_base = "http://47.83.235.176"
@@ -220,10 +230,9 @@ def test_platform_operations_expose_only_the_frozen_read_surface(
     paths = client.app.openapi()["paths"]
 
     assert paths["/api/v1/platform/overview"]["get"]["operationId"] == "getPlatformOverview"
-    assert (
-        paths["/api/v1/platform/enterprises/{company_id}"]["get"]["operationId"]
-        == "getPlatformEnterpriseDetail"
-    )
+    enterprise_detail = paths["/api/v1/platform/enterprises/{company_id}"]
+    assert enterprise_detail["get"]["operationId"] == "getPlatformEnterpriseDetail"
+    assert enterprise_detail["delete"]["operationId"] == "deletePlatformEnterprise"
     assert set(paths["/api/v1/platform/enterprises"]) == {"get", "post"}
     assert set(paths["/api/v1/platform/enterprises/{company_id}/status"]) == {"put"}
     assert set(paths["/api/v1/platform/company-aggregates"]) == {"get"}
@@ -358,6 +367,37 @@ def test_lifecycle_transition_rejects_non_platform_admin_before_store_access(
             "target_status": "suspended",
             "reason": "合同到期",
         },
+    )
+
+    assert response.status_code == 403
+    assert store.calls == []
+
+
+def test_delete_requires_current_version_and_removes_enterprise(
+    route_client: tuple[TestClient, RouteStore, dict[str, StaffPrincipal]],
+) -> None:
+    client, store, _ = route_client
+
+    response = client.delete(
+        f"/api/v1/platform/enterprises/{store.company_id}",
+        headers={"If-Match": '"3"'},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["company_id"] == str(store.company_id)
+    call = next(payload for name, payload in store.calls if name == "delete")
+    assert call["expected_version"] == 3
+
+
+def test_delete_rejects_non_platform_admin_before_store_access(
+    route_client: tuple[TestClient, RouteStore, dict[str, StaffPrincipal]],
+) -> None:
+    client, store, principal_box = route_client
+    principal_box["value"] = _principal("company_admin")
+
+    response = client.delete(
+        f"/api/v1/platform/enterprises/{store.company_id}",
+        headers={"If-Match": '"3"'},
     )
 
     assert response.status_code == 403

@@ -114,6 +114,19 @@ describe("platformApi", () => {
     );
   });
 
+  it("deletes an enterprise with optimistic concurrency", async () => {
+    const client = {
+      delete: vi.fn().mockResolvedValue({ data: {} }),
+    } as unknown as ApiClient;
+
+    await createPlatformApi(client).deleteEnterprise("company/1", 3);
+
+    expect(client.delete).toHaveBeenCalledWith(
+      "/platform/enterprises/company%2F1",
+      { version: 3 },
+    );
+  });
+
   it("strictly normalizes the overview allowlist", async () => {
     const client = {
       get: vi.fn().mockResolvedValue({

@@ -174,6 +174,17 @@ class PlatformEnterpriseLifecycleEnvelope(PlatformModel):
     data: PlatformEnterpriseLifecycleRecord
 
 
+class PlatformEnterpriseDeletionRecord(PlatformModel):
+    tenant_id: uuid.UUID
+    company_id: uuid.UUID
+    version: int = Field(ge=1)
+    deleted_at: datetime
+
+
+class PlatformEnterpriseDeletionEnvelope(PlatformModel):
+    data: PlatformEnterpriseDeletionRecord
+
+
 class PlatformOverviewRecord(PlatformModel):
     generated_at: datetime
     enterprise_count: int = Field(ge=0)
@@ -513,6 +524,8 @@ __all__ = [
     "PlatformCompanyAggregateListEnvelope",
     "PlatformEnterpriseDetail",
     "PlatformEnterpriseDetailEnvelope",
+    "PlatformEnterpriseDeletionEnvelope",
+    "PlatformEnterpriseDeletionRecord",
     "PlatformEnterpriseLifecycleEnvelope",
     "PlatformEnterpriseLifecycleRecord",
     "PlatformLlmConnectionTestEnvelope",

@@ -625,6 +625,13 @@ export function createPlatformApi(client: ApiClient) {
       );
     },
 
+    async deleteEnterprise(companyId: string, version: number): Promise<void> {
+      await client.delete(
+        `/platform/enterprises/${encodeURIComponent(companyId)}`,
+        { version },
+      );
+    },
+
     async listCompanyAggregates(): Promise<PlatformCompanyAggregate[]> {
       const values = unwrapData(
         await client.get("/platform/company-aggregates?limit=100&offset=0"),

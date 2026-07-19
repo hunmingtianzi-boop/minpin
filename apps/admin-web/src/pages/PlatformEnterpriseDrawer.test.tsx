@@ -147,4 +147,17 @@ describe("PlatformEnterpriseDrawer", () => {
       });
     });
   });
+
+  it("deletes an enterprise after explicit confirmation", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(platformApi, "getEnterpriseDetail").mockResolvedValue(detail);
+    const remove = vi.spyOn(platformApi, "deleteEnterprise").mockResolvedValue();
+    render(<Harness />);
+
+    await user.click(await screen.findByRole("button", { name: "删除企业" }));
+    expect(screen.getByText(/成员账号和现有会话会被停用/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认删除企业" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledWith("company-1", 3));
+  });
 });

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Request, status
+from fastapi import APIRouter, Depends, Header, Query, Request, status
 
 from app.api.dependencies import get_staff_principal
 from app.api.errors import ApiError
@@ -11,15 +11,18 @@ from app.api.platform_schemas import (
     CreateEnterpriseRequest,
     EnterpriseEnvelope,
     EnterpriseListEnvelope,
+    PlatformEnterpriseDeletionEnvelope,
     PlatformEnterpriseLifecycleEnvelope,
     TransitionPlatformEnterpriseRequest,
 )
+from app.api.routes.admin import parse_if_match
 from app.core.request_context import request_id_ctx
 from app.core.tokens import StaffPrincipal
 from app.services.platform_store import PlatformActor, PlatformStore
 
 router = APIRouter(prefix="/platform/enterprises", tags=["Platform Administration"])
 StaffDependency = Annotated[StaffPrincipal, Depends(get_staff_principal)]
+IfMatchDependency = Annotated[str, Header(alias="If-Match")]
 
 
 def _store(request: Request) -> PlatformStore:
@@ -109,6 +112,28 @@ async def transition_enterprise(
         trace_id=request_id_ctx.get(),
     )
     return PlatformEnterpriseLifecycleEnvelope(data=record)
+
+
+@router.delete(
+    "/{company_id}",
+    response_model=PlatformEnterpriseDeletionEnvelope,
+    operation_id="deletePlatformEnterprise",
+)
+async def delete_enterprise(
+    company_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+    if_match: IfMatchDependency,
+) -> PlatformEnterpriseDeletionEnvelope:
+    if str(getattr(principal.role, "value", principal.role)) != "platform_admin":
+        raise ApiError(403, "FORBIDDEN", "仅平台管理员可删除企业")
+    record = await _store(request).delete_enterprise(
+        actor=_actor(principal),
+        company_id=company_id,
+        expected_version=parse_if_match(if_match),
+        trace_id=request_id_ctx.get(),
+    )
+    return PlatformEnterpriseDeletionEnvelope(data=record)
 
 
 __all__ = ["router"]

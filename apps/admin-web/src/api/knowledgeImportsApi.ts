@@ -216,6 +216,10 @@ export function createKnowledgeImportsApi(client: ApiClient = apiClient) {
         unwrapData(await client.get(`/admin/knowledge/imports/${encodeURIComponent(id)}`)),
       );
     },
+
+    async deleteBatch(id: string): Promise<void> {
+      await client.delete(`/admin/knowledge/imports/${encodeURIComponent(id)}`);
+    },
   };
 }
 

@@ -161,20 +161,66 @@ def decode_draft(payload: bytes) -> ImportDraft:
 
 
 def _parse_pdf(file_name: str, payload: bytes) -> ImportDraft:
+    text = ""
+    page_count: int | None = None
     try:
-        reader = PdfReader(io.BytesIO(payload), strict=True)
+        # Some perfectly viewable PDFs contain non-standard cross-reference
+        # tables.  Tolerant parsing keeps those documents importable, while
+        # the independent PyMuPDF fallback below still rejects invalid files.
+        reader = PdfReader(io.BytesIO(payload), strict=False)
         if reader.is_encrypted:
             raise KnowledgeImportError("IMPORT_ENCRYPTED_PDF")
-        if len(reader.pages) > MAX_PDF_PAGES:
+        page_count = len(reader.pages)
+        if page_count > MAX_PDF_PAGES:
             raise KnowledgeImportError("IMPORT_PDF_TOO_MANY_PAGES")
         text = "\n\n".join((page.extract_text() or "").strip() for page in reader.pages).strip()
     except KnowledgeImportError:
         raise
+    except Exception:
+        # PyMuPDF accepts a number of PDFs that pypdf cannot recover.  Do not
+        # fail until both local parsers have rejected the upload.
+        page_count = None
+
+    if page_count is None or len(text) < 80:
+        try:
+            fallback_text, fallback_page_count = _extract_pdf_text_with_fitz(payload)
+            page_count = fallback_page_count
+            if len(fallback_text) > len(text):
+                text = fallback_text
+        except KnowledgeImportError:
+            if page_count is None:
+                raise
+
+    if page_count is None:
+        raise KnowledgeImportError("IMPORT_PDF_INVALID")
+    if len(text) < 80:
+        text = _ocr_pdf(payload, max_pages=min(MAX_OCR_PAGES, page_count))
+    return _validated_draft(file_name.rsplit(".", 1)[0], text, "public")
+
+
+def _extract_pdf_text_with_fitz(payload: bytes) -> tuple[str, int]:
+    """Extract selectable text with a parser that is tolerant of damaged xref data."""
+
+    try:
+        import fitz
+
+        document = fitz.open(stream=payload, filetype="pdf")
+        try:
+            if document.needs_pass:
+                raise KnowledgeImportError("IMPORT_ENCRYPTED_PDF")
+            if document.page_count > MAX_PDF_PAGES:
+                raise KnowledgeImportError("IMPORT_PDF_TOO_MANY_PAGES")
+            values = [
+                (document.load_page(page_number).get_text("text") or "").strip()
+                for page_number in range(document.page_count)
+            ]
+            return "\n\n".join(value for value in values if value).strip(), document.page_count
+        finally:
+            document.close()
+    except KnowledgeImportError:
+        raise
     except Exception as exc:
         raise KnowledgeImportError("IMPORT_PDF_INVALID") from exc
-    if len(text) < 80:
-        text = _ocr_pdf(payload, max_pages=min(MAX_OCR_PAGES, len(reader.pages)))
-    return _validated_draft(file_name.rsplit(".", 1)[0], text, "public")
 
 
 def _parse_docx(file_name: str, payload: bytes) -> ImportDraft:
@@ -431,11 +477,22 @@ def _ocr_pdf(payload: bytes, *, max_pages: int) -> str:
         document = fitz.open(stream=payload, filetype="pdf")
         try:
             values: list[str] = []
+            errors: list[KnowledgeImportError] = []
             for page_number in range(min(document.page_count, max_pages)):
-                page = document.load_page(page_number)
-                pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
-                values.append(_ocr_image(pixmap.tobytes("png")))
-            return "\n\n".join(value for value in values if value).strip()
+                try:
+                    page = document.load_page(page_number)
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5), alpha=False)
+                    values.append(_ocr_image(pixmap.tobytes("png")))
+                except KnowledgeImportError as exc:
+                    # A blank or damaged page must not discard text recognized
+                    # from the remaining pages in the same PDF.
+                    errors.append(exc)
+            text = "\n\n".join(value for value in values if value).strip()
+            if text:
+                return text
+            if errors:
+                raise errors[0]
+            raise KnowledgeImportError("IMPORT_OCR_EMPTY")
         finally:
             document.close()
     except KnowledgeImportError:

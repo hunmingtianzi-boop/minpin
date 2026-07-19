@@ -22,6 +22,7 @@ import { ApiError } from "../api/client";
 import { platformApi } from "../api/platformApi";
 import type { PlatformCardProjection } from "../api/types";
 import { FormFeedback } from "../components/FormFeedback";
+import { ActionConfirmDialog } from "../components/ActionConfirmDialog";
 import { ResourceState } from "../components/ResourceState";
 import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
@@ -137,6 +138,9 @@ export function PlatformEnterpriseDrawer({
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   const [lifecycleError, setLifecycleError] = useState<ApiError>();
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<ApiError>();
 
   const close = () => {
     onClose();
@@ -168,6 +172,25 @@ export function PlatformEnterpriseDrawer({
       );
     } finally {
       setSaving(false);
+    }
+  };
+  const deleteEnterprise = async () => {
+    if (!detail || deleting) return;
+    setDeleting(true);
+    setDeleteError(undefined);
+    try {
+      await platformApi.deleteEnterprise(detail.companyId, detail.version);
+      setDeleteOpen(false);
+      onChanged?.();
+      close();
+    } catch (caught) {
+      setDeleteError(
+        caught instanceof ApiError
+          ? caught
+          : new ApiError("删除企业失败。", { code: "UNKNOWN_ERROR" }),
+      );
+    } finally {
+      setDeleting(false);
     }
   };
   const metrics = detail
@@ -311,6 +334,16 @@ export function PlatformEnterpriseDrawer({
                   >
                     {lifecycleLabel}
                   </Button>
+                  <Button
+                    appearance="secondary"
+                    className="danger-button"
+                    onClick={() => {
+                      setDeleteError(undefined);
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    删除企业
+                  </Button>
                 </div>
               </section>
             )}
@@ -372,6 +405,20 @@ export function PlatformEnterpriseDrawer({
           </DialogBody>
         </DialogSurface>
       </Dialog>
+      <ActionConfirmDialog
+        open={deleteOpen}
+        title="删除企业"
+        description={`确认删除“${detail?.companyName ?? "该企业"}”吗？企业将从企业中心移除。`}
+        detail={<p>企业名片会立即下线，成员账号和现有会话会被停用。历史数据仅为审计留存，无法恢复。</p>}
+        confirmLabel="确认删除企业"
+        pendingLabel="正在删除"
+        pending={deleting}
+        error={deleteError}
+        destructive
+        onCancel={() => !deleting && setDeleteOpen(false)}
+        onConfirm={() => void deleteEnterprise()}
+        onReload={resource.reload}
+      />
     </OverlayDrawer>
   );
 }

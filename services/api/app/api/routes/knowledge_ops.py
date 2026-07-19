@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, Response, UploadFile, status
 
 from app.api.admin_schemas import (
     CreateKnowledgeDocumentRequest,
@@ -177,6 +177,26 @@ async def get_knowledge_import(
             scope=_import_scope(principal), batch_id=batch_id
         )
     )
+
+
+@router.delete(
+    "/admin/knowledge/imports/{batch_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    operation_id="deleteKnowledgeImport",
+)
+async def delete_knowledge_import(
+    batch_id: uuid.UUID,
+    request: Request,
+    principal: StaffDependency,
+) -> Response:
+    _require_permission(principal, "knowledge.write")
+    await _import_store(request).delete_batch(
+        scope=_import_scope(principal),
+        batch_id=batch_id,
+        trace_id=request_id_ctx.get(),
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/admin/faqs", response_model=FaqListEnvelope, operation_id="listAdminFaqs")

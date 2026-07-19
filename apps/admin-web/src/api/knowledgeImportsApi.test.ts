@@ -68,4 +68,17 @@ describe("knowledgeImportsApi", () => {
       items: [{ fileName: "knowledge.pdf", documentId: "document-1" }],
     });
   });
+
+  it("deletes a settled import batch", async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ data: { access_token: "access", csrf_token: "csrf" } }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    const client = new ApiClient({ baseUrl: "https://api.example.test", fetcher });
+    await client.login("admin", "password");
+
+    await createKnowledgeImportsApi(client).deleteBatch("batch/1");
+
+    expect(fetcher.mock.calls[1][0]).toBe("https://api.example.test/admin/knowledge/imports/batch%2F1");
+    expect(fetcher.mock.calls[1][1]?.method).toBe("DELETE");
+  });
 });

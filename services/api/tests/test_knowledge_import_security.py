@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import sys
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 from docx import Document
@@ -9,6 +11,7 @@ from openpyxl import Workbook
 from pptx import Presentation
 from pypdf import PdfWriter
 
+from app.services import knowledge_import as knowledge_import_module
 from app.services.knowledge_import import (
     KnowledgeImportError,
     parse_payload,
@@ -100,6 +103,69 @@ def test_encrypted_pdf_and_mime_magic_mismatches_are_rejected() -> None:
         validate_upload("file.pdf", "text/plain", b"%PDF-1.7")
     with pytest.raises(KnowledgeImportError, match="IMPORT_MAGIC_MISMATCH"):
         validate_upload("file.pdf", "application/pdf", b"not-a-pdf")
+
+
+def test_pdf_uses_pymupdf_fallback_when_pypdf_cannot_recover_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        knowledge_import_module,
+        "PdfReader",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("broken xref")),
+    )
+    monkeypatch.setattr(
+        knowledge_import_module,
+        "_extract_pdf_text_with_fitz",
+        lambda _payload: ("fallback text " * 10, 1),
+    )
+
+    draft = parse_payload("pdf", "fallback.pdf", b"%PDF-1.7 malformed")[0]
+
+    assert draft.raw_text.startswith("fallback text")
+
+
+def test_pdf_ocr_keeps_text_from_pages_after_a_blank_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Pixmap:
+        def __init__(self, page_number: int) -> None:
+            self.page_number = page_number
+
+        def tobytes(self, _format: str) -> bytes:
+            return str(self.page_number).encode()
+
+    class _Page:
+        def __init__(self, page_number: int) -> None:
+            self.page_number = page_number
+
+        def get_pixmap(self, **_kwargs: object) -> _Pixmap:
+            return _Pixmap(self.page_number)
+
+    class _Document:
+        page_count = 2
+
+        def load_page(self, page_number: int) -> _Page:
+            return _Page(page_number)
+
+        def close(self) -> None:
+            pass
+
+    fake_fitz = SimpleNamespace(
+        open=lambda **_kwargs: _Document(),
+        Matrix=lambda *_args: object(),
+    )
+    monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
+    calls = iter([KnowledgeImportError("IMPORT_OCR_EMPTY"), "识别出的第二页文本"])
+
+    def fake_ocr(_payload: bytes) -> str:
+        result = next(calls)
+        if isinstance(result, KnowledgeImportError):
+            raise result
+        return result
+
+    monkeypatch.setattr(knowledge_import_module, "_ocr_image", fake_ocr)
+
+    assert knowledge_import_module._ocr_pdf(b"%PDF-1.7", max_pages=2) == "识别出的第二页文本"
 
 
 def test_office_and_html_formats_extract_text_without_network_access() -> None:

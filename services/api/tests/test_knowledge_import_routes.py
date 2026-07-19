@@ -43,6 +43,9 @@ class _Store:
         self.calls.append(("list", kwargs))
         return [self.record], 1
 
+    async def delete_batch(self, **kwargs: Any) -> None:
+        self.calls.append(("delete", kwargs))
+
 
 def _principal(role: str, permissions: tuple[str, ...] = ()) -> StaffPrincipal:
     return StaffPrincipal(
@@ -116,6 +119,15 @@ def test_upload_rejects_unsupported_file_and_missing_permission(client) -> None:
         files={"files": ("bulk.csv", b"raw_text\ncontent\n", "text/csv")},
     )
     assert response.status_code == 403
+
+
+def test_settled_import_batch_can_be_deleted(client) -> None:
+    test_client, store, _ = client
+    response = test_client.delete(f"/api/v1/admin/knowledge/imports/{store.record.id}")
+
+    assert response.status_code == 204
+    call = next(payload for name, payload in store.calls if name == "delete")
+    assert call["batch_id"] == store.record.id
 
 
 @pytest.mark.asyncio

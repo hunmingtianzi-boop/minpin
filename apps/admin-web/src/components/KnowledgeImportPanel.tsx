@@ -26,6 +26,7 @@ import {
 import { AuthContext } from "../auth/AuthContext";
 import { hasPermission } from "../auth/permissions";
 import { OperationFeedback } from "./OperationFeedback";
+import { ActionConfirmDialog } from "./ActionConfirmDialog";
 import { ResourceState } from "./ResourceState";
 import { useResource } from "../hooks/useResource";
 import { formatTimestamp } from "../utils/format";
@@ -93,6 +94,10 @@ function isActive(batch: KnowledgeImportBatch): boolean {
   return batch.status === "pending" || batch.status === "processing";
 }
 
+function canDeleteBatch(batch: KnowledgeImportBatch): boolean {
+  return batch.failedItems > 0 || batch.status === "failed" || batch.status === "dead_letter";
+}
+
 function ImportDetail({ batch }: { batch: KnowledgeImportBatch }) {
   const completed = batch.succeededItems + batch.failedItems;
   const progress = batch.totalItems > 0 ? completed / batch.totalItems : 0;
@@ -149,6 +154,9 @@ export function KnowledgeImportPanel() {
   const [validationError, setValidationError] = useState<string>();
   const [operationError, setOperationError] = useState<ApiError>();
   const [notice, setNotice] = useState<string>();
+  const [deleteTarget, setDeleteTarget] = useState<KnowledgeImportBatch>();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<ApiError>();
 
   useEffect(() => {
     const active = resource.data?.items.some(isActive) || (selectedBatch && isActive(selectedBatch));
@@ -208,6 +216,23 @@ export function KnowledgeImportPanel() {
     }
   };
 
+  const deleteBatch = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    setDeleteError(undefined);
+    try {
+      await knowledgeImportsApi.deleteBatch(deleteTarget.id);
+      if (selectedBatch?.id === deleteTarget.id) setSelectedBatch(undefined);
+      setNotice("失败的导入批次已删除，已生成的知识草稿不会受影响。");
+      setDeleteTarget(undefined);
+      resource.reload();
+    } catch (caught) {
+      setDeleteError(asApiError(caught));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   return (
     <section className="content-panel knowledge-import-panel" aria-labelledby="knowledge-import-title">
       <div className="knowledge-import-heading">
@@ -253,10 +278,25 @@ export function KnowledgeImportPanel() {
           <TableBody>{resource.data.items.map((batch) => <TableRow key={batch.id}>
             <TableCell><code>{batch.id}</code></TableCell><TableCell>{batchLabels[batch.status]}</TableCell>
             <TableCell>{batch.succeededItems} 成功 / {batch.failedItems} 失败 / {batch.pendingItems} 待处理</TableCell>
-            <TableCell>{formatTimestamp(batch.createdAt)}</TableCell><TableCell><Button appearance="subtle" size="small" onClick={() => void openBatch(batch)}>查看结果</Button></TableCell>
+            <TableCell>{formatTimestamp(batch.createdAt)}</TableCell><TableCell>
+              <Button appearance="subtle" size="small" onClick={() => void openBatch(batch)}>查看结果</Button>
+              {canDeleteBatch(batch) && <Button appearance="subtle" size="small" onClick={() => { setDeleteError(undefined); setDeleteTarget(batch); }}>删除失败项</Button>}
+            </TableCell>
           </TableRow>)}</TableBody>
         </Table></div>
       ) : null}
+      <ActionConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="删除失败导入批次"
+        description="将永久删除该批次的原始文件和失败记录。已成功生成的知识草稿不会被删除。"
+        confirmLabel="删除批次"
+        pendingLabel="正在删除"
+        pending={deleting}
+        error={deleteError}
+        destructive
+        onCancel={() => !deleting && setDeleteTarget(undefined)}
+        onConfirm={() => void deleteBatch()}
+      />
     </section>
   );
 }

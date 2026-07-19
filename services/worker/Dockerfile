@@ -11,6 +11,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libglib2.0-0 \
+        libgl1 \
+        libsm6 \
+        libxext6 \
+        libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN addgroup --system worker && adduser --system --ingroup worker worker
 
 COPY services/worker/requirements-prod.lock /tmp/requirements-prod.lock

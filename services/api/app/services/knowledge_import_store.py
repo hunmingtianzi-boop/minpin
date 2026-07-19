@@ -170,6 +170,54 @@ class KnowledgeImportStore:
             ).all()
             return [await self._record(session, scope, batch) for batch in batches], total
 
+    async def delete_batch(
+        self,
+        *,
+        scope: KnowledgeImportScope,
+        batch_id: uuid.UUID,
+        trace_id: str | None,
+    ) -> None:
+        """Remove a settled import batch and its encrypted source payloads.
+
+        The database cascade deletes the import items.  Any successfully
+        generated knowledge drafts intentionally remain available for review,
+        so an operator cannot accidentally delete published knowledge while
+        cleaning up a failed file upload.
+        """
+
+        async with self._sessions() as session, session.begin():
+            await self._set_scope(session, scope)
+            batch = await session.scalar(
+                select(KnowledgeImportBatch)
+                .where(
+                    KnowledgeImportBatch.id == batch_id,
+                    KnowledgeImportBatch.tenant_id == scope.tenant_id,
+                    KnowledgeImportBatch.company_id == scope.company_id,
+                )
+                .with_for_update()
+            )
+            if batch is None:
+                raise ApiError(404, "RESOURCE_NOT_FOUND", "知识导入批次不存在")
+            if batch.status.value in {"pending", "processing"}:
+                raise ApiError(409, "IMPORT_BATCH_ACTIVE", "正在处理的导入批次暂不能删除")
+
+            await append_audit(
+                session,
+                tenant_id=scope.tenant_id,
+                company_id=scope.company_id,
+                actor_user_id=scope.actor_user_id,
+                action="knowledge.import.delete",
+                resource_type="knowledge_import_batch",
+                resource_id=batch.id,
+                trace_id=trace_id,
+                event_data={
+                    "item_count": batch.total_items,
+                    "failed_items": batch.failed_items,
+                    "status": batch.status.value,
+                },
+            )
+            await session.delete(batch)
+
     async def _record(
         self,
         session: AsyncSession,
