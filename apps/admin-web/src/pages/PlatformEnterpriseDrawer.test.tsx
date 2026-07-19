@@ -73,7 +73,7 @@ function Harness() {
 }
 
 describe("PlatformEnterpriseDrawer", () => {
-  it("renders only aggregate fields and links only server-published cards", async () => {
+  it("renders only aggregate fields and makes only server-published card tiles direct links", async () => {
     vi.spyOn(platformApi, "getEnterpriseDetail").mockResolvedValue({
       ...detail,
       email: "private@example.com",
@@ -98,6 +98,9 @@ describe("PlatformEnterpriseDrawer", () => {
       "href",
       "https://cards.example/c/card-1",
     );
+    expect(
+      within(drawer).getByRole("link", { name: "打开Acme 商务企业名片" }),
+    ).toHaveAttribute("target", "_blank");
     expect(within(drawer).queryByRole("link", { name: /李顾问/ })).not.toBeInTheDocument();
     expect(drawer).not.toHaveTextContent("private@example.com");
     expect(drawer).not.toHaveTextContent("private conversation");

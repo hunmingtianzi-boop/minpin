@@ -71,38 +71,50 @@ function PlatformCardGroup({
       </div>
       {cards.length > 0 ? (
         <div className={styles.cardList}>
-          {cards.map((card) => (
-            <article className={styles.cardItem} key={card.id}>
-              <div className={styles.cardCopy}>
-                <h4>{card.displayName}</h4>
-                <p>
-                  {card.title ||
-                    (card.cardKind === "enterprise" ? "未填写业务定位" : "未填写职务")}
-                </p>
-                <div className={styles.cardMeta}>
-                  <StatusBadge status={card.status} />
-                  <span>{formatTimestamp(card.updatedAt)}</span>
+          {cards.map((card) => {
+            const publicUrl = card.status === "published" ? card.shareUrl : undefined;
+            const cardContent = (
+              <>
+                <div className={styles.cardCopy}>
+                  <h4>{card.displayName}</h4>
+                  <p>
+                    {card.title ||
+                      (card.cardKind === "enterprise" ? "未填写业务定位" : "未填写职务")}
+                  </p>
+                  <div className={styles.cardMeta}>
+                    <StatusBadge status={card.status} />
+                    <span>{formatTimestamp(card.updatedAt)}</span>
+                  </div>
                 </div>
-              </div>
-              {card.status === "published" && card.shareUrl ? (
-                <Button
-                  as="a"
-                  href={card.shareUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  appearance="secondary"
-                  icon={<Open24Regular />}
-                  aria-label={`打开${card.displayName}${
-                    card.cardKind === "enterprise" ? "企业" : "员工"
-                  }名片`}
-                >
-                  打开名片
-                </Button>
-              ) : (
-                <span className={styles.noLink}>发布后可访问</span>
-              )}
-            </article>
-          ))}
+                {publicUrl ? (
+                  <span className={styles.openHint}>
+                    打开名片 <Open24Regular aria-hidden="true" />
+                  </span>
+                ) : (
+                  <span className={styles.noLink}>发布后可访问</span>
+                )}
+              </>
+            );
+
+            return publicUrl ? (
+              <a
+                className={`${styles.cardItem} ${styles.cardLink}`}
+                href={publicUrl}
+                key={card.id}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`打开${card.displayName}${
+                  card.cardKind === "enterprise" ? "企业" : "员工"
+                }名片`}
+              >
+                {cardContent}
+              </a>
+            ) : (
+              <article className={styles.cardItem} key={card.id}>
+                {cardContent}
+              </article>
+            );
+          })}
         </div>
       ) : (
         <p className={styles.noLink}>暂无{label}。</p>

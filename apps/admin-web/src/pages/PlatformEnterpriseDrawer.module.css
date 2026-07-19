@@ -135,6 +135,26 @@
   background: var(--surface);
 }
 
+.cardLink {
+  color: inherit;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 140ms ease, transform 140ms ease;
+}
+
+.cardLink:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.cardLink:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.cardLink:active {
+  transform: scale(0.995);
+}
+
 .cardCopy {
   display: grid;
   min-width: 0;
@@ -151,6 +171,20 @@
 .noLink {
   color: var(--subtle);
   font-size: 12px;
+}
+
+.openHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.openHint svg {
+  width: 16px;
+  height: 16px;
 }
 
 .profileList { display: grid; gap: 10px; }
