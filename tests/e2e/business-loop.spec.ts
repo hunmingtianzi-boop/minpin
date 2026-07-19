@@ -234,6 +234,11 @@ async function mockAdminApi(page: Page) {
         data: { access_token: "e2e-access-token", csrf_token: "e2e-csrf-token" },
       });
     }
+    if (method === "POST" && path === "/auth/refresh") {
+      return json(route, {
+        data: { access_token: "e2e-access-token", csrf_token: "e2e-csrf-token" },
+      });
+    }
     if (method === "GET" && path === "/auth/me") {
       return json(route, {
         data: {
@@ -311,7 +316,7 @@ test("platform administrator signs in and creates an isolated enterprise", async
       .getByRole("cell", { name: "现有企业", exact: true }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "开通企业" }).click();
+  await page.getByRole("button", { name: "开通企业并进入名片" }).click();
   await page.getByLabel("租户标识").fill("new-enterprise");
   await page.getByLabel("租户名称").fill("新企业租户");
   await page.getByLabel("企业名称").fill("新企业有限公司");
@@ -320,9 +325,10 @@ test("platform administrator signs in and creates an isolated enterprise", async
   await page.getByLabel("管理员姓名").fill("新企业管理员");
   await page.getByLabel("初始密码").fill("Initial-Enterprise-Password-2026!");
   await page.getByLabel("初始名片标题").fill("新企业数智名片");
-  await page.getByRole("button", { name: "确认开通" }).click();
-
-  await expect(page.getByText(/企业 新企业有限公司 已开通/)).toBeVisible();
+  await Promise.all([
+    page.waitForURL("http://127.0.0.1:4174/c/c-e2e-random-slug"),
+    page.getByRole("button", { name: "确认开通并进入名片" }).click(),
+  ]);
   expect(mock.createBody()).toMatchObject({
     tenant_slug: "new-enterprise",
     admin_account: "admin@new-enterprise.test",

@@ -207,7 +207,11 @@ class PlatformStore:
                 "responsible_user_id": user_id,
                 "slug": card_slug,
                 "display_name": body.company_name,
-                "status": ContentStatus.DRAFT,
+                # Direct platform provisioning is a deliberate public launch: the
+                # admin console redirects to this URL as soon as the transaction
+                # commits, so it must satisfy the public-card visibility contract.
+                "status": ContentStatus.PUBLISHED,
+                "published_at": now,
                 "settings": {
                     "title": body.initial_card_title or body.company_name,
                     "assistant_name": "企业 AI 接待",

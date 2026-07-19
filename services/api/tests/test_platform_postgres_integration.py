@@ -148,7 +148,18 @@ async def test_platform_admin_can_onboard_a_login_ready_enterprise_through_rls()
                     {"company_id": created.company_id},
                 )
             ).one()
+            initial_card = (
+                await connection.execute(
+                    text(
+                        "SELECT status::text, published_at FROM cards "
+                        "WHERE id=:card_id"
+                    ),
+                    {"card_id": created.initial_card_id},
+                )
+            ).one()
         assert tuple(counts) == (1, 1, 1, 1, 1)
+        assert initial_card.status == "published"
+        assert initial_card.published_at is not None
     finally:
         await runtime.dispose()
         await owner.dispose()

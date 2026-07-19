@@ -8,8 +8,6 @@ import {
   DialogTitle,
   Field,
   Input,
-  MessageBar,
-  MessageBarBody,
   Select,
   Table,
   TableBody,
@@ -36,6 +34,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { useResource } from "../hooks/useResource";
 import { APP_PATHS, navigate } from "../routing";
 import { formatTimestamp } from "../utils/format";
+import { buildOnboardingDeliveryUrls } from "../utils/platformOnboarding";
 import { PlatformEnterpriseDrawer } from "./PlatformEnterpriseDrawer";
 import styles from "./PlatformEnterpriseDrawer.module.css";
 
@@ -80,7 +79,6 @@ export function PlatformEnterprisesPage() {
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<ApiError>();
-  const [notice, setNotice] = useState<string>();
   const valid =
     slugPattern.test(input.tenantSlug) &&
     Boolean(input.tenantName.trim()) &&
@@ -120,12 +118,8 @@ export function PlatformEnterprisesPage() {
     setSaving(true);
     try {
       const created = await platformApi.createEnterprise(input);
-      setNotice(
-        `企业 ${created.companyName} 已开通，初始名片标识为 ${created.initialCardSlug}。`,
-      );
-      setInput(emptyInput);
-      setOpen(false);
-      resource.reload();
+      const { cardUrl } = buildOnboardingDeliveryUrls(created.initialCardSlug);
+      globalThis.location.assign(cardUrl);
     } catch (caught) {
       setError(toApiError(caught));
     } finally {
@@ -137,7 +131,7 @@ export function PlatformEnterprisesPage() {
     <main className="page-stack">
       <PageHeader
         title="企业中心"
-        description="直接开通一个空白企业，或上传甲方资料生成待复核草稿；确认前不会公开。"
+        description="直接开通会立即发布初始企业名片并进入公开页；甲方资料创建仍需复核后发布。"
         actions={
           resource.status === "permission" ? undefined : (
             <>
@@ -149,18 +143,12 @@ export function PlatformEnterprisesPage() {
                 从甲方资料创建
               </Button>
               <Button appearance="primary" icon={<Add24Regular />} onClick={showCreate}>
-                直接开通空白企业
+                开通企业并进入名片
               </Button>
             </>
           )
         }
       />
-
-      {notice && (
-        <MessageBar intent="success">
-          <MessageBarBody>{notice}</MessageBarBody>
-        </MessageBar>
-      )}
 
       <section className="content-panel filter-panel" aria-label="企业筛选">
         <Select
@@ -313,7 +301,7 @@ export function PlatformEnterprisesPage() {
         <DialogSurface>
           <form onSubmit={submit} noValidate>
             <DialogBody>
-              <DialogTitle>开通隔离企业</DialogTitle>
+              <DialogTitle>开通并发布企业名片</DialogTitle>
               <DialogContent className="catalog-editor-form">
                 <FormFeedback error={error} />
                 <div className="form-grid two-column">
@@ -394,7 +382,7 @@ export function PlatformEnterprisesPage() {
                   取消
                 </Button>
                 <Button appearance="primary" type="submit" disabled={saving || (attempted && !valid)}>
-                  {saving ? "正在开通" : "确认开通"}
+                  {saving ? "正在开通" : "确认开通并进入名片"}
                 </Button>
               </DialogActions>
             </DialogBody>
