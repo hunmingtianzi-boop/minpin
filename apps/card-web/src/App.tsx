@@ -11,6 +11,8 @@ import {
   type PublicExperienceHandle,
 } from "./components/DeferredPublicExperience";
 import type { EnterpriseCardConfig } from "./domain/card";
+import { EnterpriseLayoutMock } from "./enterprise-mocks/EnterpriseLayoutMock";
+import { resolveEnterpriseMockLayout } from "./enterprise-mocks/model";
 import { copyText } from "./lib/clipboard";
 import { createMockPublicCard, resolveMockCardKind } from "./lib/mockPublicCard";
 import type { PublicCardData } from "./lib/publicCardApi";
@@ -34,12 +36,16 @@ export default function App({
     : undefined;
   const mockCard = mockCardKind ? createMockPublicCard(tenant, mockCardKind) : undefined;
   const renderedCard = mockCard ?? publishedCard;
+  const enterpriseMockLayout = resolveEnterpriseMockLayout(window.location.search);
   const isUnconfiguredTemplate = tenant.isBlankTemplate && !renderedCard;
   const assistantEnabled =
-    !mockCard && !isUnconfiguredTemplate && (publishedCard?.ai_assistant.available ?? true);
+    !enterpriseMockLayout &&
+    !mockCard &&
+    !isUnconfiguredTemplate &&
+    (publishedCard?.ai_assistant.available ?? true);
 
   const openAssistant = (question?: string) => {
-    if (mockCard) {
+    if (mockCard || enterpriseMockLayout) {
       setShareNotice(`模拟 AI 接待${question?.trim() ? `：${question.trim()}` : "已打开"}`);
       return;
     }
@@ -81,21 +87,31 @@ export default function App({
 
   return (
     <>
-      <BusinessCardPrototypeApp
-        tenant={tenant}
-        card={renderedCard}
-        onAssistant={openAssistant}
-        onLead={openLead}
-        onPrivacy={() => {
-          if (mockCard) setShareNotice("模拟隐私与个人信息入口");
-          else publicExperienceRef.current?.openPrivacy();
-        }}
-        onProfile={() => {
-          if (mockCard) setShareNotice("模拟访客画像授权入口");
-          else publicExperienceRef.current?.openProfile();
-        }}
-        onShare={openShare}
-      />
+      {enterpriseMockLayout ? (
+        <EnterpriseLayoutMock
+          layout={enterpriseMockLayout}
+          tenant={tenant}
+          card={renderedCard}
+          onAssistant={openAssistant}
+          onLead={openLead}
+        />
+      ) : (
+        <BusinessCardPrototypeApp
+          tenant={tenant}
+          card={renderedCard}
+          onAssistant={openAssistant}
+          onLead={openLead}
+          onPrivacy={() => {
+            if (mockCard) setShareNotice("模拟隐私与个人信息入口");
+            else publicExperienceRef.current?.openPrivacy();
+          }}
+          onProfile={() => {
+            if (mockCard) setShareNotice("模拟访客画像授权入口");
+            else publicExperienceRef.current?.openProfile();
+          }}
+          onShare={openShare}
+        />
+      )}
 
       {shareNotice && (
         <div className="public-controller-error" role="status">

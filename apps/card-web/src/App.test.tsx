@@ -110,6 +110,10 @@ describe("BusinessCardPrototypeApp", () => {
     );
 
     expect(screen.queryByRole("navigation", { name: "名片导航" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "切换到企业名片" })).toHaveAttribute(
+      "href",
+      "/c/tuotu?mock-card=enterprise&from_employee=xusongbo",
+    );
     expect(screen.getByRole("link", { name: /示例企业/ })).toHaveAttribute(
       "href",
       "/c/tuotu?mock-card=enterprise&from_employee=xusongbo",
@@ -145,7 +149,15 @@ describe("BusinessCardPrototypeApp", () => {
     expect(screen.getByText("企业官方名片")).toBeInTheDocument();
     expect(screen.queryByText("可以为你对接的人")).not.toBeInTheDocument();
     expect(screen.queryByRole("navigation", { name: "名片导航" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "返回" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "切换到员工名片" })).toHaveAttribute(
+      "href",
+      "/c/xusongbo?mock-card=employee",
+    );
+    expect(screen.getByRole("navigation", { name: "企业名片内容导航" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "概览" })).toHaveAttribute("aria-current", "location");
+    fireEvent.click(screen.getByRole("button", { name: "介绍" }));
+    expect(screen.getByRole("button", { name: "介绍" })).toHaveAttribute("aria-current", "location");
     expect(screen.getByRole("button", { name: "提交合作需求" })).toBeInTheDocument();
 
     enterpriseRender.unmount();
@@ -162,6 +174,7 @@ describe("BusinessCardPrototypeApp", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "返回" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "切换到员工名片" })).not.toBeInTheDocument();
   });
 
   it("renders reusable product, case and FAQ showcase layouts from variable content", async () => {

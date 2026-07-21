@@ -13,7 +13,7 @@ import {
   SquaresFourIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { EnterpriseCardConfig } from "../domain/card";
 import { AssistantApiError } from "../lib/assistantApi";
@@ -54,6 +54,25 @@ type DetailRoute = Pick<DetailHistoryTarget, "kind" | "slug">;
 type PrototypeHistoryState =
   | { bpView: BaseView; from?: BaseView }
   | { bpView: "detail"; detail: DetailHistoryTarget };
+
+type CardSwitchTarget = {
+  href: string;
+  kind: "employee" | "enterprise";
+  label: string;
+  ariaLabel: string;
+};
+
+type CompanySectionId = "overview" | "intro" | "business" | "cases" | "trust" | "faq" | "ai";
+
+const companySectionDefinitions: ReadonlyArray<{ id: CompanySectionId; label: string }> = [
+  { id: "overview", label: "概览" },
+  { id: "intro", label: "介绍" },
+  { id: "business", label: "业务" },
+  { id: "cases", label: "案例" },
+  { id: "trust", label: "资料" },
+  { id: "faq", label: "问答" },
+  { id: "ai", label: "AI" },
+];
 
 type CatalogState =
   | { status: "idle" | "loading" }
@@ -174,10 +193,12 @@ function Avatar({ label, src, small = false }: { label: string; src?: string; sm
 
 function AppHeader({
   back,
+  switchTarget,
   title,
   onShare,
 }: {
   back?: () => void;
+  switchTarget?: CardSwitchTarget;
   title?: string;
   onShare?: () => void;
 }) {
@@ -207,8 +228,17 @@ function AppHeader({
         <i />
         <span>▮▮▮　◒　▰</span>
       </div>
-      <header className={`bp-topbar${title ? "" : " bp-card-topbar"}`}>
-        {back ? (
+      <header className={`bp-topbar${title ? "" : " bp-card-topbar"}${switchTarget ? " bp-switch-topbar" : ""}`}>
+        {switchTarget ? (
+          <a className="bp-card-switch" href={switchTarget.href} aria-label={switchTarget.ariaLabel}>
+            {switchTarget.kind === "enterprise" ? (
+              <BuildingsIcon size={16} weight="fill" />
+            ) : (
+              <IdentificationCardIcon size={16} weight="fill" />
+            )}
+            <span>{switchTarget.label}</span>
+          </a>
+        ) : back ? (
           <button type="button" onClick={back} aria-label="返回">
             <ArrowLeftIcon size={26} />
           </button>
@@ -219,7 +249,7 @@ function AppHeader({
         {onShare ? (
           <button type="button" onClick={onShare} aria-label="分享名片">
             <ShareNetworkIcon size={24} />
-            {!title && <small>分享</small>}
+            {!title && !switchTarget && <small>分享</small>}
           </button>
         ) : (
           <span className="bp-topbar-spacer" aria-hidden="true" />
@@ -229,9 +259,23 @@ function AppHeader({
   );
 }
 
-function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+function Section({
+  title,
+  children,
+  action,
+  sectionId,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+  sectionId?: CompanySectionId;
+}) {
   return (
-    <section className="bp-section">
+    <section
+      className={`bp-section${sectionId ? " bp-company-scroll-section" : ""}`}
+      id={sectionId ? `bp-company-section-${sectionId}` : undefined}
+      data-company-section={sectionId}
+    >
       <div className="bp-section-title">
         <h2>{title}</h2>
         {action}
@@ -431,6 +475,8 @@ export function BusinessCardPrototypeApp({
       return false;
     }
   });
+  const [activeCompanySection, setActiveCompanySection] = useState<CompanySectionId>("overview");
+  const companySectionNavRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setOpenFaq(card?.faq_items[0]?.id ?? null);
@@ -613,9 +659,6 @@ export function BusinessCardPrototypeApp({
   const employeeReturnHref = employeeReturnSlug
     ? employeeCardHref(employeeReturnSlug)
     : undefined;
-  const returnToEmployeeCard = () => {
-    if (employeeReturnHref) window.location.assign(employeeReturnHref);
-  };
 
   const go = (next: BaseView) => {
     if (next === view && detail === null) return;
@@ -776,6 +819,74 @@ export function BusinessCardPrototypeApp({
         }))
   );
 
+  const isStandaloneEnterprise = isStandaloneCard && standaloneKind === "enterprise";
+  const companyNavigationItems = companySectionDefinitions.filter(({ id }) => {
+    if (id === "cases") return cases.length > 0;
+    if (id === "faq") return Boolean(card?.faq_items.length);
+    return true;
+  });
+  const companyNavigationKey = companyNavigationItems.map(({ id }) => id).join(",");
+
+  useEffect(() => {
+    if (!isStandaloneEnterprise || view !== "company") return;
+
+    let frameId = 0;
+    const updateActiveSection = () => {
+      const sections = companyNavigationItems
+        .map(({ id }) => document.getElementById(`bp-company-section-${id}`))
+        .filter((section): section is HTMLElement => Boolean(section));
+      if (!sections.length || !sections.some((section) => section.getBoundingClientRect().height > 0)) return;
+
+      const threshold = 68 + 52 + 20;
+      let next = sections[0].dataset.companySection as CompanySectionId;
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= threshold) {
+          next = section.dataset.companySection as CompanySectionId;
+        }
+      }
+
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      const scrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+      if (scrollTop + window.innerHeight >= scrollHeight - 8) {
+        next = sections.at(-1)?.dataset.companySection as CompanySectionId;
+      }
+      setActiveCompanySection((current) => current === next ? current : next);
+    };
+    const scheduleUpdate = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateActiveSection);
+    };
+
+    setActiveCompanySection("overview");
+    scheduleUpdate();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [companyNavigationKey, isStandaloneEnterprise, view]);
+
+  useEffect(() => {
+    if (!isStandaloneEnterprise) return;
+    const nav = companySectionNavRef.current;
+    const activeTab = nav?.querySelector<HTMLElement>(`[data-company-target="${activeCompanySection}"]`);
+    if (!nav || !activeTab || typeof nav.scrollTo !== "function") return;
+    const left = activeTab.offsetLeft - (nav.clientWidth - activeTab.offsetWidth) / 2;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    nav.scrollTo({ left, behavior: reducedMotion ? "auto" : "smooth" });
+  }, [activeCompanySection, isStandaloneEnterprise]);
+
+  const scrollToCompanySection = (sectionId: CompanySectionId) => {
+    setActiveCompanySection(sectionId);
+    const target = document.getElementById(`bp-company-section-${sectionId}`);
+    if (!target || target.getBoundingClientRect().height <= 0) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const top = window.scrollY + target.getBoundingClientRect().top - (68 + 52 + 18);
+    window.scrollTo({ top: Math.max(0, top), behavior: reducedMotion ? "auto" : "smooth" });
+  };
+
   const bottom = (
     <nav className="bp-bottom-nav" aria-label="名片导航">
       {([
@@ -799,7 +910,15 @@ export function BusinessCardPrototypeApp({
 
   const cardPage = (
     <>
-      <AppHeader onShare={onShare} />
+      <AppHeader
+        switchTarget={standaloneKind === "employee" && officialCompanyHref ? {
+          href: officialCompanyHref,
+          kind: "enterprise",
+          label: "切换企业",
+          ariaLabel: "切换到企业名片",
+        } : undefined}
+        onShare={onShare}
+      />
       <main className="bp-page bp-card-page">
         <div className="bp-person-head">
           {avatar ? (
@@ -849,7 +968,7 @@ export function BusinessCardPrototypeApp({
               </div>
             ) : (
               <>
-                {introParagraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+                {introParagraphs.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>)}
                 <button type="button" className="bp-text-button" onClick={() => go(isStandaloneCard ? "square" : "company")}>
                   {isStandaloneCard ? "查看全部业务" : "查看企业详情"} <Arrow />
                 </button>
@@ -933,7 +1052,13 @@ export function BusinessCardPrototypeApp({
   const companyPage = (
     <>
       <AppHeader
-        back={isStandaloneCard ? (employeeReturnHref ? returnToEmployeeCard : undefined) : returnFromCompany}
+        back={isStandaloneCard ? undefined : returnFromCompany}
+        switchTarget={isStandaloneCard && employeeReturnHref ? {
+          href: employeeReturnHref,
+          kind: "employee",
+          label: "切换员工",
+          ariaLabel: "切换到员工名片",
+        } : undefined}
         title={isStandaloneCard ? "企业官方名片" : `来自${displayName}的名片`}
         onShare={onShare}
       />
@@ -950,17 +1075,40 @@ export function BusinessCardPrototypeApp({
           </div>
         </div>
 
-        <section className="bp-company-position">
+        {isStandaloneEnterprise && (
+          <nav ref={companySectionNavRef} className="bp-company-section-nav" aria-label="企业名片内容导航">
+            {companyNavigationItems.map(({ id, label }) => (
+              <button
+                key={id}
+                className="bp-company-section-tab"
+                type="button"
+                data-company-target={id}
+                aria-controls={`bp-company-section-${id}`}
+                aria-current={activeCompanySection === id ? "location" : undefined}
+                onClick={() => scrollToCompanySection(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        <section
+          className={`bp-company-position${isStandaloneEnterprise ? " bp-company-scroll-section" : ""}`}
+          id={isStandaloneEnterprise ? "bp-company-section-overview" : undefined}
+          data-company-section={isStandaloneEnterprise ? "overview" : undefined}
+        >
           <small>{isBlankTemplate ? "配置提示" : "我们能帮助你"}</small>
           <strong>{isBlankTemplate ? "录入品牌定位和核心价值后，此处会生成企业对外主张。" : tenant.hero.summary}</strong>
         </section>
 
-        <Section title="企业介绍">
+        <Section title="企业介绍" sectionId={isStandaloneEnterprise ? "intro" : undefined}>
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>企业介绍待录入</strong><p>支持从企业简介、官网文本或审核后的文档生成。</p><a href={onboardingHref}>录入企业资料</a></div> : <div className="bp-intro"><p>{companySummary}</p></div>}
         </Section>
 
         <Section
           title="核心业务"
+          sectionId={isStandaloneEnterprise ? "business" : undefined}
           action={products.length > 4 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
         >
           {catalog.status === "loading" ? <LoadingRows label="业务资料" /> : (
@@ -971,6 +1119,7 @@ export function BusinessCardPrototypeApp({
         {cases.length > 0 && (
           <Section
             title="代表案例"
+            sectionId={isStandaloneEnterprise ? "cases" : undefined}
             action={cases.length > 3 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
           >
             <CaseShowcase
@@ -980,7 +1129,7 @@ export function BusinessCardPrototypeApp({
           </Section>
         )}
 
-        <Section title="企业资料">
+        <Section title="企业资料" sectionId={isStandaloneEnterprise ? "trust" : undefined}>
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>可信资料待审核</strong><p>主体信息、资质、案例授权和公开范围须确认后才会显示。</p><a href={onboardingHref}>进入资料审核</a></div> : <div className="bp-trust">
             <span>✓ 企业公开资料</span><span>✓ AI 引用可追溯</span>
             {(card?.company.industry || card?.company.region) && <span>{[card.company.industry, card.company.region].filter(Boolean).join(" · ")}</span>}
@@ -998,7 +1147,7 @@ export function BusinessCardPrototypeApp({
         </Section>}
 
         {card?.faq_items.length ? (
-          <Section title="常见问题">
+          <Section title="常见问题" sectionId={isStandaloneEnterprise ? "faq" : undefined}>
             <FaqShowcase
               items={card.faq_items}
               openFaq={openFaq}
@@ -1009,7 +1158,11 @@ export function BusinessCardPrototypeApp({
           </Section>
         ) : null}
 
-        <section className="bp-ai-card bp-company-ai">
+        <section
+          className={`bp-ai-card bp-company-ai${isStandaloneEnterprise ? " bp-company-scroll-section" : ""}`}
+          id={isStandaloneEnterprise ? "bp-company-section-ai" : undefined}
+          data-company-section={isStandaloneEnterprise ? "ai" : undefined}
+        >
           <div><i>AI</i><span><strong>{assistantName}</strong><small>{assistantAvailable ? isPublished ? "基于已发布资料" : "基于本地展示资料" : "暂未开放"}</small></span></div>
           <p>{isBlankTemplate ? "知识资料尚未录入；完成解析、预览和发布后才会开放问答。" : assistantAvailable ? (card?.ai_assistant.welcome_message || "我可以介绍企业能力、解释常见问题，并帮助整理合作需求。") : "企业尚未开放 AI 问答，可提交合作需求等待人工联系。"}</p>
           {assistantAvailable && <button type="button" onClick={() => onAssistant()}>咨询适合我们的解决方案 <Arrow /></button>}
