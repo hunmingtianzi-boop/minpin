@@ -89,6 +89,8 @@ function profile(): PlatformLlmProfile {
     dailyBudgetCny: 100,
     inputPriceCnyPerMillion: 1,
     outputPriceCnyPerMillion: 2,
+    allowGeneralAnswers: false,
+    faqFastPathEnabled: true,
     keyConfigured: true,
     keyHint: "sk-***1234",
     enabled: true,

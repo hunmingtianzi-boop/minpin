@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Sequence
 
-from .schemas import Refusal, RefusalCode, RetrievedEvidence, StructuredModelAnswer
+from .schemas import ChatMessage, Refusal, RefusalCode, RetrievedEvidence, StructuredModelAnswer
 
 
 class PolicyFlag(StrEnum):
@@ -16,6 +16,16 @@ class PolicyFlag(StrEnum):
     SENSITIVE_DATA = "sensitive_data"
     HIGH_RISK = "high_risk"
     PRICING = "pricing"
+    MONETIZATION = "monetization"
+
+
+class QuestionScope(StrEnum):
+    """Server-owned interpretation of what kind of answer the user requested."""
+
+    ENTERPRISE = "enterprise"
+    GENERAL = "general"
+    AMBIGUOUS = "ambiguous"
+    MIXED = "mixed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +90,17 @@ _PRICING_EVIDENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_MONETIZATION_PATTERN = re.compile(
+    r"(?:商业模式|盈利模式|怎么(?:赚|挣)钱|如何(?:赚|挣)钱|盈利|营收|收入来源|变现)",
+    re.IGNORECASE,
+)
+
+_MONETIZATION_EVIDENCE_PATTERN = re.compile(
+    r"(?:商业模式|盈利模式|收入来源|营收|收费模式|按项目收费|项目收费|服务费|"
+    r"订阅费|会员费|佣金|赞助收入|变现)",
+    re.IGNORECASE,
+)
+
 _MONEY_CLAIM_PATTERN = re.compile(
     r"(?:[¥￥$]\s*\d[\d,]*(?:\.\d+)?(?:\s*/(?:月|年))?"
     r"|(?:USD|CNY|RMB)\s*\d[\d,]*(?:\.\d+)?(?:\s*/(?:month|year))?"
@@ -87,6 +108,96 @@ _MONEY_CLAIM_PATTERN = re.compile(
     r"|\d[\d,]*(?:\.\d+)?\s*(?:每月|每年))",
     re.IGNORECASE,
 )
+
+_GREETING_OR_ACK_PATTERN = re.compile(
+    r"^\s*(?:你好|您好|嗨|hi|hello|谢谢|感谢|好的|好呀|明白了|知道了|再见)[！!。.]?\s*$",
+    re.IGNORECASE,
+)
+
+_ENTERPRISE_REFERENCE_PATTERN = re.compile(
+    r"(?:贵司|你们(?:公司|企业|团队)?|你司|"
+    r"(?:这家|这间|该|当前|本)(?:公司|企业|集团|团队|机构|品牌))",
+    re.IGNORECASE,
+)
+
+_ENTERPRISE_TOPIC_PATTERN = re.compile(
+    r"(?:公司|企业|集团|团队|品牌|创始人|负责人|员工|成员|业务|产品|服务|"
+    r"案例|客户|资质|荣誉|标准版|专业版|基础版|套餐|方案|报价|价格|收费|"
+    r"合作|加入|应聘|招聘|商业模式|"
+    r"盈利|营收|收入|赚钱|挣钱|变现|架构|技术栈|技术方案|数据安全|联系方式|地址|办公地点|"
+    r"成立|发展历程|愿景|使命|做什么|做哪些)",
+    re.IGNORECASE,
+)
+
+_EXPLICIT_GENERAL_SCOPE_PATTERN = re.compile(
+    r"(?:一般来说|通常来说|通用(?:知识|问题|做法|建议)?|问个(?:别的|通用)问题|"
+    r"不针对(?:这家|当前)?(?:公司|企业)|不谈(?:公司|企业)|纯技术|经典模式)",
+    re.IGNORECASE,
+)
+
+_GENERAL_TASK_PATTERN = re.compile(
+    r"(?:翻译|改写|润色|校对|写(?:一句|一段|一封|一份|个)|文案|代码|编程|算法|"
+    r"数学|天气|会议纪要|学习方法|生活建议|旅行|菜谱|头脑风暴|行动建议|"
+    r"整理|排版|总结|介绍|什么是|解释(?:一下)?|帮我想)",
+    re.IGNORECASE,
+)
+
+_CONTEXTUAL_FOLLOW_UP_PATTERN = re.compile(
+    r"^(?:[?？]+|(?:那|那么|然后|还有|再|继续|为什么|怎么|具体|上面|前面|"
+    r"这个|那个|它|他们|这些|那些).{0,18})[?？!！。.]?$",
+    re.IGNORECASE,
+)
+
+
+def classify_question_scope(
+    text: str,
+    history: Sequence[ChatMessage] = (),
+) -> QuestionScope:
+    """Classify conservatively for an enterprise-card assistant.
+
+    Explicit general requests remain available, while enterprise topics and
+    enterprise-context follow-ups stay inside the published-evidence boundary.
+    Unknown first-turn subjects are clarified instead of guessed.
+    """
+
+    normalized = _normalize_input(text)
+    current = _classify_scope_without_history(normalized)
+    if current is not QuestionScope.AMBIGUOUS:
+        return current
+
+    for message in reversed(history):
+        if message.role != "user" or not message.content.strip():
+            continue
+        previous = _classify_scope_without_history(_normalize_input(message.content))
+        if previous in {QuestionScope.ENTERPRISE, QuestionScope.MIXED}:
+            return QuestionScope.ENTERPRISE
+        if previous is QuestionScope.GENERAL:
+            return QuestionScope.GENERAL
+    return QuestionScope.AMBIGUOUS
+
+
+def _classify_scope_without_history(text: str) -> QuestionScope:
+    if _GREETING_OR_ACK_PATTERN.fullmatch(text):
+        return QuestionScope.GENERAL
+
+    has_reference = bool(_ENTERPRISE_REFERENCE_PATTERN.search(text))
+    has_enterprise_topic = bool(_ENTERPRISE_TOPIC_PATTERN.search(text))
+    has_explicit_general_scope = bool(_EXPLICIT_GENERAL_SCOPE_PATTERN.search(text))
+    has_general_task = bool(_GENERAL_TASK_PATTERN.search(text))
+
+    if has_reference and (has_explicit_general_scope or has_general_task):
+        return QuestionScope.MIXED
+    if has_reference:
+        return QuestionScope.ENTERPRISE
+    if has_explicit_general_scope:
+        return QuestionScope.GENERAL
+    if has_enterprise_topic:
+        return QuestionScope.ENTERPRISE
+    if has_general_task:
+        return QuestionScope.GENERAL
+    if _CONTEXTUAL_FOLLOW_UP_PATTERN.fullmatch(text):
+        return QuestionScope.AMBIGUOUS
+    return QuestionScope.GENERAL
 
 
 class InputSecurityPolicy:
@@ -143,6 +254,8 @@ class InputSecurityPolicy:
             flags.append(PolicyFlag.HIGH_RISK)
         if _PRICING_PATTERN.search(normalized):
             flags.append(PolicyFlag.PRICING)
+        if _MONETIZATION_PATTERN.search(normalized):
+            flags.append(PolicyFlag.MONETIZATION)
         return InputPolicyDecision(normalized_text=normalized, flags=tuple(flags))
 
 
@@ -197,6 +310,8 @@ class EvidenceGate:
         self,
         decision: InputPolicyDecision,
         evidence: Sequence[RetrievedEvidence],
+        *,
+        question_scope: QuestionScope = QuestionScope.ENTERPRISE,
     ) -> EvidenceGateDecision:
         accepted = tuple(
             item
@@ -205,7 +320,7 @@ class EvidenceGate:
         )[: self.config.max_evidence]
         flags = set(decision.flags)
         if not accepted:
-            if self.allows_general_answer(decision):
+            if self.allows_general_answer(decision, question_scope=question_scope):
                 return EvidenceGateDecision(
                     evidence=(),
                     refusal=None,
@@ -215,8 +330,8 @@ class EvidenceGate:
                 evidence=(),
                 refusal=Refusal(
                     code=RefusalCode.INSUFFICIENT_EVIDENCE,
-                    reason="当前已发布资料中没有足够证据回答该问题。",
-                    safe_alternative="请补充问题细节，或联系企业工作人员确认。",
+                    reason="当前已发布资料未说明这个企业信息，我不能补充或推测。",
+                    safe_alternative="你可以换个更具体的问法，或联系企业工作人员确认。",
                 ),
             )
 
@@ -229,6 +344,21 @@ class EvidenceGate:
                     code=RefusalCode.UNVERIFIED_PRICING,
                     reason="已发布资料中没有可核验的报价信息。",
                     safe_alternative="请联系企业工作人员获取正式报价。",
+                ),
+                needs_human_review=True,
+            )
+
+        if (
+            question_scope is QuestionScope.ENTERPRISE
+            and PolicyFlag.MONETIZATION in flags
+            and not any(_has_monetization_evidence(item) for item in accepted)
+        ):
+            return EvidenceGateDecision(
+                evidence=accepted,
+                refusal=Refusal(
+                    code=RefusalCode.INSUFFICIENT_EVIDENCE,
+                    reason="当前已发布资料没有说明企业的盈利或收入模式，我不能据此推测。",
+                    safe_alternative="如需确认，请联系企业工作人员了解正式商业模式。",
                 ),
                 needs_human_review=True,
             )
@@ -253,14 +383,20 @@ class EvidenceGate:
             refusal=None,
             needs_human_review=PolicyFlag.HIGH_RISK in flags,
             general_answer_allowed=(
-                self.allows_general_answer(decision)
+                self.allows_general_answer(decision, question_scope=question_scope)
             ),
         )
 
-    def allows_general_answer(self, decision: InputPolicyDecision) -> bool:
+    def allows_general_answer(
+        self,
+        decision: InputPolicyDecision,
+        *,
+        question_scope: QuestionScope = QuestionScope.ENTERPRISE,
+    ) -> bool:
         flags = set(decision.flags)
         return (
             self.config.allow_general_answers_without_evidence
+            and question_scope is QuestionScope.GENERAL
             and PolicyFlag.PRICING not in flags
             and PolicyFlag.HIGH_RISK not in flags
         )
@@ -285,6 +421,8 @@ class EvidenceGate:
         decision: InputPolicyDecision,
         output: StructuredModelAnswer,
         evidence: Sequence[RetrievedEvidence],
+        *,
+        question_scope: QuestionScope = QuestionScope.ENTERPRISE,
     ) -> OutputGateDecision:
         if output.refusal_reason:
             return OutputGateDecision(
@@ -301,7 +439,7 @@ class EvidenceGate:
         by_id = {item.evidence_id: item for item in evidence}
         requested = tuple(output.cited_evidence_ids)
         if not requested:
-            if self.allows_general_answer(decision):
+            if self.allows_general_answer(decision, question_scope=question_scope):
                 return OutputGateDecision(evidence=(), refusal=None)
             return OutputGateDecision(
                 evidence=(),
@@ -313,7 +451,7 @@ class EvidenceGate:
                 needs_human_review=True,
             )
         if any(evidence_id not in by_id for evidence_id in requested):
-            if self.allows_general_answer(decision):
+            if self.allows_general_answer(decision, question_scope=question_scope):
                 # For ordinary chat, an invalid optional citation must not hide
                 # an otherwise useful model answer. Keep only verified ids.
                 return OutputGateDecision(
@@ -380,6 +518,10 @@ def _has_pricing_evidence(evidence: RetrievedEvidence) -> bool:
     }:
         return True
     return bool(_PRICING_EVIDENCE_PATTERN.search(evidence.text))
+
+
+def _has_monetization_evidence(evidence: RetrievedEvidence) -> bool:
+    return bool(_MONETIZATION_EVIDENCE_PATTERN.search(evidence.text))
 
 
 def _unsupported_money_claims(

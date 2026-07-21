@@ -1,6 +1,7 @@
 import { apiClient, ApiClient, ApiError, unwrapData } from "./client";
 import type {
   AdminUser,
+  CardAssetUpload,
   CardSettings,
   CardSettingsInput,
   CaseStudy,
@@ -333,6 +334,23 @@ function normalizeManagedCard(rawValue: unknown): ManagedCard {
     publishedAt: optionalString(rawValue.published_at) || undefined,
     createdAt: optionalString(rawValue.created_at) || undefined,
     updatedAt: optionalString(rawValue.updated_at) || undefined,
+  };
+}
+
+function normalizeCardAssetUpload(rawValue: unknown): CardAssetUpload {
+  const data = requireRecord(rawValue, "名片图片");
+  const contentType = requireString(data.content_type, "名片图片 content_type");
+  if (contentType !== "image/webp") {
+    throw new ApiError("名片图片接口返回了不支持的格式。", {
+      code: "INVALID_API_RESPONSE",
+    });
+  }
+  return {
+    url: requireString(data.url, "名片图片 url"),
+    contentType,
+    width: requireNumber(data.width, "名片图片 width"),
+    height: requireNumber(data.height, "名片图片 height"),
+    sizeBytes: requireNumber(data.size_bytes, "名片图片 size_bytes"),
   };
 }
 
@@ -744,6 +762,14 @@ export function createAdminApi(client: ApiClient) {
       await client.get("/admin/cards?limit=100&offset=0"),
       "名片列表",
       normalizeManagedCard,
+    );
+  },
+
+  async uploadCardAsset(file: File): Promise<CardAssetUpload> {
+    const body = new FormData();
+    body.append("file", file);
+    return normalizeCardAssetUpload(
+      unwrapData(await client.postForm("/admin/card-assets", body)),
     );
   },
 

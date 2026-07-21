@@ -33,6 +33,9 @@ Implementation MUST start in a new exact run under `openspec/changes/unify-platf
 - [x] 2.3 Implement `PlatformLlmSettingsPage.tsx` as current-profile summary + profile list + create/edit drawer + test + confirmed activation, with advanced settings secondary. Expected result: save/test/activate have distinct states, failed/stale/unconfigured states are actionable, secret input clears after save.
 - [x] 2.4 Add platform overview LLM readiness entry and 390px layout rules without exposing enterprise-facing secrets. Verify with focused page tests, admin build and one desktop/390px browser spot-check.
 - [x] 2.5 Run the AC1 real smoke: create/update → test → activate → one public Chat; record profile ID/version/model and latency but never key/upstream body. Stop and repair before continuing if activation requires restart or availability disagrees.
+- [x] 2.6 Extend each platform LLM profile with default-off `allow_general_answers` and `faq_fast_path_enabled`, expose them only through the platform API, and map them into request-local runtime settings. Verify migration/model/schema/route/runtime focused tests and preserve optimistic version/audit behavior.
+- [x] 2.7 Add both controls to the existing platform LLM profile editor with clear scope and risk copy; values must survive save and refresh at desktop and 390 px without adding an enterprise control surface. Verify API normalization/page tests and admin build.
+- [x] 2.8 Run the behavior-control smoke without restarting between saves and requests: low-risk general answer off/on, high-risk gate unchanged, FAQ fast path on with no model call, then restore both controls to off. Record API container identity before and after.
 
 ## 3. Platform operations backend
 

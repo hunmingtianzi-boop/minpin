@@ -41,7 +41,13 @@ def _settings(**updates: Any) -> Settings:
     return Settings(**values)
 
 
-def _profile(settings: Settings, *, enabled: bool = True) -> PlatformLLMProfile:
+def _profile(
+    settings: Settings,
+    *,
+    enabled: bool = True,
+    allow_general_answers: bool = True,
+    faq_fast_path_enabled: bool = True,
+) -> PlatformLLMProfile:
     cipher = PiiCipher.from_settings(settings)
     placeholder_token = "database-placeholder-token"  # noqa: S105 - inert test value
     return PlatformLLMProfile(
@@ -64,6 +70,8 @@ def _profile(settings: Settings, *, enabled: bool = True) -> PlatformLLMProfile:
         daily_budget_cny=Decimal("88.50"),
         input_price_cny_per_million=Decimal("1.5"),
         output_price_cny_per_million=Decimal("6"),
+        allow_general_answers=allow_general_answers,
+        faq_fast_path_enabled=faq_fast_path_enabled,
         enabled=enabled,
         is_active=True,
         version=3,
@@ -164,6 +172,8 @@ def test_model_contract_has_no_plaintext_key_and_enforces_one_active_index() -> 
         "temperature",
         "input_price_cny_per_million",
         "output_price_cny_per_million",
+        "allow_general_answers",
+        "faq_fast_path_enabled",
         "last_test_status",
         "last_test_latency_ms",
         "last_tested_at",
@@ -189,6 +199,18 @@ def test_migration_is_clean_after_current_head_and_refuses_secret_destroying_dow
     assert "api_key varchar" not in migration
 
 
+def test_behavior_controls_migration_defaults_existing_profiles_to_strict_mode() -> None:
+    migration = (
+        Path(__file__).parents[1]
+        / "migrations/versions/20260717_0023_platform_llm_behavior_controls.py"
+    ).read_text(encoding="utf-8").casefold()
+
+    assert 'down_revision: str | none = "20260717_0022"' in migration
+    assert "allow_general_answers" in migration
+    assert "faq_fast_path_enabled" in migration
+    assert migration.count("server_default=sa.false()") == 2
+
+
 def test_database_config_decrypts_without_exposing_secret_in_repr_and_fails_closed() -> None:
     settings = _settings()
     row = _profile(settings)
@@ -196,6 +218,11 @@ def test_database_config_decrypts_without_exposing_secret_in_repr_and_fails_clos
     runtime = database_chat_config(row, settings=settings)
 
     assert runtime.source == "database"
+    assert runtime.allow_general_answers is True
+    assert runtime.faq_fast_path_enabled is True
+    request_settings = runtime.apply_to_settings(settings)
+    assert request_settings.llm_allow_general_answers is True
+    assert request_settings.rag_faq_fast_path_enabled is True
     assert runtime.api_key.get_secret_value() == "database-placeholder-token"
     assert "database-placeholder-token" not in repr(runtime)
     assert "environment-placeholder-token" not in repr(runtime)
@@ -301,6 +328,8 @@ async def test_models_probe_is_single_bounded_streaming_request_and_secret_safe(
         daily_budget_cny=10,
         input_price_cny_per_million=0,
         output_price_cny_per_million=0,
+        allow_general_answers=False,
+        faq_fast_path_enabled=True,
         enabled=True,
         source="database",
         version=2,
@@ -403,6 +432,8 @@ async def test_blank_key_update_preserves_ciphertext_and_stale_version_is_409(
                 daily_budget_cny=120,
                 input_price_cny_per_million=2,
                 output_price_cny_per_million=8,
+                allow_general_answers=False,
+                faq_fast_path_enabled=True,
                 enabled=True,
                 expected_version=3,
             ),
@@ -413,6 +444,8 @@ async def test_blank_key_update_preserves_ciphertext_and_stale_version_is_409(
         assert row.api_key_hint == original_hint
         assert row.version == 4
         assert view.key_configured is True
+        assert view.allow_general_answers is False
+        assert view.faq_fast_path_enabled is True
         assert not hasattr(view, "api_key")
         assert "database-placeholder-token" not in repr(view)
 
@@ -462,6 +495,8 @@ async def test_create_encrypts_key_and_audit_payload_is_secret_free(
                 base_url="https://provider.example.test/v1",
                 api_key="new-database-placeholder-token",
                 model="model-main",
+                allow_general_answers=True,
+                faq_fast_path_enabled=True,
             ),
             trace_id="create-safe",
         )
@@ -469,6 +504,10 @@ async def test_create_encrypts_key_and_audit_payload_is_secret_free(
     row = factory.session.row
     assert row is not None
     assert row.is_active is True
+    assert row.allow_general_answers is True
+    assert row.faq_fast_path_enabled is True
+    assert view.allow_general_answers is True
+    assert view.faq_fast_path_enabled is True
     assert row.api_key_ciphertext is not None
     assert b"new-database-placeholder-token" not in row.api_key_ciphertext
     assert PiiCipher.from_settings(settings).decrypt(row.api_key_ciphertext) == (

@@ -18,6 +18,7 @@ from app.api.middleware import RequestContextMiddleware
 from app.api.routes import (
     admin,
     auth,
+    card_assets,
     crm,
     enterprise_content,
     enterprise_readiness,
@@ -182,6 +183,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health.router, prefix=runtime_settings.api_prefix)
     app.include_router(auth.router, prefix=runtime_settings.api_prefix)
     app.include_router(admin.router, prefix=runtime_settings.api_prefix)
+    app.include_router(card_assets.router, prefix=runtime_settings.api_prefix)
     app.include_router(enterprise_content.router, prefix=runtime_settings.api_prefix)
     app.include_router(enterprise_readiness.router, prefix=runtime_settings.api_prefix)
     app.include_router(members.router, prefix=runtime_settings.api_prefix)

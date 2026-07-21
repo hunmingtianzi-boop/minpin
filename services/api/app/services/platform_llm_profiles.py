@@ -61,6 +61,8 @@ class CreateProfileInput:
     daily_budget_cny: float = 100
     input_price_cny_per_million: float = 0
     output_price_cny_per_million: float = 0
+    allow_general_answers: bool = False
+    faq_fast_path_enabled: bool = False
     enabled: bool = True
 
 
@@ -83,6 +85,8 @@ class UpdateProfileInput:
     daily_budget_cny: float = 100
     input_price_cny_per_million: float = 0
     output_price_cny_per_million: float = 0
+    allow_general_answers: bool = False
+    faq_fast_path_enabled: bool = False
     enabled: bool = True
 
 
@@ -110,6 +114,8 @@ class PlatformLLMProfileView:
     daily_budget_cny: float
     input_price_cny_per_million: float
     output_price_cny_per_million: float
+    allow_general_answers: bool
+    faq_fast_path_enabled: bool
     enabled: bool
     is_active: bool
     version: int
@@ -143,6 +149,8 @@ class EffectiveChatConfig:
     enabled: bool
     source: Literal["database", "environment"]
     version: int
+    allow_general_answers: bool = False
+    faq_fast_path_enabled: bool = False
     updated_at: datetime | None = None
 
     def apply_to_settings(self, settings: Settings) -> Settings:
@@ -164,6 +172,8 @@ class EffectiveChatConfig:
                 "llm_input_price_cny_per_million": self.input_price_cny_per_million,
                 "llm_output_price_cny_per_million": self.output_price_cny_per_million,
                 "model_daily_budget_cny": self.daily_budget_cny,
+                "llm_allow_general_answers": self.allow_general_answers,
+                "rag_faq_fast_path_enabled": self.faq_fast_path_enabled,
             }
         )
 
@@ -280,6 +290,8 @@ def environment_chat_config(settings: Settings) -> EffectiveChatConfig:
         enabled=True,
         source="environment",
         version=0,
+        allow_general_answers=settings.llm_allow_general_answers,
+        faq_fast_path_enabled=settings.rag_faq_fast_path_enabled,
     )
 
 
@@ -329,6 +341,8 @@ def database_chat_config(
         enabled=row.enabled,
         source="database",
         version=row.version,
+        allow_general_answers=row.allow_general_answers,
+        faq_fast_path_enabled=row.faq_fast_path_enabled,
         updated_at=row.updated_at,
     )
 
@@ -744,6 +758,8 @@ class PlatformLLMProfileService:
             "output_price_cny_per_million": Decimal(
                 str(body.output_price_cny_per_million)
             ),
+            "allow_general_answers": body.allow_general_answers,
+            "faq_fast_path_enabled": body.faq_fast_path_enabled,
             "enabled": body.enabled,
         }
 
@@ -836,6 +852,8 @@ class PlatformLLMProfileService:
             daily_budget_cny=float(row.daily_budget_cny),
             input_price_cny_per_million=float(row.input_price_cny_per_million),
             output_price_cny_per_million=float(row.output_price_cny_per_million),
+            allow_general_answers=row.allow_general_answers,
+            faq_fast_path_enabled=row.faq_fast_path_enabled,
             enabled=row.enabled,
             is_active=row.is_active,
             version=row.version,
@@ -874,6 +892,8 @@ class PlatformLLMProfileService:
                 "profile_name": row.name,
                 "provider": row.provider,
                 "model": row.model,
+                "allow_general_answers": row.allow_general_answers,
+                "faq_fast_path_enabled": row.faq_fast_path_enabled,
                 "enabled": row.enabled,
                 "is_active": row.is_active,
                 "version": row.version,

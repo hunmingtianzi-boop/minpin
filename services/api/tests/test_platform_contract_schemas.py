@@ -97,6 +97,8 @@ def test_llm_read_model_never_accepts_a_plain_or_encrypted_key() -> None:
     payload = profile.model_dump(mode="json")
     assert "api_key" not in payload
     assert "api_key_ciphertext" not in payload
+    assert payload["allow_general_answers"] is False
+    assert payload["faq_fast_path_enabled"] is False
 
     for forbidden in ("api_key", "api_key_ciphertext"):
         with pytest.raises(ValidationError):
@@ -113,6 +115,8 @@ def test_llm_read_model_never_accepts_a_plain_or_encrypted_key() -> None:
     )
     assert request.api_key is not None
     assert request.api_key.get_secret_value() == "write-only-secret"
+    assert request.allow_general_answers is False
+    assert request.faq_fast_path_enabled is False
 
 
 @pytest.mark.parametrize("field", ["tenant_id", "company_id", "target_tenant_id"])

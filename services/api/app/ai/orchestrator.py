@@ -10,8 +10,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Sequence
 
 from .errors import AIErrorCategory, AIProviderError, AIServiceError
-from .policy import EvidenceGate, InputPolicyDecision, InputSecurityPolicy
-from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry
+from .policy import (
+    EvidenceGate,
+    InputPolicyDecision,
+    InputSecurityPolicy,
+    QuestionScope,
+    classify_question_scope,
+)
+from .prompts import DEFAULT_PROMPT_VERSION, PromptRegistry, conversation_mode
 from .protocols import (
     ChatProvider,
     EmbeddingProvider,
@@ -21,6 +27,8 @@ from .protocols import (
 )
 from .schemas import (
     AIAnswer,
+    AnswerPresentation,
+    AnswerPresentationBlock,
     ChatCompletion,
     ChatMessage,
     Citation,
@@ -198,11 +206,21 @@ class RAGOrchestrator:
             )
             return _refused(_forbidden_refusal(forbidden), trace)
 
+        direct_question_scope = classify_question_scope(normalized)
+        question_scope = classify_question_scope(normalized, request.history)
+        trace.extra["question_scope"] = question_scope.value
+        trace.extra["question_scope_source"] = (
+            "conversation" if direct_question_scope is QuestionScope.AMBIGUOUS else "direct"
+        )
+        if question_scope is QuestionScope.AMBIGUOUS:
+            return _scope_clarification(trace)
+
         fast_faq = await self._try_fast_faq(
             request=request,
             policy=policy,
             normalized=normalized,
             trace=trace,
+            question_scope=question_scope,
         )
         if fast_faq is not None:
             return fast_faq
@@ -248,7 +266,11 @@ class RAGOrchestrator:
 
         trace.retrieval_mode = "hybrid" if embedding is not None else "lexical"
         top_k = request.top_k if request.top_k is not None else self.config.top_k
-        retrieval_text = _compose_retrieval_text(normalized, request.history)
+        retrieval_text = _compose_retrieval_text(
+            normalized,
+            request.history,
+            include_history=direct_question_scope is QuestionScope.AMBIGUOUS,
+        )
         retrieval_started = time.perf_counter()
         try:
             evidence = tuple(
@@ -270,7 +292,10 @@ class RAGOrchestrator:
             )
         except AIServiceError as exc:
             trace.retrieval_ms = _elapsed_ms(retrieval_started)
-            if self._evidence_gate.allows_general_answer(policy):
+            if self._evidence_gate.allows_general_answer(
+                policy,
+                question_scope=question_scope,
+            ):
                 evidence = ()
                 trace.extra["retrieval_fallback_category"] = exc.category.value
                 trace.extra["retrieval_fallback_code"] = exc.code
@@ -292,11 +317,18 @@ class RAGOrchestrator:
             dict.fromkeys(item.version_id for item in evidence)
         )
 
-        pre_gate = self._evidence_gate.before_generation(policy, evidence)
+        pre_gate = self._evidence_gate.before_generation(
+            policy,
+            evidence,
+            question_scope=question_scope,
+        )
         if not pre_gate.allowed:
             trace.error_category = AIErrorCategory.SAFETY.value
             trace.extra["needs_human_review"] = pre_gate.needs_human_review
-            return _refused(pre_gate.refusal, trace)
+            return _refused(
+                _deduplicate_refusal(pre_gate.refusal, request.history),
+                trace,
+            )
 
         prompt = self._prompt_registry.get(self.config.prompt_version)
         messages = prompt.render(
@@ -305,6 +337,7 @@ class RAGOrchestrator:
             policy=policy,
             history=request.history,
             general_answer_allowed=pre_gate.general_answer_allowed,
+            question_scope=question_scope,
         )
         model_started = time.perf_counter()
         try:
@@ -323,10 +356,22 @@ class RAGOrchestrator:
         trace.model_ms = _elapsed_ms(model_started)
         _add_completion_trace(trace, completion)
 
+        display_answer, answer_presentation = _model_answer_for_display(completion.output)
+        display_answer, removed_lines = _deduplicate_continuation_answer(
+            display_answer,
+            request.history,
+            mode=conversation_mode(normalized, request.history),
+        )
+        if removed_lines:
+            answer_presentation = "deduplicated_continuation"
+            trace.extra["answer_deduplicated"] = True
+            trace.extra["deduplicated_line_count"] = removed_lines
+        policy_output = completion.output.model_copy(update={"answer": display_answer})
         post_gate = self._evidence_gate.after_generation(
             policy,
-            completion.output,
+            policy_output,
             pre_gate.evidence,
+            question_scope=question_scope,
         )
         if not post_gate.allowed:
             trace.error_category = AIErrorCategory.SAFETY.value
@@ -338,11 +383,12 @@ class RAGOrchestrator:
             for item in post_gate.evidence
         )
         trace.extra["needs_human_review"] = post_gate.needs_human_review
+        trace.extra["answer_presentation"] = answer_presentation
         trace.extra["cited_content_hashes"] = tuple(
             citation.content_hash for citation in citations if citation.content_hash
         )
         return AIAnswer(
-            answer=completion.output.answer,
+            answer=display_answer,
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),
@@ -355,6 +401,7 @@ class RAGOrchestrator:
         policy: InputPolicyDecision,
         normalized: str,
         trace: _TraceState,
+        question_scope: QuestionScope,
     ) -> AIAnswer | None:
         if (
             not self.config.faq_fast_path_enabled
@@ -401,20 +448,26 @@ class RAGOrchestrator:
         if evidence is None:
             return None
 
-        pre_gate = self._evidence_gate.before_generation(policy, (evidence,))
+        pre_gate = self._evidence_gate.before_generation(
+            policy,
+            (evidence,),
+            question_scope=question_scope,
+        )
         if not pre_gate.allowed:
             trace.extra["faq_fast_path_rejected"] = (
                 pre_gate.refusal.code.value if pre_gate.refusal else "policy"
             )
             return None
+        display_answer, answer_presentation = _faq_answer_for_display(evidence)
         post_gate = self._evidence_gate.after_generation(
             policy,
             StructuredModelAnswer(
-                answer=evidence.text,
+                answer=display_answer,
                 cited_evidence_ids=[evidence.evidence_id],
                 needs_human_review=pre_gate.needs_human_review,
             ),
             pre_gate.evidence,
+            question_scope=question_scope,
         )
         if not post_gate.allowed:
             trace.extra["faq_fast_path_rejected"] = (
@@ -432,6 +485,7 @@ class RAGOrchestrator:
         trace.extra.update(
             {
                 "interaction_kind": "faq_fast_path",
+                "answer_presentation": answer_presentation,
                 "needs_human_review": post_gate.needs_human_review,
                 "retrieved_evidence_ids": (evidence.evidence_id,),
                 "retrieved_version_ids": (evidence.version_id,),
@@ -441,11 +495,249 @@ class RAGOrchestrator:
             }
         )
         return AIAnswer(
-            answer=evidence.text,
+            answer=display_answer,
             citations=citations,
             refusal=None,
             trace=trace.finish(citations),
         )
+
+
+_MARKDOWN_BLOCK_PATTERN = re.compile(
+    r"(?m)^\s*(?:#{1,4}\s+|[-*+]\s+|\d+[.)]\s+|>\s+)"
+)
+
+AnswerPresentationMode = Literal[
+    "structured_blocks",
+    "structured_emphasis",
+    "metadata_markdown",
+    "normalized_list",
+    "source_text",
+    "deduplicated_continuation",
+]
+
+
+def _model_answer_for_display(
+    output: StructuredModelAnswer,
+) -> tuple[str, AnswerPresentationMode]:
+    if output.presentation is not None:
+        return _render_answer_presentation(output.presentation), "structured_blocks"
+    emphasized = _render_plain_text_with_emphasis(
+        output.answer,
+        output.answer_emphasis,
+    ) if output.answer_emphasis else output.answer
+    formatted = _format_answer_for_display(emphasized)
+    if output.answer_emphasis:
+        return formatted, "structured_emphasis"
+    presentation = "normalized_list" if formatted != output.answer.strip() else "source_text"
+    return formatted, presentation
+
+
+def _deduplicate_continuation_answer(
+    answer: str,
+    history: Sequence[ChatMessage],
+    *,
+    mode: str,
+) -> tuple[str, int]:
+    if mode != "continuation" or not answer.strip():
+        return answer, 0
+    previous = next(
+        (item.content for item in reversed(history) if item.role == "assistant"),
+        "",
+    )
+    if not previous.strip():
+        return answer, 0
+
+    def normalized_line(value: str) -> str:
+        return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+
+    previous_lines = {
+        normalized
+        for line in previous.splitlines()
+        if (normalized := normalized_line(line))
+    }
+    answer_lines = answer.splitlines()
+    normalized_answer_lines = [normalized_line(line) for line in answer_lines]
+    repeated_indexes = {
+        index
+        for index, normalized in enumerate(normalized_answer_lines)
+        if len(normalized) >= 4 and normalized in previous_lines
+    }
+    repeated_chars = sum(
+        len(normalized_answer_lines[index]) for index in repeated_indexes
+    )
+    total_chars = sum(len(value) for value in normalized_answer_lines)
+    if repeated_chars < 40 or not total_chars or repeated_chars / total_chars < 0.5:
+        return answer, 0
+
+    kept: list[str] = []
+    for index, line in enumerate(answer_lines):
+        if index in repeated_indexes:
+            continue
+        if not line.strip() and (not kept or not kept[-1].strip()):
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    deduplicated = "\n".join(kept).strip()
+    if not normalized_line(deduplicated):
+        deduplicated = "与上一条结论一致，当前没有新增的可核验信息。"
+    return deduplicated, len(repeated_indexes)
+
+
+def _render_answer_presentation(presentation: AnswerPresentation) -> str:
+    sections = [
+        _render_plain_text_with_emphasis(
+            presentation.lead,
+            presentation.lead_emphasis,
+        )
+    ]
+    for block in presentation.blocks:
+        sections.append(_render_answer_block(block))
+    return "\n\n".join(section for section in sections if section)
+
+
+def _render_answer_block(block: AnswerPresentationBlock) -> str:
+    title = _markdown_label(block.title) if block.title else None
+    if block.type == "paragraph":
+        text = _render_plain_text_with_emphasis(str(block.text), block.emphasis)
+        return f"**{title}**\n\n{text}" if title else text
+    if block.type == "note":
+        prefix = f"**{title}：** " if title else ""
+        text = _render_plain_text_with_emphasis(str(block.text), block.emphasis)
+        return f"> {prefix}{text}"
+
+    marker = "{index}." if block.type == "steps" else "-"
+    items = []
+    for index, item in enumerate(block.items, start=1):
+        item_text = _markdown_copy(item.text or "")
+        if item.label and item.text:
+            item_text = f"**{_markdown_label(item.label)}：** {item_text}"
+        elif item.label:
+            item_text = f"**{_markdown_label(item.label)}**"
+        elif item.text:
+            item_text = _emphasize_inline_item_label(item.text)
+        items.append(f"{marker.format(index=index)} {item_text}")
+    return f"**{title}**\n\n" + "\n".join(items)
+
+
+def _emphasize_inline_item_label(value: str) -> str:
+    for separator in ("：", ":"):
+        if separator not in value:
+            continue
+        label, detail = (part.strip() for part in value.split(separator, 1))
+        if (
+            label
+            and detail
+            and len(label) <= 40
+            and not re.search(r"[，。；!?！？]", label)
+        ):
+            return f"**{_markdown_label(label)}：** {_markdown_copy(detail)}"
+    return _markdown_copy(value)
+
+
+def _render_plain_text_with_emphasis(value: str, emphasis: Sequence[str]) -> str:
+    terms = sorted(dict.fromkeys(emphasis), key=len, reverse=True)
+    if not terms:
+        return _markdown_copy(value)
+
+    pattern = re.compile("|".join(re.escape(term) for term in terms))
+    rendered: list[str] = []
+    cursor = 0
+    for match in pattern.finditer(value):
+        rendered.append(_markdown_copy(value[cursor : match.start()]))
+        rendered.append(f"**{_markdown_copy(match.group(0))}**")
+        cursor = match.end()
+    rendered.append(_markdown_copy(value[cursor:]))
+    return "".join(rendered)
+
+
+def _markdown_copy(value: str) -> str:
+    escaped = value.replace("\\", "\\\\")
+    for token in ("*", "_", "`", "[", "]", "<", ">"):
+        escaped = escaped.replace(token, f"\\{token}")
+    return escaped
+
+
+def _markdown_label(value: str) -> str:
+    return _markdown_copy(value)
+
+
+def _faq_answer_for_display(
+    evidence: RetrievedEvidence,
+) -> tuple[str, AnswerPresentationMode]:
+    configured = evidence.metadata.get("answer_markdown")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip(), "metadata_markdown"
+    formatted = _format_answer_for_display(evidence.text)
+    presentation = "normalized_list" if formatted != evidence.text.strip() else "source_text"
+    return formatted, presentation
+
+
+def _format_answer_for_display(value: str) -> str:
+    """Add compact Markdown only when a dense answer contains an obvious list.
+
+    This formatter never invents labels or rewrites claims. It only moves
+    already-delimited list items onto separate lines so model variance cannot
+    collapse a multi-point mobile answer back into one paragraph.
+    """
+
+    text = value.strip()
+    if len(text) < 36 or "\n" in text or _MARKDOWN_BLOCK_PATTERN.search(text):
+        return text
+
+    for colon in ("：", ":"):
+        if colon not in text:
+            continue
+        lead, remainder = text.split(colon, 1)
+        if not lead.strip() or len(lead.strip()) > 48:
+            continue
+        remainder = remainder.strip().rstrip("。.!！?？")
+        for separator in ("；", ";", "、"):
+            parts = [part.strip().rstrip("。.;；") for part in remainder.split(separator)]
+            if not 3 <= len(parts) <= 6:
+                continue
+            if any(not part or len(part) > 64 for part in parts):
+                continue
+            bullets = "\n".join(f"- {part}" for part in parts)
+            return f"**结论：** {lead.strip()}{colon}\n\n{bullets}"
+
+    action_match = re.fullmatch(
+        r"(?P<intro>[^。]{1,32}?)(?:可)?通过(?P<ways>[^。]+?)"
+        r"等方式(?P<tail>[^。]*)。(?P<rest>.+)",
+        text,
+    )
+    if action_match is not None:
+        ways = _split_compact_items(action_match.group("ways"))
+        if 3 <= len(ways) <= 6:
+            label = "合作方式" if "合作" in text else "可选方式"
+            sections = [f"**{label}：**\n\n" + "\n".join(f"- {item}" for item in ways)]
+            rest = action_match.group("rest").strip()
+            process_match = re.fullmatch(
+                r"(?P<prefix>[^，；。]{0,24}?流程[^，；。]*包括)"
+                r"(?P<steps>.+?)(?:，|；)(?P<note>具体.+)",
+                rest,
+            )
+            if process_match is not None:
+                steps = _split_compact_items(process_match.group("steps"))
+                if 3 <= len(steps) <= 8:
+                    process_label = (
+                        "合作流程" if "合作流程" in process_match.group("prefix") else "流程"
+                    )
+                    sections.append(f"**{process_label}：** " + " → ".join(steps))
+                    sections.append(f"> {process_match.group('note').strip()}")
+                    return "\n\n".join(sections)
+            sections.append(rest)
+            return "\n\n".join(sections)
+
+    return text
+
+
+def _split_compact_items(value: str) -> list[str]:
+    return [
+        item.strip().rstrip("。.;；")
+        for item in re.split(r"[、，]|\s*(?:或|以及)\s*", value)
+        if item.strip()
+    ]
 
 
 def _add_completion_trace(trace: _TraceState, completion: ChatCompletion) -> None:
@@ -474,6 +766,46 @@ def _refused(refusal: Refusal | None, trace: _TraceState) -> AIAnswer:
         answer="",
         citations=(),
         refusal=safe_refusal,
+        trace=trace.finish(()),
+    )
+
+
+def _deduplicate_refusal(
+    refusal: Refusal | None,
+    history: Sequence[ChatMessage],
+) -> Refusal | None:
+    if refusal is None:
+        return None
+    previous = next(
+        (item.content for item in reversed(history) if item.role == "assistant"),
+        "",
+    )
+    current = " ".join(
+        part for part in (refusal.reason, refusal.safe_alternative) if part
+    )
+    def normalize(value: str) -> str:
+        return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
+
+    if not previous or normalize(previous) != normalize(current):
+        return refusal
+    return Refusal(
+        code=refusal.code,
+        reason="与上一条结论一致，当前没有新增的可核验信息。",
+        retryable=refusal.retryable,
+    )
+
+
+def _scope_clarification(trace: _TraceState) -> AIAnswer:
+    trace.extra.update(
+        {
+            "interaction_kind": "scope_clarification",
+            "answer_presentation": "deterministic_clarification",
+        }
+    )
+    return AIAnswer(
+        answer="你是想了解当前企业的相关情况，还是询问通用知识？请补充一下具体对象。",
+        citations=(),
+        refusal=None,
         trace=trace.finish(()),
     )
 
@@ -553,7 +885,14 @@ def _elapsed_ms(started_at: float) -> int:
     return max(0, round((time.perf_counter() - started_at) * 1000))
 
 
-def _compose_retrieval_text(normalized: str, history: Sequence[ChatMessage]) -> str:
+def _compose_retrieval_text(
+    normalized: str,
+    history: Sequence[ChatMessage],
+    *,
+    include_history: bool,
+) -> str:
+    if not include_history:
+        return normalized
     previous_user_turns = [
         str(item.content).strip()[:300]
         for item in history

@@ -9,10 +9,13 @@ describe("MarkdownMessage", () => {
   it("renders normal model formatting as semantic text", () => {
     render(
       <MarkdownMessage
-        content={"**重点**\n\n1. 第一项\n2. 第二项\n\n> 这是引用\n\n`示例代码`"}
+        content={
+          "### 合作方式\n\n**重点**\n\n1. 第一项\n2. 第二项\n\n> 这是引用\n\n`示例代码`"
+        }
       />,
     );
 
+    expect(screen.getByRole("heading", { name: "合作方式", level: 3 })).toBeInTheDocument();
     expect(screen.getByText("重点").tagName).toBe("STRONG");
     expect(screen.getByRole("list")).toHaveTextContent("第一项");
     expect(screen.getByText("这是引用").closest("blockquote")).not.toBeNull();

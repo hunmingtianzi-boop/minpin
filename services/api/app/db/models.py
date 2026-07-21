@@ -1375,6 +1375,18 @@ class PlatformLLMProfile(UUIDPrimaryKeyMixin, TimestampMixin, OptimisticVersionM
         default=Decimal("0"),
         server_default=text("0"),
     )
+    allow_general_answers: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    faq_fast_path_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     enabled: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

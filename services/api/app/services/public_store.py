@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
-from sqlalchemy import delete, func, select, text, update
+from sqlalchemy import case, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -45,6 +45,7 @@ from app.core.tokens import (
 from app.db.models import (
     AIRun,
     Card,
+    CardKind,
     Company,
     ConsentRecord,
     ConsentScope,
@@ -140,6 +141,10 @@ class PublicStore:
             company = await session.get(Company, scope.company_id)
             if card is None or company is None:
                 raise ApiError(404, "RESOURCE_NOT_FOUND", "名片不存在")
+            official_card_slug = await _published_enterprise_card_slug(
+                session,
+                card=card,
+            )
             knowledge_count = (
                 await session.execute(
                     select(func.count(KnowledgeDocument.id)).where(
@@ -203,6 +208,7 @@ class PublicStore:
             return PublicCard(
                 id=card.id,
                 slug=card.slug,
+                card_kind=card.card_kind,
                 display_name=card.display_name,
                 title=str(card_settings.get("title") or company.name),
                 avatar_url=_optional_string(card_settings.get("avatar_url")),
@@ -214,6 +220,7 @@ class PublicStore:
                     region=_optional_string(company_settings.get("region")),
                     website=_optional_string(company_settings.get("website")),
                     logo_url=_optional_string(company_settings.get("logo_url")),
+                    official_card_slug=official_card_slug,
                 ),
                 contact_fields=_public_dict_list(
                     card_settings.get("contact_fields"),
@@ -826,7 +833,19 @@ class PublicStore:
                         Message.status.in_([MessageStatus.COMPLETED, MessageStatus.REFUSED]),
                         Message.content != "",
                     )
-                    .order_by(Message.created_at.desc(), Message.id.desc())
+                    # User and assistant rows are inserted in one transaction and
+                    # therefore usually share the exact same database timestamp.
+                    # UUID ordering is random, so make the reverse-chronological
+                    # query return assistant before user; reversing the result
+                    # below then always restores user -> assistant turn order.
+                    .order_by(
+                        Message.created_at.desc(),
+                        case(
+                            (Message.role == MessageRole.ASSISTANT, 1),
+                            else_=0,
+                        ).desc(),
+                        Message.id.desc(),
+                    )
                     .limit(max(0, min(limit, 12)))
                 )
             ).scalars().all()
@@ -1498,6 +1517,29 @@ class PublicStore:
             / million
         )
         return (input_cost + output_cost).quantize(Decimal("0.000001"))
+
+
+async def _published_enterprise_card_slug(
+    session: AsyncSession,
+    *,
+    card: Card,
+) -> str | None:
+    if card.card_kind == CardKind.ENTERPRISE:
+        return card.slug
+    return await session.scalar(
+        select(Card.slug)
+        .where(
+            Card.tenant_id == card.tenant_id,
+            Card.company_id == card.company_id,
+            Card.card_kind == CardKind.ENTERPRISE,
+            Card.status == ContentStatus.PUBLISHED,
+            Card.deleted_at.is_(None),
+            Card.published_at.is_not(None),
+            Card.published_at <= func.now(),
+        )
+        .order_by(Card.published_at.desc(), Card.updated_at.desc(), Card.id.asc())
+        .limit(1)
+    )
 
 
 def _policy_version(card: Card, scope: ConsentScope) -> str:

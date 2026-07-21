@@ -36,6 +36,8 @@ export interface PlatformLlmCurrentConfig {
   model?: string;
   baseUrl?: string;
   keyConfigured?: boolean;
+  allowGeneralAnswers?: boolean;
+  faqFastPathEnabled?: boolean;
   updatedAt?: string;
 }
 
@@ -48,6 +50,8 @@ export interface PlatformLlmProfile {
   keyConfigured: boolean;
   keyHint?: string;
   enabled: boolean;
+  allowGeneralAnswers: boolean;
+  faqFastPathEnabled: boolean;
   thinkingMode?: "disabled" | "enabled";
   reasoningEffort?: "high" | "max";
   timeoutSeconds?: number;
@@ -64,6 +68,8 @@ export interface PlatformLlmProfileInput {
   baseUrl: string;
   apiKey: string;
   enabled: boolean;
+  allowGeneralAnswers: boolean;
+  faqFastPathEnabled: boolean;
   thinkingMode: "disabled" | "enabled";
   reasoningEffort: "high" | "max";
   timeoutSeconds: number;
@@ -116,6 +122,8 @@ const emptyForm: PlatformLlmProfileInput = {
   baseUrl: "https://api.deepseek.com",
   apiKey: "",
   enabled: true,
+  allowGeneralAnswers: false,
+  faqFastPathEnabled: false,
   thinkingMode: "disabled",
   reasoningEffort: "high",
   timeoutSeconds: 30,
@@ -160,6 +168,8 @@ function profileToForm(profile: PlatformLlmProfile): PlatformLlmProfileInput {
     baseUrl: profile.baseUrl,
     apiKey: "",
     enabled: profile.enabled,
+    allowGeneralAnswers: profile.allowGeneralAnswers,
+    faqFastPathEnabled: profile.faqFastPathEnabled,
     thinkingMode: profile.thinkingMode ?? "disabled",
     reasoningEffort: profile.reasoningEffort ?? "high",
     timeoutSeconds: profile.timeoutSeconds ?? 30,
@@ -506,6 +516,41 @@ function ProfileEditor({
                 />
                 <span>保存后启用此配置</span>
               </label>
+              <fieldset className={styles.policyControls}>
+                <legend>回答策略</legend>
+                <label className={styles.policyToggle}>
+                  <input
+                    aria-label="允许低风险通用问答"
+                    type="checkbox"
+                    checked={state.form.allowGeneralAnswers}
+                    onChange={(event) =>
+                      update("allowGeneralAnswers", event.target.checked)
+                    }
+                  />
+                  <span>
+                    <strong>允许低风险通用问答</strong>
+                    <small>
+                      企业资料没有覆盖时，可由当前模型回答普通问题；价格、承诺等高风险问题仍严格受限。
+                    </small>
+                  </span>
+                </label>
+                <label className={styles.policyToggle}>
+                  <input
+                    aria-label="FAQ 快速直答（不调用模型）"
+                    type="checkbox"
+                    checked={state.form.faqFastPathEnabled}
+                    onChange={(event) =>
+                      update("faqFastPathEnabled", event.target.checked)
+                    }
+                  />
+                  <span>
+                    <strong>FAQ 快速直答（不调用模型）</strong>
+                    <small>
+                      高置信命中已发布 FAQ 时直接返回标准答案，减少延迟和模型费用。
+                    </small>
+                  </span>
+                </label>
+              </fieldset>
             </div>
           </details>
 
@@ -705,6 +750,8 @@ export function PlatformLlmSettingsPage({
         <dl className={styles.currentFacts}>
           <div><dt>来源</dt><dd>{sourceLabel(current?.source ?? "unconfigured")}</dd></div>
           <div><dt>密钥</dt><dd>{current?.keyConfigured ? "已配置（不回显）" : "未配置"}</dd></div>
+          <div><dt>通用问答</dt><dd>{current?.allowGeneralAnswers ? "低风险开放" : "严格证据"}</dd></div>
+          <div><dt>FAQ 直答</dt><dd>{current?.faqFastPathEnabled ? "已开启" : "已关闭"}</dd></div>
           <div><dt>更新时间</dt><dd>{formatUpdatedAt(current?.updatedAt)}</dd></div>
         </dl>
         {current?.baseUrl && <code className={styles.endpoint}>{current.baseUrl}</code>}
@@ -743,6 +790,10 @@ export function PlatformLlmSettingsPage({
                     <small>
                       密钥：{profile.keyConfigured ? `已配置${profile.keyHint ? `（${profile.keyHint}）` : ""}` : "未配置"}
                       {profile.updatedAt ? ` · 更新于 ${formatUpdatedAt(profile.updatedAt)}` : ""}
+                    </small>
+                    <small>
+                      回答策略：通用问答{profile.allowGeneralAnswers ? "开启" : "关闭"}
+                      {` · FAQ 直答${profile.faqFastPathEnabled ? "开启" : "关闭"}`}
                     </small>
                   </div>
                   <div className={styles.profileActions}>

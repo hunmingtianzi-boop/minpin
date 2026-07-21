@@ -25,6 +25,8 @@ from app.db.models import (
     ConversationStatus,
     IdempotencyStatus,
     Message,
+    MessageRole,
+    MessageStatus,
 )
 from app.services.public_store import CardScope, IdempotencyClaim, PublicStore
 
@@ -45,6 +47,12 @@ class _ScalarResult:
         return self.value
 
     def scalar_one_or_none(self) -> Any:
+        return self.value
+
+    def scalars(self) -> "_ScalarResult":
+        return self
+
+    def all(self) -> Any:
         return self.value
 
 
@@ -385,6 +393,56 @@ async def test_prepare_message_persists_and_forwards_only_redacted_content(
     )
     assert "is_current" in summary_update
     assert "stale_at" in summary_update
+
+
+@pytest.mark.asyncio
+async def test_conversation_history_keeps_user_before_assistant_when_timestamps_match(
+    monkeypatch: Any,
+) -> None:
+    card = _card()
+    principal = _principal(card)
+    created_at = datetime.now(UTC)
+    user = Message(
+        id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        conversation_id=uuid.uuid4(),
+        role=MessageRole.USER,
+        content="企业有什么商业模式？",
+        status=MessageStatus.COMPLETED,
+        created_at=created_at,
+    )
+    assistant = Message(
+        id=uuid.UUID("ffffffff-ffff-4fff-8fff-ffffffffffff"),
+        tenant_id=card.tenant_id,
+        company_id=card.company_id,
+        conversation_id=user.conversation_id,
+        role=MessageRole.ASSISTANT,
+        content="当前资料没有披露具体盈利模式。",
+        status=MessageStatus.COMPLETED,
+        created_at=created_at,
+    )
+    # This is the deterministic descending order requested from PostgreSQL.
+    session = _Session(result=[assistant, user])
+    store = PublicStore(_SessionFactory(session), _settings())  # type: ignore[arg-type]
+    monkeypatch.setattr(store, "_set_principal_scope", AsyncMock())
+    prepared = SimpleNamespace(
+        conversation_id=user.conversation_id,
+        user_message_id=uuid.uuid4(),
+    )
+
+    history = await store.load_conversation_history(
+        prepared=prepared,  # type: ignore[arg-type]
+        principal=principal,
+    )
+
+    assert [(item.role, item.content) for item in history] == [
+        ("user", user.content),
+        ("assistant", assistant.content),
+    ]
+    statement = str(session.executed[-1])
+    assert "CASE WHEN" in statement
+    assert "messages.role" in statement
 
 
 @pytest.mark.asyncio

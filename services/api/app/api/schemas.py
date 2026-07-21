@@ -37,6 +37,7 @@ class PublicCompany(StrictModel):
     region: str | None = None
     website: str | None = None
     logo_url: str | None = None
+    official_card_slug: str | None = None
 
 
 class AiAssistantPublicConfig(StrictModel):
@@ -64,6 +65,7 @@ class PolicyVersions(StrictModel):
 class PublicCard(StrictModel):
     id: uuid.UUID
     slug: str
+    card_kind: Literal["enterprise", "employee"]
     display_name: str
     title: str
     avatar_url: str | None = None

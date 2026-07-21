@@ -101,6 +101,12 @@ services:
       APP_NAME: cf-ai-card
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cf_ai_card}:${POSTGRES_PASSWORD:-change-me-local-only}@postgres:5432/${POSTGRES_DB:-cf_ai_card}
       REDIS_URL: redis://redis:6379/0
+      OBJECT_STORAGE_ENDPOINT: http://minio:9000
+      OBJECT_STORAGE_REGION: ${OBJECT_STORAGE_REGION:-local}
+      OBJECT_STORAGE_BUCKET: ${OBJECT_STORAGE_BUCKET:-cf-ai-card-local}
+      OBJECT_STORAGE_ACCESS_KEY: ${OBJECT_STORAGE_ACCESS_KEY:-minioadmin}
+      OBJECT_STORAGE_SECRET_KEY: ${OBJECT_STORAGE_SECRET_KEY:-change-me-local-only}
+      OBJECT_STORAGE_SECURE: "false"
       JWT_SIGNING_KEY: ${JWT_SIGNING_KEY:-replace-with-at-least-32-random-bytes}
       CORS_ALLOWED_ORIGINS: '${CORS_ALLOWED_ORIGINS:-["http://127.0.0.1:4173","http://localhost:4173","http://127.0.0.1:4174","http://localhost:4174","http://127.0.0.1:8080","http://localhost:8080","http://127.0.0.1:8081","http://localhost:8081"]}'
       PUBLIC_CARD_BASE_URL: ${PUBLIC_CARD_BASE_URL:-http://127.0.0.1:8080}
@@ -171,6 +177,8 @@ services:
       seed:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      minio:
         condition: service_healthy
     healthcheck:
       test:

@@ -488,6 +488,14 @@ function llmProfile(value: unknown): PlatformLlmProfile {
       value.output_price_cny_per_million,
       "output_price_cny_per_million",
     ),
+    allowGeneralAnswers: requiredBoolean(
+      value.allow_general_answers,
+      "allow_general_answers",
+    ),
+    faqFastPathEnabled: requiredBoolean(
+      value.faq_fast_path_enabled,
+      "faq_fast_path_enabled",
+    ),
     keyConfigured: requiredBoolean(value.key_configured, "key_configured"),
     keyHint: optionalString(value.key_hint, "key_hint"),
     enabled: requiredBoolean(value.enabled, "enabled"),
@@ -558,6 +566,12 @@ function llmProfilePayload(
   }
   if (input.outputPriceCnyPerMillion !== undefined) {
     body.output_price_cny_per_million = input.outputPriceCnyPerMillion;
+  }
+  if (input.allowGeneralAnswers !== undefined) {
+    body.allow_general_answers = input.allowGeneralAnswers;
+  }
+  if (input.faqFastPathEnabled !== undefined) {
+    body.faq_fast_path_enabled = input.faqFastPathEnabled;
   }
   if (input.enabled !== undefined) body.enabled = input.enabled;
   return body;

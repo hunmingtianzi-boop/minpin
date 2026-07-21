@@ -256,7 +256,7 @@
 
 .currentFacts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin: 0;
 }
@@ -507,6 +507,45 @@
   min-height: 18px;
 }
 
+.policyControls {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.policyControls legend {
+  margin-bottom: 8px;
+  color: var(--subtle);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.policyToggle {
+  grid-template-columns: auto minmax(0, 1fr) !important;
+  gap: 10px !important;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  cursor: pointer;
+}
+
+.policyToggle input {
+  width: 18px;
+  min-height: 18px;
+  margin-top: 2px;
+}
+
+.policyToggle > span {
+  display: grid;
+  gap: 4px;
+}
+
 .drawerActions {
   justify-content: flex-end;
   padding-top: 2px;
@@ -546,7 +585,8 @@
 
   .capabilityList,
   .currentFacts,
-  .formGrid {
+  .formGrid,
+  .policyControls {
     grid-template-columns: 1fr;
   }
 

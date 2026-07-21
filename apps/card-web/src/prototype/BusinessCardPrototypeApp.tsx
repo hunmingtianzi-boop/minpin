@@ -13,7 +13,7 @@ import {
   SquaresFourIcon,
   UserCircleIcon,
 } from "@phosphor-icons/react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { EnterpriseCardConfig } from "../domain/card";
 import { AssistantApiError } from "../lib/assistantApi";
@@ -55,6 +55,25 @@ type PrototypeHistoryState =
   | { bpView: BaseView; from?: BaseView }
   | { bpView: "detail"; detail: DetailHistoryTarget };
 
+type CardSwitchTarget = {
+  href: string;
+  kind: "employee" | "enterprise";
+  label: string;
+  ariaLabel: string;
+};
+
+type CompanySectionId = "overview" | "intro" | "business" | "cases" | "trust" | "faq" | "ai";
+
+const companySectionDefinitions: ReadonlyArray<{ id: CompanySectionId; label: string }> = [
+  { id: "overview", label: "概览" },
+  { id: "intro", label: "介绍" },
+  { id: "business", label: "业务" },
+  { id: "cases", label: "案例" },
+  { id: "trust", label: "资料" },
+  { id: "faq", label: "问答" },
+  { id: "ai", label: "AI" },
+];
+
 type CatalogState =
   | { status: "idle" | "loading" }
   | { status: "ready"; data: PublicCatalog }
@@ -74,10 +93,6 @@ function isBaseView(value: unknown): value is BaseView {
 function initialBaseView(): BaseView {
   const candidate = new URLSearchParams(window.location.search).get("view");
   return isBaseView(candidate) ? candidate : "card";
-}
-
-function initialView(): View {
-  return detailRouteFromLocation() ? "detail" : initialBaseView();
 }
 
 function scrollPageToTop() {
@@ -114,6 +129,31 @@ function detailRouteFromLocation() {
     return { kind, slug } as const;
   }
   return undefined;
+}
+
+function publicCardHref(slug: string, fromEmployeeSlug?: string) {
+  const url = new URL(window.location.href);
+  const encodedSlug = encodeURIComponent(slug);
+  url.pathname = /(?:^|\/)c\/[^/]+/i.test(url.pathname)
+    ? url.pathname.replace(/((?:^|\/)c\/)[^/]+/i, `$1${encodedSlug}`)
+    : `/c/${encodedSlug}`;
+  const isMock = url.searchParams.has("mock-card");
+  url.search = "";
+  if (isMock) url.searchParams.set("mock-card", "enterprise");
+  if (fromEmployeeSlug) url.searchParams.set("from_employee", fromEmployeeSlug);
+  return `${url.pathname}${url.search}`;
+}
+
+function employeeCardHref(slug: string) {
+  const url = new URL(window.location.href);
+  const encodedSlug = encodeURIComponent(slug);
+  url.pathname = /(?:^|\/)c\/[^/]+/i.test(url.pathname)
+    ? url.pathname.replace(/((?:^|\/)c\/)[^/]+/i, `$1${encodedSlug}`)
+    : `/c/${encodedSlug}`;
+  const isMock = url.searchParams.has("mock-card");
+  url.search = "";
+  if (isMock) url.searchParams.set("mock-card", "employee");
+  return `${url.pathname}${url.search}`;
 }
 
 function recommendationSlug(item: PublicRecommendation) {
@@ -153,10 +193,12 @@ function Avatar({ label, src, small = false }: { label: string; src?: string; sm
 
 function AppHeader({
   back,
+  switchTarget,
   title,
   onShare,
 }: {
   back?: () => void;
+  switchTarget?: CardSwitchTarget;
   title?: string;
   onShare?: () => void;
 }) {
@@ -186,8 +228,17 @@ function AppHeader({
         <i />
         <span>▮▮▮　◒　▰</span>
       </div>
-      <header className={`bp-topbar${title ? "" : " bp-card-topbar"}`}>
-        {back ? (
+      <header className={`bp-topbar${title ? "" : " bp-card-topbar"}${switchTarget ? " bp-switch-topbar" : ""}`}>
+        {switchTarget ? (
+          <a className="bp-card-switch" href={switchTarget.href} aria-label={switchTarget.ariaLabel}>
+            {switchTarget.kind === "enterprise" ? (
+              <BuildingsIcon size={16} weight="fill" />
+            ) : (
+              <IdentificationCardIcon size={16} weight="fill" />
+            )}
+            <span>{switchTarget.label}</span>
+          </a>
+        ) : back ? (
           <button type="button" onClick={back} aria-label="返回">
             <ArrowLeftIcon size={26} />
           </button>
@@ -198,7 +249,7 @@ function AppHeader({
         {onShare ? (
           <button type="button" onClick={onShare} aria-label="分享名片">
             <ShareNetworkIcon size={24} />
-            {!title && <small>分享</small>}
+            {!title && !switchTarget && <small>分享</small>}
           </button>
         ) : (
           <span className="bp-topbar-spacer" aria-hidden="true" />
@@ -208,15 +259,152 @@ function AppHeader({
   );
 }
 
-function Section({ title, children, action }: { title: string; children: ReactNode; action?: ReactNode }) {
+function Section({
+  title,
+  children,
+  action,
+  sectionId,
+}: {
+  title: string;
+  children: ReactNode;
+  action?: ReactNode;
+  sectionId?: CompanySectionId;
+}) {
   return (
-    <section className="bp-section">
+    <section
+      className={`bp-section${sectionId ? " bp-company-scroll-section" : ""}`}
+      id={sectionId ? `bp-company-section-${sectionId}` : undefined}
+      data-company-section={sectionId}
+    >
       <div className="bp-section-title">
         <h2>{title}</h2>
         {action}
       </div>
       {children}
     </section>
+  );
+}
+
+type ProductShowcaseItem = {
+  key: string;
+  category: string;
+  title: string;
+  description: string;
+  meta?: string;
+  disabled?: boolean;
+  onOpen: () => void;
+};
+
+function ProductShowcase({ items }: { items: ProductShowcaseItem[] }) {
+  return (
+    <div className="bp-product-showcase">
+      {items.map((item, index) => (
+        <button
+          className="bp-product-showcase-item"
+          type="button"
+          key={item.key}
+          disabled={item.disabled}
+          onClick={item.onOpen}
+        >
+          <span className="bp-showcase-number" aria-hidden="true">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+          <small>{item.category}</small>
+          <strong>{item.title}</strong>
+          <p>{item.description}</p>
+          {item.meta && <em>{item.meta}</em>}
+          <span className="bp-showcase-link">查看详情 <Arrow /></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CaseShowcase({
+  items,
+  onOpen,
+}: {
+  items: PublicCaseStudy[];
+  onOpen: (item: PublicCaseStudy) => void;
+}) {
+  return (
+    <div className="bp-case-showcase">
+      {items.map((item, index) => (
+        <button
+          className={`bp-case-showcase-item${index === 0 ? " featured" : ""}`}
+          type="button"
+          key={item.slug}
+          onClick={() => onOpen(item)}
+        >
+          <span className="bp-case-showcase-meta">
+            <b>CASE {String(index + 1).padStart(2, "0")}</b>
+            <small>{item.industry || "公开案例"}</small>
+          </span>
+          <strong>{item.title}</strong>
+          {index === 0 && (
+            <span className="bp-case-showcase-brief">
+              <span><small>项目背景</small><p>{item.background}</p></span>
+              <span><small>解决方案</small><p>{item.solution}</p></span>
+            </span>
+          )}
+          <span className="bp-case-showcase-result">
+            <small>项目结果</small>
+            <p>{item.result}</p>
+          </span>
+          <span className="bp-showcase-link">查看完整案例 <Arrow /></span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function FaqShowcase({
+  items,
+  openFaq,
+  onToggle,
+  onAssistant,
+  assistantAvailable,
+}: {
+  items: PublicCardData["faq_items"];
+  openFaq: string | null;
+  onToggle: (id: string) => void;
+  onAssistant: (question: string) => void;
+  assistantAvailable: boolean;
+}) {
+  return (
+    <div className="bp-faq-showcase">
+      {items.map((faq, index) => {
+        const isOpen = openFaq === faq.id;
+        return (
+          <article className={isOpen ? "open" : ""} key={faq.id}>
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => onToggle(faq.id)}
+            >
+              <span className="bp-faq-number" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
+              <strong>{faq.question}</strong>
+              <span className="bp-faq-toggle" aria-hidden="true">{isOpen ? "−" : "+"}</span>
+            </button>
+            {isOpen && (
+              <div className="bp-faq-answer">
+                <p>{faq.answer}</p>
+                <footer>
+                  <small>资料来源：{faq.source_label}</small>
+                  {assistantAvailable && (
+                    <button type="button" onClick={() => onAssistant(faq.question)}>
+                      继续问 AI <Arrow />
+                    </button>
+                  )}
+                </footer>
+              </div>
+            )}
+          </article>
+        );
+      })}
+    </div>
   );
 }
 
@@ -255,7 +443,18 @@ export function BusinessCardPrototypeApp({
   onProfile: () => void;
   onShare: () => void;
 }) {
-  const [view, setView] = useState<View>(initialView);
+  const standaloneKind = card?.card_kind;
+  const isStandaloneCard = standaloneKind === "employee" || standaloneKind === "enterprise";
+  const standaloneRoot: BaseView = standaloneKind === "enterprise" ? "company" : "card";
+  const defaultBaseView: BaseView = isStandaloneCard ? standaloneRoot : "card";
+  const initialCardView = () => {
+    if (detailRouteFromLocation()) return "detail" as const;
+    if (!isStandaloneCard) return initialBaseView();
+    return new URLSearchParams(window.location.search).get("view") === "square"
+      ? "square"
+      : standaloneRoot;
+  };
+  const [view, setView] = useState<View>(initialCardView);
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   const [detailLookup, setDetailLookup] = useState<DetailLookupState>({ status: "idle" });
   const [locationRevision, setLocationRevision] = useState(0);
@@ -276,6 +475,8 @@ export function BusinessCardPrototypeApp({
       return false;
     }
   });
+  const [activeCompanySection, setActiveCompanySection] = useState<CompanySectionId>("overview");
+  const companySectionNavRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     setOpenFaq(card?.faq_items[0]?.id ?? null);
@@ -292,7 +493,7 @@ export function BusinessCardPrototypeApp({
         setView(
           isBaseView(state?.bpView)
             ? state.bpView
-            : initialView(),
+            : initialCardView(),
         );
       }
       setLocationRevision((current) => current + 1);
@@ -300,7 +501,7 @@ export function BusinessCardPrototypeApp({
     };
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
-  }, []);
+  }, [isStandaloneCard, standaloneRoot]);
 
   useEffect(() => {
     if (!card || !isPublicExperienceConfigured()) {
@@ -337,7 +538,7 @@ export function BusinessCardPrototypeApp({
       setDetailLookup({ status: "idle" });
       if (view === "detail") {
         setDetail(null);
-        setView(initialBaseView());
+        setView(defaultBaseView);
       }
       return;
     }
@@ -355,7 +556,7 @@ export function BusinessCardPrototypeApp({
       historyState.detail.kind === route.kind &&
       historyState.detail.slug === route.slug
       ? historyState.detail.from
-      : initialBaseView();
+      : defaultBaseView;
     if (item) {
       setDetailLookup({ status: "idle" });
       setDetail(
@@ -402,7 +603,7 @@ export function BusinessCardPrototypeApp({
         });
       });
     return () => controller.abort();
-  }, [card?.slug, catalog, locationRevision, view]);
+  }, [card?.slug, catalog, defaultBaseView, locationRevision, view]);
   const isBlankTemplate = Boolean(tenant.isBlankTemplate && !card);
   const isPublished = Boolean(card);
   const companyName = card?.company.name ?? tenant.brand.name;
@@ -446,15 +647,27 @@ export function BusinessCardPrototypeApp({
   const adminHref =
     import.meta.env.VITE_ADMIN_BASE_URL?.trim() || `${import.meta.env.BASE_URL}admin/`;
   const onboardingHref = `${adminHref.replace(/\/*$/, "/")}platform/onboarding`;
+  const officialCompanyHref = card?.company.official_card_slug
+    ? publicCardHref(
+      card.company.official_card_slug,
+      standaloneKind === "employee" ? card.slug : undefined,
+    )
+    : undefined;
+  const employeeReturnSlug = standaloneKind === "enterprise"
+    ? new URLSearchParams(window.location.search).get("from_employee")
+    : undefined;
+  const employeeReturnHref = employeeReturnSlug
+    ? employeeCardHref(employeeReturnSlug)
+    : undefined;
 
   const go = (next: BaseView) => {
     if (next === view && detail === null) return;
-    const from = view === "detail" ? detail?.from ?? initialBaseView() : view;
+    const from = view === "detail" ? detail?.from ?? defaultBaseView : view;
     setDetail(null);
     setView(next);
     const url = new URL(window.location.href);
     url.searchParams.delete("detail");
-    if (next === "card") url.searchParams.delete("view");
+    if (next === defaultBaseView) url.searchParams.delete("view");
     else url.searchParams.set("view", next);
     window.history.pushState({ bpView: next, from }, "", url);
     scrollPageToTop();
@@ -465,7 +678,7 @@ export function BusinessCardPrototypeApp({
     setView(next);
     const url = new URL(window.location.href);
     url.searchParams.delete("detail");
-    if (next === "card") url.searchParams.delete("view");
+    if (next === defaultBaseView) url.searchParams.delete("view");
     else url.searchParams.set("view", next);
     window.history.replaceState({ bpView: next }, "", url);
     scrollPageToTop();
@@ -484,7 +697,7 @@ export function BusinessCardPrototypeApp({
 
   const openDetail = (target: DetailInput) => {
     const from: BaseView = view === "detail"
-      ? detail?.from ?? initialBaseView()
+      ? detail?.from ?? defaultBaseView
       : view;
     const nextDetail: DetailTarget = target.kind === "product"
       ? { kind: "product", item: target.item, from }
@@ -507,7 +720,7 @@ export function BusinessCardPrototypeApp({
 
   const openDetailRoute = (route: DetailRoute) => {
     const from: BaseView = view === "detail"
-      ? detail?.from ?? initialBaseView()
+      ? detail?.from ?? defaultBaseView
       : view;
     setDetail(null);
     setDetailLookup({ status: "idle" });
@@ -529,7 +742,7 @@ export function BusinessCardPrototypeApp({
       window.history.back();
       return;
     }
-    replaceWithView(detail?.from ?? initialBaseView());
+    replaceWithView(detail?.from ?? defaultBaseView);
   };
 
   const copyContact = async (key: string, value: string) => {
@@ -585,6 +798,95 @@ export function BusinessCardPrototypeApp({
     return undefined;
   };
 
+  const companyProductItems: ProductShowcaseItem[] = (
+    products.length
+      ? products.slice(0, 4).map((item) => ({
+          key: item.slug,
+          category: item.category || "产品与服务",
+          title: item.name,
+          description: item.summary,
+          meta: item.audience ? `适用对象：${item.audience}` : undefined,
+          onOpen: () => openDetail({ kind: "product", item }),
+        }))
+      : tenantBusinesses.slice(0, 4).map((item) => ({
+          key: item.title,
+          category: item.eyebrow || "业务方向",
+          title: item.title,
+          description: item.description,
+          meta: item.points[0] || item.status || undefined,
+          disabled: !assistantAvailable,
+          onOpen: () => onAssistant(`请介绍${item.title}`),
+        }))
+  );
+
+  const isStandaloneEnterprise = isStandaloneCard && standaloneKind === "enterprise";
+  const companyNavigationItems = companySectionDefinitions.filter(({ id }) => {
+    if (id === "cases") return cases.length > 0;
+    if (id === "faq") return Boolean(card?.faq_items.length);
+    return true;
+  });
+  const companyNavigationKey = companyNavigationItems.map(({ id }) => id).join(",");
+
+  useEffect(() => {
+    if (!isStandaloneEnterprise || view !== "company") return;
+
+    let frameId = 0;
+    const updateActiveSection = () => {
+      const sections = companyNavigationItems
+        .map(({ id }) => document.getElementById(`bp-company-section-${id}`))
+        .filter((section): section is HTMLElement => Boolean(section));
+      if (!sections.length || !sections.some((section) => section.getBoundingClientRect().height > 0)) return;
+
+      const threshold = 68 + 52 + 20;
+      let next = sections[0].dataset.companySection as CompanySectionId;
+      for (const section of sections) {
+        if (section.getBoundingClientRect().top <= threshold) {
+          next = section.dataset.companySection as CompanySectionId;
+        }
+      }
+
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      const scrollHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+      if (scrollTop + window.innerHeight >= scrollHeight - 8) {
+        next = sections.at(-1)?.dataset.companySection as CompanySectionId;
+      }
+      setActiveCompanySection((current) => current === next ? current : next);
+    };
+    const scheduleUpdate = () => {
+      window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(updateActiveSection);
+    };
+
+    setActiveCompanySection("overview");
+    scheduleUpdate();
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      window.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [companyNavigationKey, isStandaloneEnterprise, view]);
+
+  useEffect(() => {
+    if (!isStandaloneEnterprise) return;
+    const nav = companySectionNavRef.current;
+    const activeTab = nav?.querySelector<HTMLElement>(`[data-company-target="${activeCompanySection}"]`);
+    if (!nav || !activeTab || typeof nav.scrollTo !== "function") return;
+    const left = activeTab.offsetLeft - (nav.clientWidth - activeTab.offsetWidth) / 2;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    nav.scrollTo({ left, behavior: reducedMotion ? "auto" : "smooth" });
+  }, [activeCompanySection, isStandaloneEnterprise]);
+
+  const scrollToCompanySection = (sectionId: CompanySectionId) => {
+    setActiveCompanySection(sectionId);
+    const target = document.getElementById(`bp-company-section-${sectionId}`);
+    if (!target || target.getBoundingClientRect().height <= 0) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const top = window.scrollY + target.getBoundingClientRect().top - (68 + 52 + 18);
+    window.scrollTo({ top: Math.max(0, top), behavior: reducedMotion ? "auto" : "smooth" });
+  };
+
   const bottom = (
     <nav className="bp-bottom-nav" aria-label="名片导航">
       {([
@@ -608,7 +910,15 @@ export function BusinessCardPrototypeApp({
 
   const cardPage = (
     <>
-      <AppHeader onShare={onShare} />
+      <AppHeader
+        switchTarget={standaloneKind === "employee" && officialCompanyHref ? {
+          href: officialCompanyHref,
+          kind: "enterprise",
+          label: "切换企业",
+          ariaLabel: "切换到企业名片",
+        } : undefined}
+        onShare={onShare}
+      />
       <main className="bp-page bp-card-page">
         <div className="bp-person-head">
           {avatar ? (
@@ -626,9 +936,21 @@ export function BusinessCardPrototypeApp({
               </b>
             </div>
             <p>{title}</p>
-            <button className="bp-affiliation" type="button" onClick={() => go("company")}>
-              <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
-            </button>
+            {isStandaloneCard ? (
+              officialCompanyHref ? (
+                <a className="bp-affiliation" href={officialCompanyHref}>
+                  <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
+                </a>
+              ) : (
+                <span className="bp-affiliation bp-affiliation-disabled">
+                  <BuildingsIcon size={18} weight="fill" /> {companyName}<small>企业名片暂未发布</small>
+                </span>
+              )
+            ) : (
+              <button className="bp-affiliation" type="button" onClick={() => go("company")}>
+                <BuildingsIcon size={18} weight="fill" /> {companyName} <Arrow />
+              </button>
+            )}
             <div className="bp-tags">
               {tags.map((tag) => <span key={tag}>{tag}</span>)}
             </div>
@@ -646,9 +968,9 @@ export function BusinessCardPrototypeApp({
               </div>
             ) : (
               <>
-                {introParagraphs.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
-                <button type="button" className="bp-text-button" onClick={() => go("company")}>
-                  查看企业详情 <Arrow />
+                {introParagraphs.map((paragraph, index) => <p key={`${index}-${paragraph}`}>{paragraph}</p>)}
+                <button type="button" className="bp-text-button" onClick={() => go(isStandaloneCard ? "square" : "company")}>
+                  {isStandaloneCard ? "查看全部业务" : "查看企业详情"} <Arrow />
                 </button>
               </>
             )}
@@ -699,8 +1021,17 @@ export function BusinessCardPrototypeApp({
           )}
           {isBlankTemplate && <a className="bp-template-link" href={onboardingHref}>配置企业知识库 <Arrow /></a>}
         </section>
+        {isStandaloneCard && (
+          <div className="bp-standalone-utilities">
+            <button type="button" onClick={toggleSaved}>{saved ? "取消保存" : "保存名片"}</button>
+            <button type="button" onClick={onPrivacy}>隐私与个人信息</button>
+          </div>
+        )}
       </main>
-      <div className="bp-sticky-actions bp-card-actions">
+      {isStandaloneCard ? <div className="bp-sticky-actions bp-standalone-action-bar" aria-label="名片主要操作">
+        <button className="primary" type="button" disabled={!assistantAvailable} onClick={() => onAssistant()}>问 AI</button>
+        <button type="button" onClick={onLead}>发起合作</button>
+      </div> : <div className="bp-sticky-actions bp-card-actions">
         {isBlankTemplate ? <>
           <button type="button" onClick={onShare}><ShareNetworkIcon size={22} /> 分享模板</button>
           <a className="primary" href={onboardingHref}>开始配置企业</a>
@@ -713,14 +1044,24 @@ export function BusinessCardPrototypeApp({
             <HandshakeIcon size={22} /> 发起合作
           </button>
         </>}
-      </div>
-      {bottom}
+      </div>}
+      {!isStandaloneCard && bottom}
     </>
   );
 
   const companyPage = (
     <>
-      <AppHeader back={returnFromCompany} title={`来自${displayName}的名片`} onShare={onShare} />
+      <AppHeader
+        back={isStandaloneCard ? undefined : returnFromCompany}
+        switchTarget={isStandaloneCard && employeeReturnHref ? {
+          href: employeeReturnHref,
+          kind: "employee",
+          label: "切换员工",
+          ariaLabel: "切换到员工名片",
+        } : undefined}
+        title={isStandaloneCard ? "企业官方名片" : `来自${displayName}的名片`}
+        onShare={onShare}
+      />
       <main className="bp-page bp-company-page">
         <div className="bp-company-head">
           {companyLogo ? <img src={companyLogo} alt={`${companyName}标识`} /> : <i>◈</i>}
@@ -734,50 +1075,61 @@ export function BusinessCardPrototypeApp({
           </div>
         </div>
 
-        <section className="bp-company-position">
+        {isStandaloneEnterprise && (
+          <nav ref={companySectionNavRef} className="bp-company-section-nav" aria-label="企业名片内容导航">
+            {companyNavigationItems.map(({ id, label }) => (
+              <button
+                key={id}
+                className="bp-company-section-tab"
+                type="button"
+                data-company-target={id}
+                aria-controls={`bp-company-section-${id}`}
+                aria-current={activeCompanySection === id ? "location" : undefined}
+                onClick={() => scrollToCompanySection(id)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+        )}
+
+        <section
+          className={`bp-company-position${isStandaloneEnterprise ? " bp-company-scroll-section" : ""}`}
+          id={isStandaloneEnterprise ? "bp-company-section-overview" : undefined}
+          data-company-section={isStandaloneEnterprise ? "overview" : undefined}
+        >
           <small>{isBlankTemplate ? "配置提示" : "我们能帮助你"}</small>
           <strong>{isBlankTemplate ? "录入品牌定位和核心价值后，此处会生成企业对外主张。" : tenant.hero.summary}</strong>
         </section>
 
-        <Section title="企业介绍">
+        <Section title="企业介绍" sectionId={isStandaloneEnterprise ? "intro" : undefined}>
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>企业介绍待录入</strong><p>支持从企业简介、官网文本或审核后的文档生成。</p><a href={onboardingHref}>录入企业资料</a></div> : <div className="bp-intro"><p>{companySummary}</p></div>}
         </Section>
 
-        <Section title="核心业务">
+        <Section
+          title="核心业务"
+          sectionId={isStandaloneEnterprise ? "business" : undefined}
+          action={products.length > 4 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
+        >
           {catalog.status === "loading" ? <LoadingRows label="业务资料" /> : (
-            products.length || tenantBusinesses.length ? <div className="bp-list">
-              {(products.length ? products.slice(0, 4) : tenantBusinesses.slice(0, 4)).map((item) => {
-                const isProduct = "slug" in item;
-                const titleText = isProduct ? item.name : item.title;
-                const description = isProduct ? item.summary : item.description;
-                return (
-                  <button
-                    type="button"
-                    key={titleText}
-                    disabled={!isProduct && !assistantAvailable}
-                    onClick={() => isProduct ? openDetail({ kind: "product", item }) : onAssistant(`请介绍${titleText}`)}
-                  >
-                    <i>◇</i><span><strong>{titleText}</strong><small>{description}</small></span><Arrow />
-                  </button>
-                );
-              })}
-            </div> : <div className="bp-empty-state bp-inline-empty"><strong>产品与服务待录入</strong><p>添加业务名称、适用客户、价值说明和服务边界后即可展示。</p><a href={onboardingHref}>添加业务资料</a></div>
+            companyProductItems.length ? <ProductShowcase items={companyProductItems} /> : <div className="bp-empty-state bp-inline-empty"><strong>产品与服务待录入</strong><p>添加业务名称、适用客户、价值说明和服务边界后即可展示。</p><a href={onboardingHref}>添加业务资料</a></div>
           )}
         </Section>
 
-        {representativeCase && (
-          <Section title="代表案例">
-            <button
-              type="button"
-              className="bp-case bp-company-case"
-              onClick={() => openDetail({ kind: "case", item: representativeCase })}
-            >
-              <span><small>{representativeCase.industry || "公开案例"}</small><strong>{representativeCase.title}</strong><em>{representativeCase.result}</em></span><i>▦</i><Arrow />
-            </button>
+        {cases.length > 0 && (
+          <Section
+            title="代表案例"
+            sectionId={isStandaloneEnterprise ? "cases" : undefined}
+            action={cases.length > 3 ? <button className="bp-text-button" type="button" onClick={() => go("square")}>查看全部</button> : undefined}
+          >
+            <CaseShowcase
+              items={cases.slice(0, 3)}
+              onOpen={(item) => openDetail({ kind: "case", item })}
+            />
           </Section>
         )}
 
-        <Section title="企业资料">
+        <Section title="企业资料" sectionId={isStandaloneEnterprise ? "trust" : undefined}>
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>可信资料待审核</strong><p>主体信息、资质、案例授权和公开范围须确认后才会显示。</p><a href={onboardingHref}>进入资料审核</a></div> : <div className="bp-trust">
             <span>✓ 企业公开资料</span><span>✓ AI 引用可追溯</span>
             {(card?.company.industry || card?.company.region) && <span>{[card.company.industry, card.company.region].filter(Boolean).join(" · ")}</span>}
@@ -785,38 +1137,48 @@ export function BusinessCardPrototypeApp({
           </div>}
         </Section>
 
-        <Section title="可以为你对接的人">
+        {!isStandaloneCard && <Section title="可以为你对接的人">
           {isBlankTemplate ? <div className="bp-empty-state bp-inline-empty"><strong>名片持有人待录入</strong><p>添加姓名、职务、头像和经授权的联系渠道。</p><a href={onboardingHref}>配置名片成员</a></div> : <div className="bp-people">
             <button type="button" onClick={() => go("card")}>
               <Avatar small label={displayName} src={avatar} />
               <span><strong>{displayName}　{title}</strong><small>{companyName}</small></span><Arrow />
             </button>
           </div>}
-        </Section>
+        </Section>}
 
         {card?.faq_items.length ? (
-          <Section title="常见问题">
-            <div className="bp-faq-list">
-              {card.faq_items.map((faq) => (
-                <article className={openFaq === faq.id ? "open" : ""} key={faq.id}>
-                  <button type="button" aria-expanded={openFaq === faq.id} onClick={() => setOpenFaq(openFaq === faq.id ? null : faq.id)}>
-                    <strong>{faq.question}</strong><span>{openFaq === faq.id ? "−" : "+"}</span>
-                  </button>
-                  {openFaq === faq.id && <div><p>{faq.answer}</p><small>资料来源：{faq.source_label}</small>{assistantAvailable && <button type="button" onClick={() => onAssistant(faq.question)}>继续问 AI <Arrow /></button>}</div>}
-                </article>
-              ))}
-            </div>
+          <Section title="常见问题" sectionId={isStandaloneEnterprise ? "faq" : undefined}>
+            <FaqShowcase
+              items={card.faq_items}
+              openFaq={openFaq}
+              onToggle={(id) => setOpenFaq(openFaq === id ? null : id)}
+              onAssistant={onAssistant}
+              assistantAvailable={assistantAvailable}
+            />
           </Section>
         ) : null}
 
-        <section className="bp-ai-card bp-company-ai">
+        <section
+          className={`bp-ai-card bp-company-ai${isStandaloneEnterprise ? " bp-company-scroll-section" : ""}`}
+          id={isStandaloneEnterprise ? "bp-company-section-ai" : undefined}
+          data-company-section={isStandaloneEnterprise ? "ai" : undefined}
+        >
           <div><i>AI</i><span><strong>{assistantName}</strong><small>{assistantAvailable ? isPublished ? "基于已发布资料" : "基于本地展示资料" : "暂未开放"}</small></span></div>
           <p>{isBlankTemplate ? "知识资料尚未录入；完成解析、预览和发布后才会开放问答。" : assistantAvailable ? (card?.ai_assistant.welcome_message || "我可以介绍企业能力、解释常见问题，并帮助整理合作需求。") : "企业尚未开放 AI 问答，可提交合作需求等待人工联系。"}</p>
           {assistantAvailable && <button type="button" onClick={() => onAssistant()}>咨询适合我们的解决方案 <Arrow /></button>}
           {isBlankTemplate && <a className="bp-template-link" href={onboardingHref}>配置企业知识库 <Arrow /></a>}
         </section>
+        {isStandaloneCard && (
+          <div className="bp-standalone-utilities">
+            <button type="button" onClick={toggleSaved}>{saved ? "取消保存" : "保存企业名片"}</button>
+            <button type="button" onClick={onPrivacy}>隐私与个人信息</button>
+          </div>
+        )}
       </main>
-      <div className="bp-sticky-actions bp-company-actions">
+      {isStandaloneCard ? <div className="bp-sticky-actions bp-standalone-action-bar" aria-label="企业名片主要操作">
+        <button className="primary" type="button" disabled={!assistantAvailable} onClick={() => onAssistant()}>咨询 AI</button>
+        <button type="button" onClick={onLead}>提交合作需求</button>
+      </div> : <div className="bp-sticky-actions bp-company-actions">
         {isBlankTemplate ? <>
           <button type="button" onClick={onShare}>分享空白模板</button>
           <a className="primary" href={onboardingHref}>开始配置企业</a>
@@ -824,14 +1186,14 @@ export function BusinessCardPrototypeApp({
           <button type="button" onClick={toggleSaved}>{saved ? "✓ 本机已保存企业名片" : "⌑ 保存到本机"}</button>
           <button className="primary" type="button" onClick={onLead}>⌁ 发起合作</button>
         </>}
-      </div>
-      {bottom}
+      </div>}
+      {!isStandaloneCard && bottom}
     </>
   );
 
   const squarePage = (
     <>
-      <AppHeader title="业务广场" onShare={onShare} />
+      <AppHeader back={isStandaloneCard ? () => replaceWithView(standaloneRoot) : undefined} title="业务广场" onShare={onShare} />
       <main className="bp-page">
         <div className="bp-square-hero">
           <p>真实公开资料</p><h1>从产品、案例和业务方向开始</h1>
@@ -863,7 +1225,7 @@ export function BusinessCardPrototypeApp({
           return <button type="button" key={`${item.resourceType}-${item.resourceId}`} disabled={!canOpen && !assistantAvailable} onClick={() => target ? openDetail(target) : route ? openDetailRoute(route) : onAssistant(`请介绍${item.title}`)}><span><strong>{item.title}</strong><small>{item.reason} · 依据：{item.evidence.excerpt} · {canOpen ? "打开已发布详情" : "向 AI 了解"}</small></span><Arrow /></button>;
         })}</div></Section>}
       </main>
-      {bottom}
+      {!isStandaloneCard && bottom}
     </>
   );
 
@@ -911,14 +1273,24 @@ export function BusinessCardPrototypeApp({
         <h1>{detail.kind === "product" ? detail.item.name : detail.item.title}</h1>
         {detail.item.imageUrl && <img className="bp-detail-image" src={detail.item.imageUrl} alt="" />}
         {detail.kind === "product" ? <>
-          <Section title="业务简介"><p>{detail.item.summary}</p></Section>
-          <Section title="详细说明"><p>{detail.item.detail}</p></Section>
-          {detail.item.audience && <Section title="适用对象"><p>{detail.item.audience}</p></Section>}
-          {detail.item.priceBoundary && <Section title="服务边界"><p>{detail.item.priceBoundary}</p></Section>}
+          <p className="bp-detail-lede">{detail.item.summary}</p>
+          <div className="bp-product-detail-poster">
+            <article className="wide"><span>01</span><div><small>详细说明</small><p>{detail.item.detail}</p></div></article>
+            {detail.item.audience && <article><span>02</span><div><small>适用对象</small><p>{detail.item.audience}</p></div></article>}
+            {detail.item.priceBoundary && <article><span>03</span><div><small>服务边界</small><p>{detail.item.priceBoundary}</p></div></article>}
+          </div>
         </> : <>
-          <Section title="项目背景"><p>{detail.item.background}</p></Section>
-          <Section title="解决方案"><p>{detail.item.solution}</p></Section>
-          <Section title="项目结果"><p>{detail.item.result}</p></Section>
+          <div className="bp-case-story">
+            {[
+              ["01", "项目背景", detail.item.background],
+              ["02", "解决方案", detail.item.solution],
+              ["03", "项目结果", detail.item.result],
+            ].map(([number, label, content], index) => (
+              <article className={index === 2 ? "result" : ""} key={label}>
+                <span>{number}</span><div><small>{label}</small><p>{content}</p></div>
+              </article>
+            ))}
+          </div>
         </>}
         {assistantAvailable && <section className="bp-ai-card"><div><i>AI</i><span><strong>{assistantName}</strong><small>继续了解</small></span></div><button type="button" onClick={() => onAssistant(`请详细介绍${detail.kind === "product" ? detail.item.name : detail.item.title}`)}>向 AI 继续提问 <Arrow /></button></section>}
       </main>
@@ -965,5 +1337,5 @@ export function BusinessCardPrototypeApp({
 
   const page = view === "card" ? cardPage : view === "company" ? companyPage : view === "square" ? squarePage : view === "me" ? mePage : detailPage ?? squarePage;
 
-  return <div className={`bp-app bp-live-app bp-view-${view}`}><div className="bp-phone-frame">{page}</div></div>;
+  return <div className={`bp-app bp-live-app bp-view-${view}${isStandaloneCard ? " bp-standalone-card" : ""}`}><div className="bp-phone-frame">{page}</div></div>;
 }
